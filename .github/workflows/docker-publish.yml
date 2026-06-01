@@ -21,7 +21,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  # Hardcoded to preserve the GHCR package URL across repo renames. If the
+  # repo is renamed (e.g. behalfbot-chassis -> behalfbot), the workflow keeps
+  # publishing to ghcr.io/scrollinondubs/behalfbot-chassis so consumers'
+  # `image:` references in docker-compose.yml keep resolving without change.
+  IMAGE_NAME: scrollinondubs/behalfbot-chassis
 
 jobs:
   build:
