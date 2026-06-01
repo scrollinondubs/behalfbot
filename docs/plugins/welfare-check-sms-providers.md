@@ -65,4 +65,4 @@ For testing, the pager defaults to dry-run; live mode is gated on `--live` flag 
 
 - <v1-reference-install>#510 — parent (sms-pager.py + cascade-test.py port)
 - <v1-reference-install>#505 — Angel Phase 0 cross-platform port (parent of #510)
-- behalfbot-chassis PR #12 — LocationProvider abstraction (mirror pattern)
+- behalfbot PR #12 — LocationProvider abstraction (mirror pattern)

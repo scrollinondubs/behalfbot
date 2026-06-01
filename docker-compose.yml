@@ -19,14 +19,14 @@ name: behalfbot
 
 services:
   chassis:
-    image: ${CHASSIS_IMAGE:-ghcr.io/scrollinondubs/behalfbot-chassis:latest}
+    image: ${CHASSIS_IMAGE:-ghcr.io/scrollinondubs/behalfbot:latest}
     build:
       context: .
       dockerfile: Dockerfile
       args:
         INSTALLER_UID: ${INSTALLER_UID:-1000}
         INSTALLER_GID: ${INSTALLER_GID:-1000}
-    container_name: behalfbot-chassis
+    container_name: behalfbot
     user: "${INSTALLER_UID:-1000}:${INSTALLER_GID:-1000}"
     # group_add lets the container's chassis user reach /var/run/docker.sock
     # without changing primary GID. The host docker socket is typically

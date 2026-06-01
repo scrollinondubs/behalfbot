@@ -53,7 +53,7 @@ def main() -> int:
 
     req = urllib.request.Request(url, method="PUT")
     req.add_header("Authorization", f"Bot {token}")
-    req.add_header("User-Agent", "behalfbot-chassis (dispatch-trigger.sh)")
+    req.add_header("User-Agent", "behalfbot (dispatch-trigger.sh)")
     req.add_header("Content-Length", "0")
 
     try:

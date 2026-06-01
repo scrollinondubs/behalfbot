@@ -67,7 +67,7 @@ Personal-security components (live-location tracking, duress codewords, mode inf
 
 1. **Get your `INSTALL_PROFILE.md` + `chassis.config.yaml`.** Wizard at [behalf.bot](https://behalf.bot) is the fastest path; hand-authoring against [`INSTALL_PROFILE.md`](INSTALL_PROFILE.md) + [`chassis.config.yaml`](chassis.config.yaml) templates is the alternative.
 2. **Read** [`docs/installer-homework.md`](docs/installer-homework.md) — pre-flight checklist (accounts to provision, machine prep, credentials to stage in Vaultwarden or your password manager of choice).
-3. **Clone this repo** to your install machine: `git clone https://github.com/scrollinondubs/behalfbot-chassis.git`
+3. **Clone this repo** to your install machine: `git clone https://github.com/scrollinondubs/behalfbot.git`
 4. **Drop your profile + config** into the repo root, overwriting the templates.
 5. **Run** `bash bootstrap.sh`. The script reads your overlay, hydrates secrets, bakes the runtime env, and brings up the chassis container (or systemd unit on Linux installs).
 6. **First-heartbeat smoke test.** Three consecutive clean morning briefings to your configured Discord channel = install signed off.
