@@ -7,8 +7,8 @@
 # ============
 # On macOS, Claude Code stores OAuth tokens (accessToken, refreshToken,
 # expiresAt, scopes) in the login Keychain under the service
-# `Claude Code-credentials`, account `<v1-reference-install>`. The on-disk
-# ~/.claude/.credentials.json file is only populated with `mcpOAuth` entries
+# `Claude Code-credentials`, account `${USER}` (the host login account name).
+# The on-disk ~/.claude/.credentials.json file is only populated with `mcpOAuth` entries
 # (MCP server tokens), not the Anthropic auth itself. Host `claude` invocations
 # work because the binary shells out to `security find-generic-password` to
 # pull the access token from Keychain.
@@ -17,7 +17,7 @@
 # exist. The container previously had NO working path to authenticate, which
 # meant every `claude -p` from the in-container dispatcher failed with
 # "Not logged in" and every heartbeat that invoked claude (morning-briefing,
-# github-issue-triage, <v1-reference-install>-pg-backup, daily-log, strava-ingest, etc.) tripped
+# github-issue-triage, pg-backup, daily-log, strava-ingest, etc.) tripped
 # the circuit breaker. Cutover regression: nothing fired post-cutover.
 #
 # This script is the bridge: it reads the Keychain JSON and writes it to
@@ -54,7 +54,9 @@ ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { echo "[$(ts)] $*" >> "$LOG"; }
 
 # Read Keychain entry. -w prints the password (which is JSON for this entry).
-if ! KC_JSON=$(security find-generic-password -s "Claude Code-credentials" -a <v1-reference-install> -w 2>/dev/null); then
+# Account = host user (the login account Claude Code's OAuth flow saves under).
+KEYCHAIN_ACCOUNT="${KEYCHAIN_ACCOUNT:-${USER}}"
+if ! KC_JSON=$(security find-generic-password -s "Claude Code-credentials" -a "$KEYCHAIN_ACCOUNT" -w 2>/dev/null); then
     log "WARN: keychain read failed (entry missing or locked) — leaving file untouched"
     exit 0
 fi

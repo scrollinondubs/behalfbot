@@ -1,4 +1,4 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 # Pause/resume welfare checks for planned offline periods.
 # Usage: welfare-pause.sh until YYYY-MM-DD [--reason "camping"]
 #        welfare-pause.sh resume
