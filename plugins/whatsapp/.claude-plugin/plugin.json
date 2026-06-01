@@ -1,0 +1,8 @@
+{
+  "id": "behalfbot-whatsapp",
+  "name": "Behalf.bot — WhatsApp",
+  "description": "Read-only WhatsApp group monitoring with groups-only allowlist + DM hard-block.",
+  "version": "0.1.0",
+  "skills": ["./skills"],
+  "scripts": ["./scripts"]
+}

@@ -1,0 +1,69 @@
+# Heartbeats - chassis template
+
+**This file is the chassis template.** It is NOT read by the dispatcher. At install-time, `bootstrap.sh` copies this template to `${CHASSIS_HOME}/HEARTBEATS.md` (one level above `chassis/`). The installer edits the rendered file at `${CHASSIS_HOME}/HEARTBEATS.md`, never this template.
+
+Why: per `docs/architectural-anti-patterns.md` #17, customizations live OUTSIDE `chassis/`. The dispatcher reads `${CHASSIS_HOME}/HEARTBEATS.md`; this template ships from chassis with the schema docs only.
+
+---
+
+Declarative work queue for the chassis heartbeat dispatcher (`chassis/scheduled-tasks/heartbeat-dispatcher.sh`). Each `##` section defines a heartbeat: when to check, how to gather data, when to fire Claude.
+
+> **Per LESSONS_FROM_V1.md #11:** scaffolding a heartbeat (script + prompt + state file) without registering it here means the dispatcher never invokes it. Silent dormancy. **Register every new heartbeat in this file in the same PR as the supporting scripts.**
+>
+> **Per #20:** the gather script is the right place for expensive checks to no-op cheaply. Every dispatcher tick (~96/day) is fine IF the gather short-circuits on trivial conditions before any paid API call.
+>
+> **Per #14:** validate this file's YAML blocks parse cleanly before commit. A malformed YAML block silently disables the heartbeat without erroring.
+
+---
+
+## Heartbeat schema
+
+Each heartbeat is one `##` heading + a fenced ` ```yaml ` block. The dispatcher parser uses these fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `schedule` | yes | When to check. Formats: `every 15m`, `every 1h`, `daily 08:00`, `weekly sunday 18:00` |
+| `gather` | yes | Absolute path to a shell script that emits JSON on stdout. Either `{"count": N}` for threshold conditions, or any structured JSON for `ask_model` / `always` |
+| `condition` | yes | One of: `always`, `threshold <field> <op> <value>` (e.g. `threshold count > 0`), `ask_model` (requires Ollama) |
+| `prompt` | yes | Path (relative to chassis root) to a markdown file Claude reads on fire |
+| `model` | yes | One of: `haiku`, `sonnet`, `opus` |
+| `budget` | yes | Max USD budget per `claude -p` invocation |
+| `criticality` | yes | `critical` (runs in conservation mode), `normal`, `background` |
+| `cwd` | no | Working directory for `claude -p` (defaults to chassis root). Useful for narrow-context subagents |
+| `output_validator` | no | `true` to run the Five Failure Modes haiku check on the output |
+| `condition_prompt` | no | Required when condition=ask_model. Question to send to Ollama |
+| `jitter` | no | Random offset added to schedule (e.g. `30m`, `1h`). Deterministic per day+name |
+
+---
+
+## Format example (no real heartbeat — see commented sample below)
+
+```yaml
+schedule: every 15m
+gather: ${CHASSIS_HOME}/chassis/scripts/gather-template.sh
+condition: threshold count > 0
+prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/example-prompt.md
+model: sonnet
+budget: 1
+criticality: normal
+```
+
+---
+
+## Active heartbeats
+
+<!--
+This template ships with no active heartbeats. After bootstrap copies this
+file to ${CHASSIS_HOME}/HEARTBEATS.md, installer adds heartbeats there
+(NOT in this template). Hold to the schema above + the lessons baked into
+the dispatcher (gather-first, register-or-die, no destructive shared
+reads, cheap-no-op gates). When you add one, also remember:
+
+- Reference an absolute or `${CHASSIS_HOME}`-rooted path for `gather` + `prompt`
+- Keep gather scripts cheap; the dispatcher fires every 15 min
+- Each gather script must emit JSON (the dispatcher rejects bare key=value text)
+- Claude only fires when the condition evaluates true, so a "fail safe" gather
+  that errors out should emit `{"count": 0}`, not non-JSON, to avoid surprise fires
+
+Reference: `docs/heartbeat-dispatcher.md` for the full architecture writeup.
+-->

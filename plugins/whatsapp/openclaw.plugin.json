@@ -1,0 +1,29 @@
+{
+  "id": "behalfbot-whatsapp",
+  "name": "Behalf.bot — WhatsApp",
+  "description": "Read-only WhatsApp group monitoring with groups-only allowlist + DM hard-block. Hook-layer enforced.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "allowlist_path": {
+        "type": "string",
+        "description": "Absolute path to the groups allowlist JSON file. Defaults to plugins/whatsapp/data/whatsapp-allowlist.json under CHASSIS_HOME.",
+        "default": "${CHASSIS_HOME}/plugins/whatsapp/data/whatsapp-allowlist.json"
+      }
+    }
+  },
+  "contracts": {
+    "tools": ["wacli-safe"],
+    "skills": ["whatsapp"],
+    "hooks": ["activate_whatsapp_safe_wrapper"]
+  },
+  "activation": {
+    "onStartup": true
+  },
+  "_chassis_v1_notes": {
+    "shell_implementation": "Plugin ships shell scripts only (no JS/TS SDK in chassis V1). The 'register' semantics map: contracts.tools → installer can invoke plugins/whatsapp/scripts/wacli-safe.sh; contracts.hooks → installer's bootstrap exports CHASSIS_WHATSAPP_SAFE so the chassis-core guardrails activate the wacli DM block.",
+    "compat_bundle": "See .claude-plugin/plugin.json for the Claude Code compatibility shim."
+  }
+}

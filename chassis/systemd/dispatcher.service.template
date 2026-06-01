@@ -1,0 +1,79 @@
+[Unit]
+# Behalfbot Chassis Heartbeat Dispatcher — bare-metal Linux install template.
+#
+# This template is for non-Docker installs (installer-1/fatboy and similar). The
+# Docker install path doesn't need it — the chassis container's entrypoint
+# already runs the dispatcher in a sleep-loop with the right env + path set.
+#
+# Why a template:
+#
+# systemd resets PATH on service spawn to the system default
+# (/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin). The `claude` binary
+# installs to %h/.local/bin/claude (npm convention) which is NOT in that
+# default. Without an explicit PATH override, the dispatcher's `claude -p`
+# invocations fail with `FileNotFoundError` — silently, because systemd
+# doesn't surface "binary not found" the way a shell does.
+#
+# Plus: ANTHROPIC_API_KEY must be unset at runtime so `claude -p` falls
+# through to OAuth (subscription-billed) instead of PAYG. The dispatcher
+# itself does this in its own shell (heartbeat-dispatcher.sh line ~84) but
+# anything env-inherited from a bare systemd unit before the dispatcher
+# starts can mask the dispatcher's unset.
+#
+# Install (per-install):
+#   1. Copy this template to /etc/systemd/system/behalfbot-dispatcher.service
+#   2. Substitute %h with /home/<installer> in the file (systemd resolves %h
+#      for User-scoped units; for system-scoped units edit it manually).
+#   3. systemctl daemon-reload
+#   4. systemctl enable --now behalfbot-dispatcher
+#   5. journalctl -u behalfbot-dispatcher -f   (tail logs)
+#
+# Cross-references:
+#   - chassis/docs/INSTALL.md — bare-metal Linux install walkthrough
+#   - chassis/scheduled-tasks/heartbeat-dispatcher.sh — the dispatcher itself
+#   - scrollinondubs/behalfbot-chassis#99 — installer-1 incident report that
+#     surfaced the PATH + claude binary path gap
+Description=Behalfbot Chassis Heartbeat Dispatcher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# User-scoped systemd unit (systemctl --user enable behalfbot-dispatcher).
+# For a system-scoped unit, set User=behalfbot + drop the %h template tokens
+# in favor of /home/behalfbot literals.
+WorkingDirectory=%h/behalfbot
+
+# CRITICAL: systemd resets PATH on spawn. Without this override the
+# dispatcher's `claude -p` invocations fail FileNotFoundError because the
+# claude binary lives at %h/.local/bin (npm install location), not in
+# /usr/local/bin. Mirror the chassis Dockerfile's PATH for parity:
+Environment="PATH=%h/.local/bin:%h/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+# CRITICAL: unset ANTHROPIC_API_KEY so claude -p uses OAuth subscription
+# billing, not PAYG. This is belt-and-suspenders with the dispatcher's own
+# unset (heartbeat-dispatcher.sh lines 67-83 — see those for the full
+# rationale + the V1 incident that motivated the rule).
+Environment="ANTHROPIC_API_KEY="
+
+# CHASSIS_HOME points the dispatcher at the install's tree (HEARTBEATS.md +
+# scripts/ + scheduled-tasks/ + state). Hot-edit if your install lives
+# somewhere other than ~/behalfbot.
+Environment="CHASSIS_HOME=%h/behalfbot"
+
+# Dispatcher loop — invokes the dispatcher script, sleeps for the tick
+# interval, repeats. The dispatcher itself is a one-shot run that processes
+# all heartbeats in HEARTBEATS.md and exits.
+ExecStart=/bin/bash -c 'while true; do %h/behalfbot/chassis/scheduled-tasks/heartbeat-dispatcher.sh; sleep 900; done'
+
+# Restart on crash with a 10s backoff (avoid tight crash-loops eating
+# resources).
+Restart=on-failure
+RestartSec=10
+
+# Don't kill the whole process tree on stop — claude -p subprocesses may
+# need a few seconds to write their telemetry sidecar before exiting cleanly.
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

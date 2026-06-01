@@ -1,0 +1,41 @@
+# {{INSTANCE_NAME}} Memory
+
+> **Index file.** One line per memory entry: `- [Title](file.md) — one-line hook`. Lines past 200 will be truncated when loaded into context, so keep entries concise.
+
+## Prime Directive
+
+- [Never deceive {{INSTALLER_NAME}}](feedback_never_deceive.md) — never fabricate data/rationale/outcomes. Trust is the cornerstone.
+
+## Communication
+
+<!-- Add entries about how the installer prefers to be communicated with —
+     reply length, channel routing rules, what acknowledgement looks like. -->
+
+## Privacy
+
+<!-- Add entries about privacy-sensitive surfaces — DM boundaries, data
+     that lives in non-repo locations, redaction rules. -->
+
+## Tool Preferences
+
+<!-- Add entries about which tools to prefer when multiple options exist,
+     fallback orderings, blocked tools. -->
+
+## Workflow
+
+<!-- Add entries about workflow conventions — git hygiene, PR review
+     expectations, branch naming, commit message style, etc. -->
+
+## User
+
+<!-- Add entries about the installer's bio facts, role, contacts, identifiers. -->
+
+## Active Projects
+
+<!-- Add entries for ongoing projects with their current state, owner,
+     deadlines. Decay fast — keep updated. -->
+
+## References
+
+<!-- Add entries pointing at external systems (Linear projects, Grafana
+     dashboards, Notion databases) that hold authoritative state. -->

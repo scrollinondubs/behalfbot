@@ -1,0 +1,65 @@
+{
+  "id": "behalfbot-welfare-check",
+  "name": "Behalf.bot — Welfare Check",
+  "description": "Operator-welfare escalation: detect when the principal has been silent past a configured threshold, then ladder through Discord ping, SMS, tier-1 contacts, broader contact list, and finally a designated family contact. Generic pattern; no live-location, duress codewords, or mode inference (those personal-security components are install-specific and live private).",
+  "version": "0.4.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Master toggle. False by default — welfare-check requires deliberate opt-in (requires real emergency contacts and a credible silence threshold)."
+      },
+      "silence_threshold_hours": {
+        "type": "integer",
+        "default": 22,
+        "description": "How many hours of silence (no Discord activity, no Oura sync, no welfare-signal-hook fires) before the escalation ladder starts."
+      },
+      "emergency_contacts_path": {
+        "type": "string",
+        "description": "Absolute path to emergency-contacts.json. NOT committed — always gitignored. Use emergency-contacts.template.json as the schema reference.",
+        "default": "${CHASSIS_HOME}/plugins/angel-protocol/data/emergency-contacts.json"
+      },
+      "webhook_url": {
+        "type": "string",
+        "description": "Discord (or alternate channel) webhook for ops alerts. Goes silent on success; fires the escalation prompt on threshold breach."
+      },
+      "sms_provider": {
+        "type": "string",
+        "enum": ["twilio", "telnyx", "aws_sns", "plivo"],
+        "default": "twilio",
+        "description": "Which SMS provider to use for the cascade. Twilio is the only fully-implemented provider in chassis V1; others are stubs. See docs/plugins/welfare-check.md (forthcoming) for the per-provider matrix."
+      }
+    },
+    "required": ["enabled", "emergency_contacts_path"]
+  },
+  "contracts": {
+    "tools": [],
+    "skills": ["welfare-check"],
+    "hooks": ["welfare-signal-hook"]
+  },
+  "activation": {
+    "onStartup": false,
+    "_note": "Plugin is dormant by default — welfare automation requires deliberate opt-in via chassis.config.yaml.modules.welfare_check.enabled = true."
+  },
+  "_chassis_status": {
+    "scripts_in_repo": [
+      "welfare-cascade-send.py",
+      "welfare-check-gather.sh",
+      "welfare-check-replay.py",
+      "welfare-pause.sh",
+      "welfare-signal-hook.sh"
+    ],
+    "scheduled_tasks_in_repo": [
+      "welfare-check-prompt.md.template",
+      "dormant-operator-prenudge-prompt.md.template"
+    ],
+    "sms_providers": {
+      "implemented": ["twilio"],
+      "stubs": ["telnyx", "aws_sns", "plivo"]
+    },
+    "_explanation": "Welfare-check is the operator-welfare core of what was originally a larger Angel Protocol skill. The personal-security components (live location, duress codewords, mode inference, camera integration, iMessage emergency-group cascade) were intentionally moved out of the chassis to per-installer private repos — exposing the bodyguard playbook publicly would give would-be adversaries the protocol. Operators who need the bodyguard layer build it as an install-specific plugin in their private repo, alongside this welfare-check core."
+  }
+}

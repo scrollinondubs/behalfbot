@@ -1,0 +1,19 @@
+{
+  "name": "restaurant-booking",
+  "version": "1.0.0",
+  "description": "A TheFork-based restaurant booking plugin for the Behalf.bot chassis pattern. Handles the full booking flow: parse free-text intent, drive TheFork via Playwright, soft-confirm with the operator via Discord, submit the booking, and optionally create a Google Calendar event.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "playwright": "^1.60.0"
+  }
+}

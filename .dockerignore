@@ -1,0 +1,67 @@
+# Keep the image lean and avoid baking secrets / state into the image.
+# Everything customer-specific lives in the bind-mount, not the image.
+
+.git
+.github
+.gitignore
+.gitattributes
+*.md.bak
+*.bak
+*.bak.*
+node_modules
+__pycache__
+*.pyc
+.venv
+.venv-*
+.pytest_cache
+.mypy_cache
+.coverage
+coverage
+htmlcov
+.idea
+.vscode
+.DS_Store
+
+# Secrets — never bake into image (also gitignored, but belt-and-suspenders).
+.env
+.env.*
+!.env.example
+.mcp.json
+secrets/
+.vaultwarden-token
+*.pem
+*.key
+
+# Runtime state — bind-mount territory, not image territory.
+data/
+state/
+logs/
+briefings/
+temp/
+memory/
+.playwright-mcp/
+.claude/settings.local.json
+
+# Plugin runtime state.
+plugins/dating/installer-facts.md
+plugins/dating/cleared-matches.json
+plugins/dating/social-bridge-state.json
+plugins/dating/social-bridge-state.json.lock
+plugins/dating/pending-instructions.md
+plugins/dating/pending-discord-report.md
+plugins/dating/scheduling-blocks.md
+plugins/dating/memory/
+plugins/angel-protocol/data/
+plugins/whatsapp/data/
+
+# Heartbeat state.
+scheduled-tasks/heartbeat-state.json
+scheduled-tasks/conservation-mode.json
+scheduled-tasks/bfl-health-state.json
+scheduled-tasks/telegram-monitor-state.json
+
+# Local DB.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm

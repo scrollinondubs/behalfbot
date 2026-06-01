@@ -1,0 +1,185 @@
+# chassis.config.yaml - Chassis install config template
+#
+# Machine-readable companion to INSTALL_PROFILE.md. The chassis bootstrap reads
+# this YAML to toggle modules, scaffold surfaces, pick the second-brain backend,
+# and pull the right MCP server set.
+#
+# USAGE: This file is a template. Do NOT edit values here for a real install.
+# Instead: create a customer/<installer> branch off main, copy this file to
+# docs/install-<installer>-chassis-config.yaml, fill in real values there.
+# See customer/installer-2 and customer/installer-1 for reference.
+#
+# Generated-from: template
+# Docs: docs/hydration.md (hydration runbook), docs/installer-homework.md (pre-flight)
+
+version: 1
+generated_from: template  # Confabulator-fork installs will set: confabulator_interview
+
+identity:
+  installer_name: <installer-name>          # Full name, e.g. "Alex Smith"
+  installer_email_placeholder: <installer-agent>@<installer-domain>  # Real value via Vaultwarden, never in this file
+  pricing_intent_usd_per_month: null        # Filled in at onboarding
+
+  # Principal = the human the agent works for. Distinct from installer_name
+  # only when an org / family member commissioned the install.
+  principal:
+    full_name: <installer-name>             # E.g. "Sean Tierney". Used in prompt salutations + email signatures.
+    first_name: <installer-first-name>      # E.g. "Sean". Used in second-person prompt addressing.
+    home_city: <city>                       # E.g. "Lisbon". Used in welfare prompts (geographic context).
+    home_country: <country>                 # E.g. "Portugal". Same reason.
+    timezone: <iana-tz>                     # E.g. "Europe/Lisbon". Used for quiet-hours arithmetic.
+    # Sensitive (NEVER in this file): mobile number. Source from .env / Vaultwarden as PRINCIPAL_MOBILE.
+
+  # The agent's display identity. Used wherever the agent speaks for the
+  # principal externally (Discord, SMS, email From-Name).
+  assistant:
+    name: <agent-name>                      # E.g. "${ASSISTANT_NAME}". First-person identity in prompts.
+    email: <agent-name>@<agent-domain>      # E.g. "<assistant>-agent@example.com". Outbound email From: address.
+    # Display signature derived at render time:
+    #   "<agent-name> - <principal-full-name>'s AI assistant"
+
+# Discord channel mapping. Per-install Discord server topology. Channel IDs
+# are runtime-only; never in committed files. Bootstrap reads from .env vars
+# named DISCORD_PRIMARY_CHANNEL_ID, DISCORD_ALERTS_CHANNEL_ID,
+# DISCORD_OPS_CHANNEL_ID. Labels are user-facing strings for prompt prose
+# (e.g. "#<primary>", "#installer-devops"); they CAN live here since they're
+# non-secret display strings.
+discord_channels:
+  primary_label: <#primary-channel>         # E.g. "#<primary>". Daily-driver conversation channel.
+  alerts_label: <#alerts-channel>           # E.g. "#installer-devops". Infrastructure alerts.
+  ops_label: <#ops-channel>                 # E.g. "#installer-ops". Operational signals.
+
+# Quiet hours = window where the agent will not initiate contact with the
+# principal. Used by welfare-check + any nudge logic. 24-hour clock,
+# principal's local timezone (above).
+quiet_hours:
+  start: "22:00"                            # E.g. "22:00". Pings stop after.
+  end:   "09:00"                            # E.g. "09:00". Pings can resume.
+
+instance_branch: agent  # Confabulator agent-vs-app split, locked to "agent" for Behalf.bot installs
+
+deployment:
+  target: linux_baremetal                   # Options: linux_baremetal, cloudflare_containers, mac_mini
+  host_class: home_server                   # home_server | vps | cloud_container
+  ram_gb: null                              # Filled in at onboarding
+  cpu_arch: amd64                           # amd64 | arm64
+  state_storage: local_fs
+  state_path: ~/behalfbot/state
+  database: postgres                        # Default: postgres. V1 bare-metal installs may use sqlite;
+                                            # see LESSONS_FROM_V1.md #34 for why postgres is the new default.
+  network:
+    via: tailscale_node_share               # Installer shares ONE node into Sean+${ASSISTANT_NAME} tailnet
+    tailnet_isolated: true                  # Sean's tailnet untouched
+  local_models: false                       # Set true only when host has >= 32GB RAM for Ollama
+
+# Host-side CLIs to install at bootstrap time (chassis/scripts/install-host-clis.sh).
+# Not every install needs every CLI — populate from the tool_integrations
+# interview answers. Universal CLIs (gh, awscli, postgresql-client, docker,
+# rmapi) are baked into the chassis image and don't go here.
+#
+# Recognized values map to install commands per OS in install-host-clis.sh's
+# CLI_INSTALL_MAP. Add new entries to that map when extending this list.
+#
+# Examples:
+#   host_clis: [vercel, turso, stripe]       # Sean's install
+#   host_clis: []                            # No host CLIs needed
+#   host_clis: null                          # Same as [] — explicit "none"
+host_clis: []
+
+surfaces:
+  primary: discord                          # discord | telegram | slack
+  secondary: {}                             # Add telegram_monitor, slack, etc. as needed
+  channel_topology:                         # Installer creates these channels in their Discord server
+    - id: <installer>-briefings             # Daily briefing target
+    - id: <installer>-ops                   # System alerts, errors, heartbeat failures
+    - id: <installer>-leads                 # CRM signals + outreach drafts
+    - id: <installer>-social                # Dating module surface (if dating plugin enabled)
+    - id: <installer>-private               # Reserved for sensitive workflows (Venice-pattern)
+
+second_brain:
+  backend: notion                           # notion | siyuan | obsidian
+  workspace: <installer-notion-workspace>   # Real workspace_id via Vaultwarden
+  organization_pattern: para               # Tiago Forte: Projects / Areas / Resources / Archives
+  databases:
+    primary_crm: TBD_at_install             # Notion database id
+    notes_root: TBD_at_install              # Page id for free-form prose writes
+  scaffold_para_if_missing: true            # If their Notion isn't PARA-shaped, scaffold it
+
+modules:
+  admin: true                               # Rescheduling, travel, event research, email drafting
+  briefing: true                            # Daily digest in briefings channel
+  crm: false                                # Enable if installer has a CRM use-case (Notion DB required)
+  outreach:
+    enabled: false                          # Enable for LP / investor / lead outreach workflows
+    scope: null                             # e.g. lp_investor_only, sales_outbound
+  dating:
+    enabled: false                          # Explicit opt-in - requires Android emulator + ADB setup
+    safety_floor:
+      photo_verification: byte_level_only   # TinEye + Lens + PimEyes; Yandex informational
+      five_exchange_rule: true
+      angel_protocol_required_before_in_person: true
+      anti_doxx: true
+      concierge_framing: true
+  bfl:                                      # Body for Life quantified-self pipeline - opt-in
+    enabled: false
+    notebook_ingest: true
+    strava_oura_reconcile: false            # Default false - enable only if installer GPS-tracks aerobic workouts
+                                            # (see LESSONS_FROM_V1.md #35 for why this changed)
+    fdc_enrich: false                       # Default false - vision-primary is more accurate
+                                            # (see LESSONS_FROM_V1.md #36 for why FDC under-reports)
+  pacman:                                   # URL self-improvement filter (chassis-core); per-install knobs
+    enabled: false                          # Set true to activate the Pacman pipeline + drain heartbeat
+    discord_chat_id: <DISCORD_CHANNEL_ID>   # Discord channel for drop notes + proposal summaries
+                                            # (the channel where the installer types "Pacman <url>")
+    discord_channel_label: <#channel-name>  # Optional human-readable label for prompts (e.g. "#<primary>")
+                                            # Falls back to "Discord channel <chat_id>" if omitted
+    siyuan_queue_block_id: <SIYUAN_BLOCK>   # /To Investigate queue parent block (URLs land here)
+                                            # Format: YYYYMMDDHHMMSS-XXXXXXX (SiYuan block ID)
+    siyuan_dropped_block_id: <SIYUAN_BLOCK> # /Dropped audit-trail sub-doc (per-drop append-only)
+    github_repo: <OWNER/REPO>               # gh issue create target when installer replies "approve <id>"
+                                            # Use the install's main canonical work repo
+    github_labels: pacman                   # Comma-separated GH labels applied on issue creation
+    max_batch_urls: 10                      # Per-fire cap (prevents context blowout on huge link dumps)
+    telegram_trigger_user_id: null          # Optional - telegram user_id whose 👀 fires Mode B
+                                            # (queue-from-telegram-reaction). Leave null to disable Mode B.
+    telegram_admin_chat_ids: null           # Optional - comma-separated chat_ids where Mode B is active
+  dealflow: false
+  health_general: false
+  banking: false                            # Hard opt-in - trust line requires explicit installer decision
+  password_management: false               # Same
+
+trust_line:
+  email: read_and_draft                     # Never auto-send
+  calendar: read_write
+  github: collaborator                      # Agent-side account separate from installer-personal
+  google_drive: read_primary_write_on_ask
+  notion: read_write
+  banking: disabled
+  password_manager: disabled
+  dating_apps: disabled                     # read_write_within_safety_rails when dating module is enabled
+
+identity_isolation:
+  pattern: dual_identity                    # Installer-personal vs installer-agent
+  agent_accounts_owned_by: installer        # Installer provisions; Sean+${ASSISTANT_NAME} never hold installer's credentials
+  secrets_handoff: vaultwarden             # Per-installer Vaultwarden instance
+
+memory:
+  ships_with: pre_seeded                    # Reduce time-to-delight
+  seed_entries: []                          # Populated at install from interview artifacts
+  no_fabrication: true                      # Only what installer confirms or is observable
+
+install_execution:
+  model: b_ssh_driven                       # Sean+${ASSISTANT_NAME} drive via SSH
+  bootstrap_log: bootstrap.sh
+  rollback_strategy: git_revert_in_chassis_repo
+
+success_criteria:
+  first_heartbeat:
+    surface: discord_channel
+    channel: <installer>-briefings
+    cadence: daily_morning_local
+    success_threshold: 3_consecutive_clean_days
+  smoke_tests:
+    - discord_ping_returns
+    - gmail_draft_creation
+    - second_brain_read

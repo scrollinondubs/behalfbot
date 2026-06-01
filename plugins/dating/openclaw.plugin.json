@@ -1,0 +1,254 @@
+{
+  "id": "behalfbot-dating",
+  "name": "Behalf.bot — Dating",
+  "description": "Dating-app automation as a sandboxed subagent: photo verification consensus engine, RU/UA/BY safety floor, reply-gated catfish screening, concierge framing, Angel Protocol prereq for in-person meets. Bound to a single ops channel; never co-runs with the main session.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Top-level plugin toggle. Dating automation is dormant by default — opt-in only.",
+        "default": false
+      },
+      "social_channel_id": {
+        "type": "string",
+        "description": "Discord channel ID the dating subagent posts to. ALL dating-related output (session reports, escalations, photo-verification verdicts) lands here. NEVER co-mingle with the primary briefing channel.",
+        "default": "${SOCIAL_CHANNEL_ID}"
+      },
+      "social_webhook_env_var": {
+        "type": "string",
+        "description": "Environment-variable name holding the Discord webhook URL for social_channel_id.",
+        "default": "CHASSIS_SOCIAL_WEBHOOK_URL"
+      },
+      "installer_facts_path": {
+        "type": "string",
+        "description": "Absolute path to installer-facts.md (the canonical source of truth for facts about the installer that the agent may relay to a match — height, location dodge, schedule constraints, etc.). Each installer authors their own; nothing ships in chassis.",
+        "default": "${CHASSIS_HOME}/plugins/dating/installer-facts.md"
+      },
+      "cleared_matches_path": {
+        "type": "string",
+        "description": "Absolute path to cleared-matches.json — preauth clearance store. Read at session start.",
+        "default": "${CHASSIS_HOME}/plugins/dating/cleared-matches.json"
+      },
+      "pending_instructions_path": {
+        "type": "string",
+        "description": "Absolute path to pending-instructions.md — installer's real-time overrides inbox.",
+        "default": "${CHASSIS_HOME}/plugins/dating/pending-instructions.md"
+      },
+      "scheduling_blocks_path": {
+        "type": "string",
+        "description": "Absolute path to scheduling-blocks.md — active windows blocked for date proposals.",
+        "default": "${CHASSIS_HOME}/plugins/dating/scheduling-blocks.md"
+      },
+      "verifications_output_root": {
+        "type": "string",
+        "description": "Absolute path where verify-match.py writes per-match evidence directories (screenshots + report.md + raw.json).",
+        "default": "${CHASSIS_HOME}/data/dating/verifications"
+      },
+      "verify_venv_path": {
+        "type": "string",
+        "description": "Absolute path to the dedicated Python venv for verify-match (Playwright). Created at install time.",
+        "default": "${CHASSIS_HOME}/.venv-dating"
+      },
+      "platforms": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "hinge": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": true },
+              "transport": {
+                "type": "string",
+                "enum": ["android_emulator"],
+                "default": "android_emulator",
+                "description": "Hinge has no usable web flow — always Android emulator via ADB."
+              }
+            }
+          },
+          "tinder": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": false },
+              "transport": {
+                "type": "string",
+                "enum": ["web_playwright", "android_emulator"],
+                "default": "web_playwright"
+              }
+            }
+          },
+          "bumble": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": { "type": "boolean", "default": false },
+              "transport": {
+                "type": "string",
+                "enum": ["android_emulator", "web_playwright"],
+                "default": "android_emulator"
+              }
+            }
+          }
+        }
+      },
+      "emulator": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "avd_name": {
+            "type": "string",
+            "description": "Android Virtual Device name. Created at install time via the Android SDK manager.",
+            "default": "Dating_Pixel"
+          },
+          "spoofed_lat": {
+            "type": "number",
+            "description": "GPS-spoof latitude. Reset on every emulator restart via telnet `geo fix`. Installer's local city only — NEVER commit installer's home coords."
+          },
+          "spoofed_lon": {
+            "type": "number",
+            "description": "GPS-spoof longitude. Same constraint as spoofed_lat."
+          }
+        }
+      },
+      "safety_floor": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Non-negotiable safety rules. Disabling any of these requires opening a follow-up issue acknowledging the trade-off — chassis-default is full safety floor on.",
+        "properties": {
+          "photo_verification": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": ["reply_gated", "match_gated", "off"],
+                "description": "When the photo-verification consensus engine runs. reply_gated = run only after the match replies to the opener (default; cheapest + lowest information leakage). match_gated = run on every match. off = NOT recommended; provided only for installers who explicitly accept the risk.",
+                "default": "reply_gated"
+              },
+              "auto_reject_signals": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Which engine results trigger a silent auto-reject. Yandex is similarity-only and never sufficient on its own — fixed in the consensus engine, not configurable here.",
+                "properties": {
+                  "tineye_byte_match_on_adult_aggregator": { "type": "boolean", "default": true },
+                  "lens_named_celebrity": { "type": "boolean", "default": true },
+                  "lens_high_confidence_adult_aggregator": { "type": "boolean", "default": true },
+                  "pimeyes_russian_internet_only_presence": { "type": "boolean", "default": true }
+                }
+              }
+            }
+          },
+          "regional_default_reject": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "Default-reject-with-override-gate for high-risk source markets. Calibrated against catfish-targeting clusters seen on the V1 install (Eva, Jacqueline, Nadya — three sketchy profiles in 72h). Installer can edit the country list for their threat model.",
+            "properties": {
+              "enabled": { "type": "boolean", "default": true },
+              "country_codes": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "ISO 3166-1 alpha-2 country codes flagged for default-reject + override-gate scrutiny.",
+                "default": ["RU", "UA", "BY"]
+              },
+              "override_gate_required_evidence": {
+                "type": "array",
+                "items": { "type": "string" },
+                "default": [
+                  "photo_verification_clean",
+                  "western_digital_footprint",
+                  "verifiable_local_presence",
+                  "standard_scoring_pass"
+                ]
+              }
+            }
+          },
+          "five_exchange_rule": {
+            "type": "boolean",
+            "description": "At 5 exchanges with a match, screenshot the thread to the installer for explicit approve/deny before any reveal-and-pivot or scheduling. Pierces no other rule.",
+            "default": true
+          },
+          "angel_protocol_required_before_in_person": {
+            "type": "boolean",
+            "description": "Hard prereq: in-person meets are blocked until the angel-protocol plugin is enabled, configured, and a duress codeword listener + auto-checkin schedule are live. Until then, all in-person counter-proposals deflect to a video call. See plugins/angel-protocol.",
+            "default": true
+          },
+          "anti_doxx": {
+            "type": "boolean",
+            "description": "Never reveal installer's neighborhood, home address, real phone number, day-of-week routine, or any other doxx-able fact in any outbound dating-app message, calendar invite, or Zoom small-talk. Public-facing answer is always city-level only.",
+            "default": true
+          },
+          "concierge_framing": {
+            "type": "boolean",
+            "description": "All outbound messages from the agent are first-person-as-assistant, third-person-about-the-installer. Never `I` in a way that could be mistaken for the installer himself. The reveal is upfront from message #1.",
+            "default": true
+          },
+          "never_dinner_first": {
+            "type": "boolean",
+            "description": "Never propose dinner or a sit-down meal as the first in-person meet. Coffee or video only.",
+            "default": true
+          },
+          "never_private_first": {
+            "type": "boolean",
+            "description": "Never propose a private location (her place, his place, hotel, AirBnB, secluded park) for the first in-person. Hard insistence from her on a private first meet is treated as an operator/scammer signal.",
+            "default": true
+          }
+        }
+      },
+      "scoring": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "face_scorer_enabled": {
+            "type": "boolean",
+            "description": "Local CLIP-based attractiveness scorer. Token-free; runs against installer's curated taste-refs/positive/.",
+            "default": false
+          },
+          "face_scorer_thresholds": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "auto_pass_below": { "type": "number", "default": 40 },
+              "borderline_low": { "type": "number", "default": 40 },
+              "borderline_high": { "type": "number", "default": 49 },
+              "like_eligible_at": { "type": "number", "default": 50 }
+            }
+          }
+        }
+      }
+    },
+    "required": ["enabled"]
+  },
+  "contracts": {
+    "tools": ["verify-match"],
+    "skills": ["dating"],
+    "hooks": ["chassis_recovery_dating_emulator"]
+  },
+  "activation": {
+    "onStartup": false,
+    "_note": "Dating automation is fully opt-in. Manifest activation is gated on installer's explicit opt-in via chassis.config.yaml modules.dating.enabled = true."
+  },
+  "_chassis_v1_status": {
+    "phase_supported": "v1_with_deferred_dependency",
+    "dependency": "plugins/angel-protocol",
+    "_explanation": "Plugin ships fully (manifest + skill + scripts + templates), but the safety_floor.angel_protocol_required_before_in_person flag depends on plugins/angel-protocol being enabled and Phase 0 monitoring being live. The angel-protocol plugin currently ships scaffold-only — its monitoring scripts are deferred per <v1-reference-install> #505. Until angel-protocol Phase 0 ports cleanly to non-Apple-Find-My topology, the dating plugin will hard-block in-person meet proposals and deflect to video, even when the installer schedules manually outside the agent. This is by design — see docs/plugins/dating.md § Activation prereqs.",
+    "follow_up_issues": [
+      "<v1-reference-install>#505 — angel-protocol Phase 0 cross-platform port"
+    ]
+  },
+  "_v1_reference": {
+    "source_install": "<v1-reference-install>",
+    "source_paths": [
+      "dating-context/CLAUDE.md",
+      "skills/dating.md",
+      "scripts/verify-match.py",
+      "scripts/verify-match.sh",
+      "scripts/emulator-watchdog.sh"
+    ],
+    "extraction_pr": "scrollinondubs/behalfbot-chassis (this plugin)",
+    "extraction_issue": "<v1-reference-install>#496"
+  }
+}

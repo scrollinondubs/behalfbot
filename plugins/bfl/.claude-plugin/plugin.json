@@ -1,0 +1,8 @@
+{
+  "id": "behalfbot-bfl",
+  "name": "Behalf.bot — BFL (Body for Life)",
+  "description": "Quantified-self pipeline: notebook + food photo ingest, Strava + Oura reconciliation, FDC macro enrichment.",
+  "version": "0.1.0",
+  "skills": ["./skills"],
+  "scripts": ["./scripts"]
+}

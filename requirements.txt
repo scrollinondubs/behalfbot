@@ -1,0 +1,30 @@
+# Python runtime deps baked into the chassis image.
+#
+# Used by gather scripts, plugin runtimes, and the dispatcher's Python helpers.
+# Versions pinned to minor-major to balance reproducibility against routine
+# upgrade churn. Bump in a discrete PR when an upstream module ships a
+# breaking change worth absorbing.
+#
+# Inventory rationale (per script grep across <v1-reference-install> + chassis + plugins):
+#   - pyyaml         heartbeat config parsers, install-profile readers,
+#                    chassis.config.yaml ingest
+#   - requests       Discord webhooks, Anthropic API direct hits, generic HTTP
+#   - anthropic      Claude SDK callers (BFL vision-extract, validator gates)
+#   - psycopg[binary] Postgres adapter (<v1-reference-install>-db, dating state, BFL ingestion).
+#                    psycopg3 (not psycopg2) per #234 migration; `binary`
+#                    extra ships the libpq so no system-libpq dependency.
+#   - boto3          S3 backups, AWS-side logging
+#   - python-dateutil schedule parsing, timezone normalization in gather scripts
+#   - tzdata         IANA tz DB on Debian-slim (slim base ships minimal locales)
+#   - pillow         BFL photo ingest + image preprocessing for vision extract
+#   - openai         OpenAI fallback path (TTS, occasional non-Claude calls)
+
+pyyaml==6.0.2
+requests==2.32.3
+anthropic==0.39.0
+psycopg[binary]==3.2.3
+boto3==1.35.36
+python-dateutil==2.9.0.post0
+tzdata==2024.2
+pillow==11.0.0
+openai==1.54.5

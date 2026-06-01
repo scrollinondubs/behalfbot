@@ -1,0 +1,151 @@
+{
+  "_README": "Template — copy to .mcp.json and replace <PLACEHOLDER> values. Real .mcp.json is gitignored. Comment removed during install. See docs/mcp-setup.md for per-MCP setup.",
+
+  "mcpServers": {
+
+    "memory": {
+      "_role": "default-on, no auth — knowledge graph",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {
+        "MEMORY_FILE_PATH": "${CHASSIS_HOME}/memory/memory.jsonl"
+      }
+    },
+
+    "playwright": {
+      "_role": "default-on, no auth — browser automation fallback",
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+
+    "context7": {
+      "_role": "default-on, no auth — up-to-date library docs (Upstash)",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    },
+
+    "github": {
+      "_role": "default-on with config — every install touches GitHub",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "<GITHUB_PAT>"
+      }
+    },
+
+    "_second-brain-pick-one": {
+      "_role": "Choose ONE based on chassis.config.yaml.second_brain.backend. Comment out / delete the unused entry."
+    },
+
+    "siyuan": {
+      "_role": "second-brain backend (option A) — block-based notes, local-first",
+      "_enable_when": "chassis.config.yaml.second_brain.backend == 'siyuan'",
+      "command": "npx",
+      "args": ["-y", "siyuan-mcp@latest"],
+      "env": {
+        "SIYUAN_URL": "<SIYUAN_URL>",
+        "SIYUAN_TOKEN": "<SIYUAN_TOKEN>"
+      }
+    },
+
+    "notion": {
+      "_role": "second-brain backend (option B) — page+block model, cloud",
+      "_enable_when": "chassis.config.yaml.second_brain.backend == 'notion'",
+      "_install_note": "MCP package: @suekou/mcp-notion-server (popular community option). Verify before installing.",
+      "command": "npx",
+      "args": ["-y", "@suekou/mcp-notion-server"],
+      "env": {
+        "NOTION_API_TOKEN": "<NOTION_INTEGRATION_TOKEN>"
+      }
+    },
+
+    "_optional-feature-gated": {
+      "_role": "Below: opt-in per chassis.config.yaml flags. Delete entries you don't enable."
+    },
+
+    "brave-search": {
+      "_role": "optional — primary web research",
+      "_enable_when": "chassis.config.yaml.modules.research.brave == true",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "<BRAVE_API_KEY>"
+      }
+    },
+
+    "tavily": {
+      "_role": "optional — deep research when Brave isn't enough",
+      "_enable_when": "chassis.config.yaml.modules.research.tavily == true",
+      "command": "npx",
+      "args": ["-y", "tavily-mcp"],
+      "env": {
+        "TAVILY_API_KEY": "<TAVILY_API_KEY>"
+      }
+    },
+
+    "turso": {
+      "_role": "optional — Turso (libsql) hosted database, for installers using it for app DBs",
+      "_enable_when": "chassis.config.yaml.modules.turso == true",
+      "command": "npx",
+      "args": ["-y", "mcp-turso-cloud"],
+      "env": {
+        "TURSO_API_TOKEN": "<TURSO_API_TOKEN>",
+        "TURSO_ORGANIZATION": "<TURSO_ORG>",
+        "TURSO_DEFAULT_DATABASE": "<TURSO_DEFAULT_DB>"
+      }
+    },
+
+    "amplitude": {
+      "_role": "optional — product analytics for installers running their own SaaS",
+      "_enable_when": "chassis.config.yaml.modules.amplitude == true",
+      "type": "http",
+      "url": "https://mcp.eu.amplitude.com/mcp"
+    },
+
+    "n8n": {
+      "_role": "optional — only if installer self-hosts n8n",
+      "_enable_when": "chassis.config.yaml.modules.n8n == true",
+      "command": "npx",
+      "args": ["-y", "n8n-mcp"],
+      "env": {
+        "N8N_API_URL": "<N8N_API_URL>",
+        "N8N_API_KEY": "<N8N_API_KEY>",
+        "MCP_MODE": "stdio",
+        "LOG_LEVEL": "error"
+      }
+    },
+
+    "loom": {
+      "_role": "optional — only if installer ingests Loom videos via MCP (chassis ships process-loom.sh as a CLI alternative)",
+      "_enable_when": "chassis.config.yaml.modules.loom_mcp == true",
+      "command": "npx",
+      "args": ["-y", "loom-dl@latest", "--mcp"]
+    },
+
+    "remarkable": {
+      "_role": "optional — only if installer has a reMarkable tablet",
+      "_enable_when": "chassis.config.yaml.modules.remarkable == true",
+      "command": "uvx",
+      "args": ["remarkable-mcp", "--usb"]
+    },
+
+    "oura": {
+      "_role": "optional — only if installer enables BFL plugin AND wants Oura HR overlay",
+      "_enable_when": "chassis.config.yaml.modules.bfl.strava_oura_reconcile == true",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@daveremy/oura-mcp"],
+      "env": {
+        "OURA_TOKEN": "<OURA_TOKEN>"
+      }
+    },
+
+    "frame0": {
+      "_role": "optional — wireframe / mockup generation",
+      "_enable_when": "chassis.config.yaml.modules.frame0 == true",
+      "command": "npx",
+      "args": ["-y", "frame0-mcp-server"]
+    }
+
+  }
+}

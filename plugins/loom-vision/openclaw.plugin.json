@@ -1,0 +1,71 @@
+{
+  "id": "behalfbot-loom-vision",
+  "name": "Behalf.bot — Loom Vision",
+  "description": "Process a Loom share URL into multimodal context: downloads the video, samples key frames at 1 frame per 5 seconds, and pairs them with the auto-generated transcript. Lets Claude see what's happening on screen during a walkthrough, code review, or bug repro — not just what was said. Token-cheap visual context for any Loom link.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Top-level toggle. When false the skill won't trigger.",
+        "default": true
+      },
+      "frame_interval_seconds": {
+        "type": "number",
+        "description": "How often to sample a frame from the source video. Lower = more visual detail but more frames to process. 5s is a sensible default for code walkthroughs and demos.",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 60
+      },
+      "frame_max_width_px": {
+        "type": "integer",
+        "description": "Max width in pixels for sampled frames. 1280 is enough for code legibility on most screens.",
+        "default": 1280,
+        "minimum": 640,
+        "maximum": 3840
+      },
+      "frame_quality": {
+        "type": "integer",
+        "description": "ffmpeg JPEG quality (lower = better quality, 1-31 scale). 3 is a good balance of legibility vs. file size for code screenshots.",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 31
+      },
+      "output_root": {
+        "type": "string",
+        "description": "Directory where per-video output folders are written. Each Loom video gets a subdir named loom-<video_id> containing video.mp4, transcript.vtt, and frame_NNN.jpg files.",
+        "default": "${CHASSIS_HOME}/temp"
+      }
+    },
+    "required": ["enabled"]
+  },
+  "contracts": {
+    "tools": [],
+    "skills": ["loom-vision"],
+    "hooks": []
+  },
+  "activation": {
+    "onStartup": false,
+    "_note": "Skill is invoked on-demand when the user pastes a Loom URL or asks the agent to process Loom video content. No scheduled jobs."
+  },
+  "dependencies": {
+    "system": [
+      {
+        "name": "loom-dl",
+        "install": "npm install -g loom-dl",
+        "_explanation": "loom-dl is a small Node CLI that handles the Loom share URL → mp4 + transcript download. Not on Homebrew, ships via npm. Verified against loom-dl 1.1.1."
+      },
+      {
+        "name": "ffmpeg",
+        "install": "brew install ffmpeg",
+        "_explanation": "Frame sampling. Any recent ffmpeg works."
+      }
+    ]
+  },
+  "_chassis_v1_status": {
+    "phase_supported": "v1_stable",
+    "_explanation": "Self-contained plugin with two small system deps. No network state, no per-installer config beyond the optional knobs above. Safe to enable by default."
+  }
+}

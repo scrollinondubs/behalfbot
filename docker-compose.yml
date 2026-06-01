@@ -1,0 +1,150 @@
+# Behalf.bot chassis - reference Compose stack
+# ============================================
+# This file lives in the chassis repo as a development + smoke-test target.
+# Customer installs use the SAME compose layout but generated into the
+# customer's private repo by `scripts/install-container.sh`.
+#
+# Three services:
+#   - chassis     - dispatcher loop (the gather-first heartbeat runner)
+#   - postgres    - durable state (Sean's "Postgres from start" call)
+#   - vaultwarden - credential vault (per-installer; never shared across installs)
+#
+# Boot order: postgres → vaultwarden (parallel ok) → chassis (waits for
+# postgres healthy). vaultwarden has its own admin token; chassis hits it
+# via `rbw` from inside the container at bootstrap time only - credentials
+# are baked into the bind-mounted .env so the dispatcher loop never needs
+# to reach vaultwarden at runtime.
+
+name: behalfbot
+
+services:
+  chassis:
+    image: ${CHASSIS_IMAGE:-ghcr.io/scrollinondubs/behalfbot-chassis:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALLER_UID: ${INSTALLER_UID:-1000}
+        INSTALLER_GID: ${INSTALLER_GID:-1000}
+    container_name: behalfbot-chassis
+    user: "${INSTALLER_UID:-1000}:${INSTALLER_GID:-1000}"
+    # group_add lets the container's chassis user reach /var/run/docker.sock
+    # without changing primary GID. The host docker socket is typically
+    # owned root:docker (Linux) or root:<some-host-GID> (Docker Desktop on
+    # Mac, where the socket goes through Lima). Find the right GID with:
+    #     ls -ln /var/run/docker.sock | awk '{print $4}'
+    # …and set DOCKER_SOCKET_GID in .env. Default 0 means "use container
+    # primary group only" (i.e. socket inaccessible) — installs that don't
+    # enable the docker-prune heartbeat can leave it at 0.
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      CHASSIS_HOME: /app/customer
+      DISPATCHER_INTERVAL_SECONDS: ${DISPATCHER_INTERVAL_SECONDS:-900}
+      # Postgres DSN seen from inside the chassis network. The chassis
+      # .env on the bind-mount can override per-customer, but the default
+      # wiring matches the compose stack.
+      CHASSIS_PG_DSN: postgresql://chassis:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/chassis
+      # Sibling vars that some code paths + claude subagents read literally
+      # instead of via CHASSIS_PG_DSN (e.g. a BFL fallback subagent building its
+      # own `psql -h $CHASSIS_PG_HOST` command). Customers commonly define these
+      # in their .env with host-context values (CHASSIS_PG_HOST=127.0.0.1 so
+      # host-side scripts can reach the postgres container via the published
+      # port). Without these container-context overrides, those host values
+      # leak into the container via env_file and any literal consumer hits
+      # "connection refused" because 127.0.0.1 inside the container is the
+      # container's own loopback, not the host's. Override here so the
+      # container always sees a self-consistent set of PG env vars.
+      CHASSIS_PG_HOST: postgres
+      CHASSIS_PG_PORT: "5432"
+      CHASSIS_PG_USER: chassis
+      CHASSIS_PG_DB: chassis
+      USE_PG: "true"
+    volumes:
+      - ${CUSTOMER_HOME:?set CUSTOMER_HOME in .env (host path to per-customer behalfbot dir)}:/app/customer
+      - ${CUSTOMER_CLAUDE_DIR:?set CUSTOMER_CLAUDE_DIR in .env (host path to ~/.claude for OAuth credentials)}:/home/chassis/.claude
+      # rmapi config (devicetoken + usertoken). Bind-mount so the container's
+      # remarkable-health heartbeat + send-to-remarkable / notebook-rw scripts
+      # share the same auth state as the host. Created by interactive re-pair
+      # against https://my.remarkable.com/device/desktop/connect; that flow
+      # must run on a machine with a browser (typically host or installer's
+      # phone), then the resulting config file is shared into the container
+      # via this mount. Optional via the `?:` syntax — installs without a
+      # reMarkable can leave CUSTOMER_RMAPI_CONFIG unset and skip this mount.
+      - ${CUSTOMER_RMAPI_CONFIG:-/dev/null}:/home/chassis/.rmapi
+      # Docker socket bind-mount for the docker-prune heartbeat. The CLI
+      # inside the container talks to the HOST docker daemon to clean up
+      # stale build cache + unused images on a weekly cadence. Security
+      # caveat: this effectively grants the container root on the host
+      # via container-escape. Mitigated by single-tenant container design.
+      # Future hardening: replace with tecnativa/docker-socket-proxy
+      # restricted to `builder.prune` + `images` endpoints. Leave the path
+      # as a default so non-macOS installers can override it.
+      - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+    networks:
+      - behalfbot
+    # The dispatcher needs outbound DNS to reach Discord webhooks, Anthropic
+    # API, GitHub, Notion, Tailscale-routed hosts. No special caps.
+
+  postgres:
+    # pgvector/pgvector:pg17 = vanilla Postgres 17 + the pgvector extension
+    # pre-installed. Same upstream as postgres:17, with vector ops available
+    # by `CREATE EXTENSION vector;`. Chassis defaults to this because semantic
+    # search across ingested content (books, web clips, briefings) is a core
+    # feature — installs that need vector ops shouldn't have to override the
+    # image, and installs that don't are still on stock PG17 with zero cost.
+    # The image is built and published by the pgvector team on Docker Hub.
+    image: pgvector/pgvector:pg17
+    container_name: behalfbot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chassis
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: chassis
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - behalfbot
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chassis -d chassis"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Don't expose 5432 to host by default. Chassis reaches it via the
+    # internal network. Uncomment ports: only for debugging.
+    # ports:
+    #   - "127.0.0.1:5432:5432"
+
+  vaultwarden:
+    image: vaultwarden/server:1.32.5
+    container_name: behalfbot-vaultwarden
+    restart: unless-stopped
+    environment:
+      ADMIN_TOKEN: ${VAULTWARDEN_ADMIN_TOKEN:?set VAULTWARDEN_ADMIN_TOKEN in .env}
+      SIGNUPS_ALLOWED: "false"
+      INVITATIONS_ALLOWED: "true"
+      # Behind Tailscale Funnel or local-only access - no public TLS termination here.
+      # Customer fronts this with their own reverse proxy if exposed beyond localhost.
+      ROCKET_PORT: 80
+      DOMAIN: ${VAULTWARDEN_DOMAIN:-http://localhost:8222}
+    volumes:
+      - vaultwarden-data:/data
+    networks:
+      - behalfbot
+    ports:
+      # Localhost only - never expose vaultwarden directly to the internet.
+      # Customer puts Tailscale Funnel / Cloudflare Tunnel in front if remote
+      # access is needed.
+      - "127.0.0.1:${VAULTWARDEN_HOST_PORT:-8222}:80"
+
+volumes:
+  postgres-data:
+  vaultwarden-data:
+
+networks:
+  behalfbot:
+    driver: bridge

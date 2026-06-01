@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ${INSTALLER_LABEL}.dating-swipe-${SLOT} — slot dating session launchd plist.
+
+  TEMPLATE FILE — placeholders below get filled by the installer at activation
+  time and the resulting plist lands in ~/Library/LaunchAgents/. See
+  plugins/dating/scripts/install-dating-swipe-plists.sh (referenced by the
+  install runbook) for the templater that expands these.
+
+  Placeholders the installer must substitute:
+    ${INSTALLER_LABEL}            launchd reverse-DNS namespace, e.g. com.<v1-reference-install>
+    ${SLOT}                       1, 2, or 3
+    ${HOUR}                       launchd StartCalendarInterval Hour value
+    ${CHASSIS_HOME}               install root that holds .env + chassis/ subtree
+    ${HOME}                       installer's home directory
+    ${LEGACY_V1_HOME}            legacy V1 install root, optional. Leave
+                                  empty string for fresh installs.
+    ${INSTALLER_LOCAL_BIN_PARENT} dir whose `/bin` contains `rmapi`, `claude`,
+                                  etc. — typically `${HOME}/.local`
+    ${HOMEBREW_PREFIX}            `/opt/homebrew` (Apple Silicon) or
+                                  `/usr/local` (Intel)
+
+  Why host-side and not in the chassis container heartbeat:
+  ========================================================
+  Dating's runtime deps (Android emulator, Playwright + Chromium for Tinder
+  web, CLIP scorer, the installer's ~/Desktop feedback loop, dating-context
+  subagent filesystem) are all host-resident. The chassis container can't
+  reach them without bind-mounting most of ${HOME} + bloating the image
+  with Playwright + Chromium + emulator client. Host launchd matches the
+  V1 pattern + keeps the chassis runtime clean for non-dating installs.
+  See chassis/docs/plugins/dating.md > "Runtime: host-resident, not in-
+  container" for full rationale.
+
+  Cadence: configured per-slot via ${HOUR} (10/14/18 local in the
+  reference install). The wrapper script adds 0-30 min random jitter on
+  top, matching the chassis dispatcher's jitter logic pre-cutover.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${INSTALLER_LABEL}.dating-swipe-${SLOT}</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${CHASSIS_HOME}/chassis/plugins/dating/scripts/dating-swipe-host.sh</string>
+        <string>${SLOT}</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>${HOUR}</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+
+    <key>WorkingDirectory</key>
+    <string>${CHASSIS_HOME}</string>
+
+    <key>StandardOutPath</key>
+    <string>${CHASSIS_HOME}/logs/scheduled/dating-swipe-${SLOT}-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>${CHASSIS_HOME}/logs/scheduled/dating-swipe-${SLOT}-stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>${INSTALLER_LOCAL_BIN_PARENT}/bin:${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/opt/node@22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin</string>
+        <key>HOME</key>
+        <string>${HOME}</string>
+        <key>CHASSIS_HOME</key>
+        <string>${LEGACY_V1_HOME}</string>
+        <key>CHASSIS_HOME</key>
+        <string>${CHASSIS_HOME}</string>
+    </dict>
+</dict>
+</plist>

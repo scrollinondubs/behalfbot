@@ -1,0 +1,58 @@
+# Behalf.bot trigger registry — chassis/triggers.yaml
+#
+# This file is the deterministic dispatch registry read by
+# chassis/scripts/dispatch-trigger.sh. Two ways entries land here:
+#
+#   1. Plugin-declared — the bootstrap merge step (see bootstrap.sh) reads
+#      contracts.triggers from each enabled plugin's openclaw.plugin.json and
+#      appends them here. This is the default path.
+#
+#   2. Installer-defined — installers can append custom one-off triggers (i.e.
+#      not tied to a plugin) by hand-editing the resulting triggers.yaml after
+#      bootstrap. The chassis preserves these on subsequent bootstrap runs IF
+#      they're outside the plugin-declared block markers.
+#
+# The chassis ships with this file as a TEMPLATE (no triggers active). Bootstrap
+# copies it to chassis/triggers.yaml and merges in plugin-declared entries.
+#
+# Schema (one entry per `- name:`):
+#
+#   name           required  unique trigger identifier (kebab-case)
+#   plugin         required  plugin id (e.g. "behalfbot-bfl") or "core"
+#   keyword_regex  required  ERE, matched case-insensitively against message body
+#   channel_filter optional  exact channel id, or "*" for any channel.
+#                            Supports ${ENV_VAR} expansion (e.g. ${HEALTH_CHANNEL_ID}).
+#                            Default: "*"
+#   parser         optional  Bare name (resolves to chassis/scripts/parsers/<name>.sh)
+#                            or absolute path. Default: "passthrough"
+#                            Built-in parsers: passthrough, url-extract
+#   handler        required  Absolute path to the handler script. Supports ${ENV_VAR}.
+#                            Handler receives parsed args via env vars:
+#                              TRIGGER_NAME, TRIGGER_PLUGIN, TRIGGER_CHANNEL_ID,
+#                              TRIGGER_MESSAGE_ID, TRIGGER_MESSAGE_BODY,
+#                              TRIGGER_PARSED_ARGS_JSON
+#   react_emoji    optional  Unicode emoji to react with on match. "" to skip.
+#
+# First-match wins. Order entries by specificity (most specific keyword_regex
+# first) if you have overlapping patterns.
+
+triggers: []
+
+# --- Example entries (commented out; remove the # to activate) ---
+#
+# triggers:
+#   - name: backfill
+#     plugin: behalfbot-bfl
+#     keyword_regex: '^Backfill[\s:]+'
+#     channel_filter: ${HEALTH_CHANNEL_ID}
+#     parser: bfl-natural-language-meal
+#     handler: ${CHASSIS_HOME}/plugins/bfl/triggers/backfill.sh
+#     react_emoji: '🍴'
+#
+#   - name: pacman
+#     plugin: core
+#     keyword_regex: '^Pacman[\s:]+'
+#     channel_filter: ${PRIMARY_CHANNEL_ID}
+#     parser: url-extract
+#     handler: ${CHASSIS_HOME}/scripts/triggers/pacman.sh
+#     react_emoji: '🟡'

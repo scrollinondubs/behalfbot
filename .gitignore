@@ -1,0 +1,65 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+secrets/
+.vaultwarden-token
+
+# Per-installer state — populated at runtime, never templated in
+chassis/memory/installer/
+chassis/memory/MEMORY.md
+chassis/memory/lead_*.md
+chassis/memory/topic_*.md
+chassis/memory/feedback_*.md
+chassis/memory/project_*.md
+chassis/memory/reference_*.md
+chassis/memory/student_*.md
+chassis/memory/user_*.md
+chassis/memory/task_*.md
+
+# Briefings + ephemeral artifacts
+briefings/
+logs/
+temp/
+data/
+
+# Local DB
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS / editor
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+.npm/
+
+# Vercel
+.vercel/
+
+# Test outputs
+.pytest_cache/
+coverage/
+htmlcov/
+
+# Rendered prompt files — produced from .md.template by chassis/scripts/
+# bootstrap-prompts.sh at install time. Per-install runtime artifacts;
+# canonical source-of-truth lives in the .md.template alongside.
+**/scheduled-tasks/welfare-check-prompt.md
+**/scheduled-tasks/dormant-sean-prenudge-prompt.md
+**/scheduled-tasks/remarkable-health-alert-prompt.md

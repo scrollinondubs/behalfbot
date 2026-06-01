@@ -1,0 +1,8 @@
+{
+  "id": "behalfbot-welfare-check",
+  "name": "Behalf.bot — Welfare Check",
+  "description": "Operator-welfare escalation: detect silence past a configured threshold, then ladder through Discord, SMS, tier-1 contacts, broader list, family.",
+  "version": "0.4.0",
+  "skills": ["./skills"],
+  "scripts": ["./scripts"]
+}

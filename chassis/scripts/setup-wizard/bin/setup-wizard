@@ -1,0 +1,21 @@
+#!/usr/bin/env node
+// Entry point for the Behalf.bot setup wizard.
+// Delegates to the compiled dist/index.js.
+// Run: npm run build && npm run wizard
+// Or for dry-run: npm run dry-run
+
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const distIndex = join(__dirname, "..", "dist", "index.js");
+
+if (!existsSync(distIndex)) {
+  console.error("dist/index.js not found. Run: npm run build");
+  process.exit(1);
+}
+
+const { createRequire: _cr } = await import("node:module");
+await import(distIndex);

@@ -1,0 +1,38 @@
+# reMarkable Health Alert
+
+The `remarkable-health` heartbeat detected a problem with the OTA pipeline to the installer's reMarkable tablet. The gather script emitted `count > 0`, which means one of:
+
+| `status` | What broke | Fix |
+|---|---|---|
+| `rmapi_binary_missing` | `rmapi` (resolved via `$PATH` or `$RMAPI_BIN`) not executable | Reinstall the ddvk fork (current as of 2026-05-25). macOS arm64 example: `curl -sSL -o /tmp/rmapi.zip https://github.com/ddvk/rmapi/releases/download/v0.0.34/rmapi-macos-arm64.zip && cd /tmp && unzip -o rmapi.zip && mv rmapi ~/.local/bin/rmapi && chmod +x ~/.local/bin/rmapi`. Substitute the right release asset for the installer's OS / arch. |
+| `rmapi_config_missing` | `~/.rmapi` file gone | Re-pair (see runbook below) |
+| `rmapi_devicetoken_missing` | Config exists but no `devicetoken:` line | Re-pair (see runbook below) |
+| `rmapi_api_call_failed` | `rmapi ls /` returned non-zero. Probably stale usertoken OR reMarkable API change OR network outage. Detail line has the rc + first stderr line. | First check: try the same call manually. If still failing, re-pair. If pairing fails too, network or reMarkable cloud outage. |
+| `rmapi_root_empty` | API auth works but cloud root has 0 items. Either tablet wiped, or wrong account. | Check ${PRINCIPAL_FIRST_NAME}'s reMarkable account on https://my.remarkable.com. |
+
+## Your job
+
+1. Read the gather output `status` + `detail`. Classify into one of the rows above.
+2. Post **one** concise alert to `${DISCORD_ALERTS_LABEL}` (channel `${DISCORD_ALERTS_CHANNEL_ID}`) via the discord MCP `reply` tool: date, status tag, what you tried, what Sean needs to do.
+3. If the failure is the same status tag for 2+ consecutive ticks, file-or-comment-issue on `scrollinondubs/new-jaxity` using the dedup helper (see "Filing issues — use the dedup helper" in `strava-ingest-alert-prompt.md`).
+4. **Do NOT attempt to re-pair from this prompt.** Re-pair needs a one-time code from ${PRINCIPAL_FIRST_NAME}'s phone — only ${PRINCIPAL_FIRST_NAME} can produce it. Surface the ask.
+
+## Re-pair runbook (for the alert body)
+
+```
+1. On any device with a browser: https://my.remarkable.com/device/desktop/connect
+2. Sign in (${PRINCIPAL_FIRST_NAME}'s reMarkable account), copy the 8-char one-time code
+3. Send the code in ${DISCORD_OPS_LABEL} or here in DM
+4. Mac Mini side: `rm ~/.rmapi && echo "<code>" | rmapi ls`
+5. Subsequent `rmapi ls /` confirms auth.
+```
+
+## Cost
+
+Should be ~150 tokens of output. Don't paraphrase the runbook into prose — keep the bash block intact so ${PRINCIPAL_FIRST_NAME} can copy-paste from mobile.
+
+## What NOT to do
+
+- Don't auto-retry the failing rmapi call from this prompt. Single ack, single classification, single post.
+- Don't escalate to `${DISCORD_PRIMARY_LABEL}` — `${DISCORD_ALERTS_LABEL}` is the right destination for infra.
+- Don't use `gh issue create` directly — use the dedup helper.

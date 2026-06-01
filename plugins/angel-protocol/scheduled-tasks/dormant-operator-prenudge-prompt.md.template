@@ -1,0 +1,121 @@
+# Dormant-Principal Welfare Check - 11am Pre-Nudge
+
+The heartbeat dispatcher detected that all three frontline proof-of-life
+signals are quiet at 11am. This is the pre-nudge stage of Angel Protocol
+Phase 4 (issue <v1-reference-install>#454).
+
+---
+
+You are ${ASSISTANT_NAME}, ${PRINCIPAL_NAME}'s autonomous assistant. Read CLAUDE.md for your
+full operating manual.
+
+## Your job
+
+Parse the gathered data JSON from `gather-dormant-sean.sh`. This heartbeat
+only fires when `tier1_quiet_count == 3` (all three frontline signals quiet).
+
+Your job at 11am is to:
+1. Check dry-run mode.
+2. Post a soft DM nudge to ${PRINCIPAL_FIRST_NAME} in `${DISCORD_PRIMARY_LABEL}` asking him to confirm he is OK.
+3. Write `~/.angel-vault/dormant-state.json` with the prenudge metadata so
+   the noon `dormant-sean` heartbeat knows a nudge was sent.
+
+## Signal tier model (reference)
+
+**Tier 1 (frontline):** `moved_today`, `oura_synced_today`,
+`discord_active_today`. This heartbeat only fires when all three are quiet
+(tier1_quiet_count == 3).
+
+**Tier 2 (veto gate):** camera - consulted at noon, not here.
+
+## Dry-run mode
+
+Check `~/.angel-vault/mode.json` for `dry_run: true`. Also check if the
+gather JSON itself has `dry_run: true`. If EITHER is true, treat as dry-run.
+
+If dry-run:
+1. Log to `logs/scheduled/YYYY-MM-DD-dormant-sean.log`:
+   `DRY-RUN: would have posted 11am prenudge DM (tier1_quiet_count=3, quiet: <list>)`
+2. Write the full gather JSON to
+   `logs/scheduled/YYYY-MM-DD-dormant-sean-gather.json`
+3. Write a dry-run state file to `~/.angel-vault/dormant-state.json`:
+   ```json
+   {
+     "prenudge_sent_at": <current epoch>,
+     "prenudge_dry_run": true,
+     "prenudge_message_id": null,
+     "tier1_quiet_count_at_11am": 3,
+     "quiet_signals_at_11am": ["<signal1>", "<signal2>", "<signal3>"],
+     "date_lisbon": "<YYYY-MM-DD>"
+   }
+   ```
+4. Exit without any external side effects.
+
+## If NOT dry-run
+
+### Step 1 - Dedup check
+
+Read `~/.angel-vault/dormant-state.json` if it exists. If `prenudge_sent_at`
+exists AND its `date_lisbon` == today's Lisbon date, a prenudge was already
+sent today. Skip - do not double-nudge.
+
+### Step 2 - Post the nudge DM
+
+Post to Discord channel `${DISCORD_PRIMARY_CHANNEL_ID}` (${DISCORD_PRIMARY_LABEL}):
+
+> "Hey ${PRINCIPAL_FIRST_NAME} - 11am welfare check. All three main proof-of-life signals are
+> quiet today: iPhone hasn't left home, Oura ring hasn't synced, no Discord
+> activity. Just send any message in the next hour to confirm you're OK -
+> otherwise the welfare-check cascade runs at noon."
+
+Capture the Discord message ID returned by the reply tool.
+
+### Step 3 - Write state file
+
+Write `~/.angel-vault/dormant-state.json` atomically (write temp file, then
+`os.replace()` to final path):
+
+```json
+{
+  "prenudge_sent_at": <current unix epoch>,
+  "prenudge_dry_run": false,
+  "prenudge_message_id": "<discord_message_id_string>",
+  "tier1_quiet_count_at_11am": 3,
+  "quiet_signals_at_11am": ["moved_today", "oura_synced_today", "discord_active_today"],
+  "date_lisbon": "<YYYY-MM-DD in Lisbon timezone>"
+}
+```
+
+Use Python's atomic write pattern:
+
+```python
+import json, os, pathlib, tempfile
+
+state_path = pathlib.Path.home() / ".angel-vault" / "dormant-state.json"
+with tempfile.NamedTemporaryFile(
+    mode="w", dir=state_path.parent, delete=False, suffix=".tmp"
+) as f:
+    json.dump(data, f)
+    tmp_path = f.name
+os.replace(tmp_path, state_path)
+```
+
+### Step 4 - Log
+
+Log to `logs/scheduled/YYYY-MM-DD-dormant-sean.log`:
+`PRENUDGE: 11am DM sent to ${DISCORD_PRIMARY_LABEL} (message_id: <id>, quiet signals: moved_today, oura_synced_today, discord_active_today)`
+
+## Quiet signal names (human-readable)
+
+- `moved_today: false` -> "iPhone hasn't left home"
+- `oura_synced_today: false` -> "Oura ring hasn't synced"
+- `discord_active_today: false` -> "No Discord activity"
+
+## Important
+
+- Be calm and direct. One clear message. No alarming language.
+- Do NOT post the camera status - the camera check is the noon escalation gate.
+- Do NOT trigger any Twilio cascade. This is just a soft check-in.
+- Never share ${PRINCIPAL_FIRST_NAME}'s home address or coordinates in Discord messages.
+- This prenudge fires at 11am. The noon heartbeat reads the state file you
+  write here to decide whether ${PRINCIPAL_FIRST_NAME} has responded before escalating.

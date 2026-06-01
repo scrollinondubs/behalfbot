@@ -1,0 +1,43 @@
+# restaurant-booking.yaml - per-installer configuration for the restaurant-booking plugin.
+#
+# Copy this file to your chassis install and adjust values for your operator.
+# The booking scripts read this at runtime via the PLUGIN_CONFIG_PATH env var,
+# or fall back to the default location relative to the plugin root.
+
+# Timezone for datetime parsing and display. Must be a valid IANA tz name.
+time_zone: "Europe/Lisbon"
+
+# Language preference sent to TheFork when selecting time slots.
+# TheFork UI supports: en, pt, fr, es, it, de
+default_lang: "en"
+
+# Maximum party size this plugin will attempt to book without extra confirmation.
+# Requests above this threshold still work but get a warning in the soft-confirm message.
+max_party_size: 20
+
+# Discord channel ID where the soft-confirm message is posted.
+# Set to the operator's main working channel.
+discord_channel_id: "1487190325394014432"
+
+# Soft-confirm timeout in seconds. After this, the booking is aborted.
+# 600 = 10 minutes (V1 default per spec).
+confirm_timeout_seconds: 600
+
+# TheFork base URL. Switch to thefork.pt if you want PT locale by default.
+thefork_base_url: "https://www.thefork.com"
+
+# Vaultwarden item name holding TheFork credentials.
+# The booking script pulls username + password from VW at invocation time.
+vaultwarden_item_name: "thefork-credentials"
+
+# Screenshot save directory. Must be writable. Logs dir inside the plugin
+# is the default; you can override to /tmp if you prefer ephemeral storage.
+# Screenshots are NEVER committed to the repo (gitignored).
+screenshot_dir: "logs"
+
+# Maximum minutes before/after requested time to search for available slots.
+time_slot_tolerance_minutes: 30
+
+# Google Calendar ID to add confirmed bookings to.
+# "primary" uses the account's default calendar.
+gcal_calendar_id: "primary"

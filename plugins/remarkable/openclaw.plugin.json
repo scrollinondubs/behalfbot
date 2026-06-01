@@ -1,0 +1,64 @@
+{
+  "id": "behalfbot-remarkable",
+  "name": "Behalf.bot — reMarkable",
+  "description": "reMarkable tablet integration. Reads annotations, sends briefings OTA, and indexes books in Postgres pgvector for semantic query. Cloud-sync mode only (no USB required). Opt-in — only valuable for installers who use a reMarkable Paper tablet.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Master switch. If false the plugin is dormant. Requires REMARKABLE_TOKEN in the installer's secret store.",
+        "default": false
+      },
+      "cloud_mode": {
+        "type": "boolean",
+        "description": "Use cloud-sync API (OTA, no USB). Set false only for legacy USB-tethered setups.",
+        "default": true
+      },
+      "embedding_table": {
+        "type": "string",
+        "description": "Postgres table that receives document chunk embeddings. Must exist with (document_id, chunk_idx, text, token_count, embedding vector(768)) columns.",
+        "default": "document_chunks"
+      },
+      "ollama_model": {
+        "type": "string",
+        "description": "Ollama embedding model. Must produce 768-dim vectors.",
+        "default": "nomic-embed-text"
+      },
+      "briefing_push": {
+        "type": "boolean",
+        "description": "Allow pushing briefing documents to the tablet OTA. Requires cloud_mode: true.",
+        "default": false
+      },
+      "sync_heartbeat": {
+        "type": "boolean",
+        "description": "Enable a daily heartbeat that pulls new highlights + annotations from the tablet and writes them to the chassis DB.",
+        "default": false
+      }
+    },
+    "required": ["enabled"]
+  },
+  "contracts": {
+    "tools": [
+      "ingest-remarkable-book",
+      "remarkable-sync"
+    ],
+    "skills": ["remarkable"],
+    "heartbeats": [],
+    "triggers": [],
+    "hooks": []
+  },
+  "activation": {
+    "onStartup": false,
+    "_note": "Activation gated on installer enabling per chassis.config.yaml modules.remarkable.enabled. Requires REMARKABLE_TOKEN in Vaultwarden (canonical item name: 'Behalf.bot - reMarkable Cloud API token'). For installers without reMarkable hardware, leave enabled: false."
+  },
+  "_chassis_v1_notes": {
+    "mcp_wiring": "When enabled, the chassis .mcp.json should add: { 'command': 'uvx', 'args': ['remarkable-mcp'], 'env': { 'REMARKABLE_TOKEN': '${REMARKABLE_TOKEN}' } }. The token is a JSON blob: {'devicetoken': '<JWT>', 'usertoken': ''}. Register via: uvx remarkable-mcp --register <one-time-code> (code from my.remarkable.com/device/desktop/connect).",
+    "token_registration": "One-time registration per install. Produces a persistent device token. The JWT does not expire unless explicitly revoked.",
+    "denylist": "plugins/remarkable/scripts/remarkable_denylist.py enforces a default-allow model with hard-deny folders (e.g. private journals). Edit plugins/remarkable/config/remarkable_denylist_config.py at install time to add installer-specific denylists.",
+    "book_ingestion": "ingest_remarkable_book.py downloads via the tablet's direct HTTP API (10.11.99.1) - requires USB or local network. Cloud MCP is used for annotation + browse; book download still needs the local API.",
+    "ported_from": "<v1-reference-install>#554 (cloud-sync MCP switch). New scripts adapted from <v1-reference-install> scripts/ at commit aligned with that PR."
+  }
+}

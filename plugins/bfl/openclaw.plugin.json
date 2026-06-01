@@ -1,0 +1,116 @@
+{
+  "id": "behalfbot-bfl",
+  "name": "Behalf.bot — BFL (Body for Life)",
+  "description": "Quantified-self pipeline for the Body for Life program. Ingests handwritten notebook photos (workout logs, meal logs, aerobic graphs) + food photos via cloud vision (Claude Opus + GPT-4o-mini), reconciles runs with Strava + Oura HR, enriches macros via USDA FoodData Central. Postgres-by-default via the chassis _chassis_db selector.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "description": "Master switch. If false the plugin is dormant — heartbeats not registered, triggers not dispatched.",
+        "default": false
+      },
+      "archive_dir": {
+        "type": "string",
+        "description": "Absolute path for raw photos, vision extractions, and unmatched food photos. Subdirectory layout: raw/, extractions/, unmatched/, ground-truth/, benchmark/. Local-only, never committed.",
+        "default": "~/behalfbot-archive/bfl"
+      },
+      "notebook_ingest": {
+        "type": "boolean",
+        "description": "Enable the heartbeat that polls the health Discord channel for new notebook/food photos and runs vision-extract + ingest.",
+        "default": true
+      },
+      "strava_oura_reconcile": {
+        "type": "boolean",
+        "description": "Enable Strava activity polling + Oura HR reconciliation for runs. Requires STRAVA_* and OURA_TOKEN env vars sourced from the chassis secret store.",
+        "default": false
+      },
+      "fdc_enrich": {
+        "type": "boolean",
+        "description": "Enable USDA FoodData Central macro enrichment for food photos and description-only meals. Requires USDA_FDC_API_KEY (DEMO_KEY works at low volume). Default false - vision-primary is more accurate (see LESSONS_FROM_V1.md #36).",
+        "default": false
+      },
+      "health_channel_id": {
+        "type": "string",
+        "description": "Discord channel ID where the installer posts BFL photos and Backfill commands. Sourced from the chassis surface config; this field overrides if set."
+      },
+      "health_channel_name": {
+        "type": "string",
+        "description": "Human-readable channel name for confirmation messages and docs (e.g. installer-health).",
+        "default": "health"
+      },
+      "ops_channel_name": {
+        "type": "string",
+        "description": "Channel for failure escalations (e.g. installer-ops). Used when strava-ingest hits the consecutive-failure threshold.",
+        "default": "ops"
+      },
+      "daily_macro_targets": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Default per-day macro targets per BFL methodology. Used by the briefing layer; not enforced by ingest.",
+        "properties": {
+          "protein_portions": { "type": "number", "default": 6 },
+          "carb_portions":    { "type": "number", "default": 6 },
+          "water_cups":       { "type": "number", "default": 10 }
+        },
+        "default": { "protein_portions": 6, "carb_portions": 6, "water_cups": 10 }
+      },
+      "hr_max": {
+        "type": "integer",
+        "description": "Max heart rate for Karvonen-style 0-10 intensity calculation. Tune per athlete.",
+        "default": 190
+      },
+      "hr_rest": {
+        "type": "integer",
+        "description": "Resting heart rate for Karvonen-style 0-10 intensity calculation. Tune per athlete.",
+        "default": 55
+      },
+      "database": {
+        "type": "string",
+        "enum": ["postgres", "sqlite"],
+        "description": "Backend selector. 'postgres' is the canonical chassis backend; 'sqlite' is the legacy/local-dev fallback. Routed via plugins/bfl/scripts/_chassis_db.py.",
+        "default": "postgres"
+      }
+    },
+    "required": ["enabled"]
+  },
+  "contracts": {
+    "tools": [
+      "bfl-vision-extract",
+      "bfl-ingest",
+      "bfl-backfill-meal",
+      "bfl-fdc-enrich",
+      "bfl-fdc-enrich-descriptions",
+      "bfl-run-reconcile",
+      "bfl-model-bench",
+      "bfl-backfill",
+      "strava-ingest",
+      "fdc-lookup"
+    ],
+    "skills": ["bfl"],
+    "heartbeats": ["bfl-ingest"],
+    "triggers": [
+      {
+        "name": "backfill",
+        "keyword_regex": "^Backfill[\\s:]+",
+        "channel_filter": "${HEALTH_CHANNEL_ID}",
+        "parser": "bfl-natural-language-meal",
+        "handler": "${CHASSIS_HOME}/plugins/bfl/triggers/backfill.sh",
+        "react_emoji": "fork_and_knife"
+      }
+    ],
+    "hooks": []
+  },
+  "activation": {
+    "onStartup": false,
+    "_note": "Activation gated on installer explicitly enabling per chassis.config.yaml modules.bfl.enabled. The plugin is dormant by default — quantified-self automation is opt-in."
+  },
+  "_chassis_v1_notes": {
+    "shell_implementation": "Plugin ships Python scripts (bfl-*.py, strava-ingest.py, fdc_lookup.py, _chassis_db.py) plus a shell trigger handler stub. The 'register' semantics map: contracts.tools → installer can invoke plugins/bfl/scripts/<name>.py; contracts.heartbeats → bfl-ingest entry must be added to chassis/HEARTBEATS.md by the installer at activation time (see docs/plugins/bfl.md); contracts.triggers → registered with chassis dispatcher via #506 (this plugin's trigger handler is a stub that echoes its env vars until the parser library lands).",
+    "compat_bundle": "See .claude-plugin/plugin.json for the Claude Code compatibility shim.",
+    "schema_migration": "plugins/bfl/db/migrations/001_bfl.sql contains the 7 BFL tables (bfl_days, bfl_meals, bfl_workouts, bfl_runs, bfl_aerobic, bfl_meal_items, fdc_food_cache). The installer's bootstrap should psql this migration in after the chassis baseline schema lands.",
+    "future_tables": "bfl_food_corrections is referenced in skills/bfl.md as a future table for the correction-learning loop. NOT yet implemented in 001_bfl.sql — deliberately deferred."
+  }
+}
