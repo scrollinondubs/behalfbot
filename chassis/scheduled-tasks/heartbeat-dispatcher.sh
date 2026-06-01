@@ -918,7 +918,7 @@ main() {
         # dispatcher cycle for hours: each claude -p call eats up to 20min
         # internal timeout + 20s wait + 20min retry = 40+ minutes per
         # failing FIRE. N failing heartbeats × 40min serializes the
-        # dispatcher. See scrollinondubs/behalfbot-chassis#103 for the
+        # dispatcher. See scrollinondubs/behalfbot#103 for the
         # 2026-05-22 outage that prompted this.
         local circuit_open_until=""
         circuit_open_until=$(get_state "$name" "circuit_open_until")
@@ -960,7 +960,7 @@ main() {
         # previous heartbeat's prompt can bleed into THIS heartbeat's claude
         # invocation. Concrete failure mode: dating-swipe's gathered prompt
         # leaking into bfl-ingest's fire on the same dispatcher tick.
-        # See scrollinondubs/behalfbot-chassis#88.
+        # See scrollinondubs/behalfbot#88.
         local claude_input=""
         if [[ -n "$gathered_data" ]]; then
             claude_input="$(cat "$full_prompt_path")

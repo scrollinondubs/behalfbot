@@ -39,7 +39,7 @@ cd <install-name>
 
 # Vendor the chassis
 git subtree add --prefix=chassis \
-    https://github.com/scrollinondubs/behalfbot-chassis.git main --squash
+    https://github.com/scrollinondubs/behalfbot.git main --squash
 
 # Initial commit
 git add -A

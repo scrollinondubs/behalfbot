@@ -4,7 +4,7 @@ How a Behalf.bot install should be structured: one repo per customer (or per ins
 
 ## Why a separate repo per customer
 
-The chassis V1 phase used a single shared repo (`scrollinondubs/behalfbot-chassis`) with `customer/<name>` branches for each install (installer-1, Marc, Toby). That pattern was expedient for the initial customer onboardings but accrues debt fast:
+The chassis V1 phase used a single shared repo (`scrollinondubs/behalfbot`) with `customer/<name>` branches for each install (installer-1, Marc, Toby). That pattern was expedient for the initial customer onboardings but accrues debt fast:
 
 - **Diverging customer branches become fork-with-deletions.** Each customer branch ends up DELETING chassis plugins it doesn't want (BFL scripts a non-quantified-self customer doesn't use, dating scripts a non-dating customer doesn't run, remarkable scripts a non-reMarkable customer doesn't need). This makes chassis upgrades painful — every `git pull` into a customer branch becomes a merge-conflict resolution session.
 - **No clean install boundary.** Customer-specific docs, install profiles, and per-customer config bleed into chassis's main branch tree as untracked-but-related files. Chassis main becomes a junk drawer.
@@ -20,7 +20,7 @@ Per-customer-repo solves all three:
 
 ```
 <customer-repo>/
-├── chassis/                      # vendored from scrollinondubs/behalfbot-chassis (git subtree, --squash)
+├── chassis/                      # vendored from scrollinondubs/behalfbot (git subtree, --squash)
 ├── chassis.config.yaml           # which plugins are ENABLED + per-plugin config knobs
 ├── INSTALL_PROFILE.md            # install identity (human-readable; companion to chassis.config.yaml)
 ├── CLAUDE.md                     # install operating manual
@@ -47,7 +47,7 @@ gh repo create <namespace>/<customer-name> --private --description "<customer>'s
 # 2. Clone, vendor chassis, push initial commit
 git clone https://github.com/<namespace>/<customer-name>.git
 cd <customer-name>
-git subtree add --prefix=chassis https://github.com/scrollinondubs/behalfbot-chassis.git main --squash
+git subtree add --prefix=chassis https://github.com/scrollinondubs/behalfbot.git main --squash
 
 # 3. Scaffold the install-specific files
 cp chassis/INSTALL_PROFILE.md ./INSTALL_PROFILE.md  # then customize
@@ -68,7 +68,7 @@ For Sean (legacy install at `$CHASSIS_HOME`), the migration is incremental — `
 Pull upstream chassis improvements:
 
 ```bash
-git subtree pull --prefix=chassis https://github.com/scrollinondubs/behalfbot-chassis.git main --squash
+git subtree pull --prefix=chassis https://github.com/scrollinondubs/behalfbot.git main --squash
 ```
 
 The `--squash` keeps the customer repo's history clean (one commit per chassis pull instead of thousands of upstream commits).
@@ -79,7 +79,7 @@ If a customer finds a chassis bug or wants to upstream a fix:
 # Branch chassis directly (NOT inside the customer repo's chassis/ subtree)
 cd /some/other/clone/of/chassis
 git checkout -b fix/foo
-# edit, commit, push, PR to scrollinondubs/behalfbot-chassis
+# edit, commit, push, PR to scrollinondubs/behalfbot
 ```
 
 Then once the PR lands in chassis main, the customer repo absorbs it via the standard subtree pull.

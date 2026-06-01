@@ -28,7 +28,7 @@
 # state, Mac-Mini-specific peripherals, etc.) live in a sibling hook at
 # $CHASSIS_HOME/scheduled-tasks/local-health-hooks.sh - sourced AFTER this
 # script's core checks complete, with `issues` available as an array. See
-# the customer-hooks pattern in scrollinondubs/behalfbot-chassis#74.
+# the customer-hooks pattern in scrollinondubs/behalfbot#74.
 
 set -euo pipefail
 

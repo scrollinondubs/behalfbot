@@ -28,7 +28,7 @@
 #       Optional - if unset, no channels are flagged as multi-party.
 #
 # Brings <v1-reference-install> PR #541 (2026-05-11) upstream into chassis core.
-# See scrollinondubs/behalfbot-chassis#93.
+# See scrollinondubs/behalfbot#93.
 
 set -u
 

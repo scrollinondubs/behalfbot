@@ -55,7 +55,7 @@ BOT_USERNAME=""
 if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
     api_response=$(curl -sf \
         -H "Authorization: Bot ${DISCORD_BOT_TOKEN}" \
-        -H "User-Agent: behalfbot-chassis (first-boot-announce.sh)" \
+        -H "User-Agent: behalfbot (first-boot-announce.sh)" \
         "https://discord.com/api/v10/users/@me" 2>/dev/null) || api_response=""
 
     if [[ -n "$api_response" ]]; then

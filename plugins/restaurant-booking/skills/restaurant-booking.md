@@ -138,6 +138,6 @@ Sean adds this item himself in Vaultwarden. The plugin never stores or logs cred
 
 ## Future chassis port
 
-This plugin directory is structured to be cleanly portable to `scrollinondubs/behalfbot-chassis`
+This plugin directory is structured to be cleanly portable to `scrollinondubs/behalfbot`
 via `git mv plugins/restaurant-booking/ chassis/plugins/restaurant-booking/`.
 No <assistant>-specific deps other than `scripts/_loadenv.py` (path is parameterized).

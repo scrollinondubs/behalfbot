@@ -12,7 +12,7 @@ A chassis install on a fresh Linux box (or Mac Mini) should be: pull image → w
 
 | Service       | Image                                        | Role                                                                          |
 |---------------|----------------------------------------------|-------------------------------------------------------------------------------|
-| `chassis`     | `ghcr.io/scrollinondubs/behalfbot-chassis`   | Dispatcher loop + plugin runtime. Long-running, restart=unless-stopped.       |
+| `chassis`     | `ghcr.io/scrollinondubs/behalfbot`   | Dispatcher loop + plugin runtime. Long-running, restart=unless-stopped.       |
 | `postgres`    | `postgres:16-alpine`                         | Durable state. Per Sean's "Postgres from start" call - avoids SQLite migration|
 | `vaultwarden` | `vaultwarden/server:1.32.5`                  | Credential vault. Localhost-only by default; Tailscale Funnel optional.       |
 
@@ -94,7 +94,7 @@ GitHub Actions workflow at `.github/workflows/docker-publish.yml`:
 - Trigger: push to `main`, tag `v*`, PR touching `Dockerfile`/`docker/**`/`chassis/**`/`plugins/**`/`bootstrap.sh`/the workflow itself.
 - Platforms: `linux/amd64` + `linux/arm64`. V1 bare-metal install is amd64; Sean's Mac Mini and Cloudflare-based installs are arm64.
 - Tags: `latest` on default branch, `vX.Y.Z` + `vX.Y` on semver tags, `sha-<short>` on every build, `pr-<n>` on PR builds (build-only, no push).
-- Registry: `ghcr.io/scrollinondubs/behalfbot-chassis`.
+- Registry: `ghcr.io/scrollinondubs/behalfbot`.
 - Cache: GitHub Actions cache (`type=gha`, mode=max). First build ~10 min cold; subsequent ~2-3 min with cache hits.
 
 ## installer-2 install runbook (TLDR)

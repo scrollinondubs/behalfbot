@@ -12,7 +12,7 @@ installer-1's install on `fatboy` (bare-metal Debian) hit two silent failure mod
 
 Both issues are install-time gotchas that the chassis Docker container avoids by construction. This doc + template surfaces them for non-Docker installs.
 
-Source: scrollinondubs/behalfbot-chassis#99 + OzzyBotman incident report in #behalf-bot-setup 2026-05-22.
+Source: scrollinondubs/behalfbot#99 + OzzyBotman incident report in #behalf-bot-setup 2026-05-22.
 
 ## Install steps
 
@@ -121,4 +121,4 @@ If you're considering switching to the Docker install path (recommended for new 
 - `chassis/scheduled-tasks/heartbeat-dispatcher.sh` — the dispatcher this service wraps
 - `chassis/scripts/reconcile-heartbeats.sh` — companion reconciler (chassis#95)
 - `chassis/docs/containerization.md` — Docker install (alternative path)
-- `scrollinondubs/behalfbot-chassis#99` — the installer-1 incident report this doc + template responds to
+- `scrollinondubs/behalfbot#99` — the installer-1 incident report this doc + template responds to

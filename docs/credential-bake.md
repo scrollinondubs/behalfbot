@@ -164,11 +164,11 @@ docker compose --env-file=.env.baked \
   up -d --force-recreate chassis
 
 # 4. Verify a critical secret is visible inside the container
-docker exec behalfbot-chassis sh -c \
+docker exec behalfbot sh -c \
   'echo "DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:+set}${DISCORD_BOT_TOKEN:-MISSING}"'
 
 # 5. Spot-check a heartbeat that depends on the freshly-rotated credential
-docker exec -e CHASSIS_HOME=/app/customer behalfbot-chassis \
+docker exec -e CHASSIS_HOME=/app/customer behalfbot \
   bash -c 'cd /app/customer && scripts/gather-<name>.sh'
 ```
 
