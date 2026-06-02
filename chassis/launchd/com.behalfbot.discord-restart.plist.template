@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.behalfbot.${BOT_NAME}-discord-restart.plist - chassis-rendered template.
+
+  Generated from chassis/launchd/com.behalfbot.discord-restart.plist.template
+  by chassis/scripts/bootstrap-customer-scripts.sh.
+
+  Template variables (expanded at render time):
+    BOT_NAME            logical bot name (e.g. jax, asimov, ozzy)
+    CUSTOMER_HOME       per-customer state root (e.g. /Users/<user>/.behalfbot)
+    CHASSIS_HOME        chassis git tree root (e.g. /Users/<user>/behalfbot)
+    HOMEBREW_PREFIX     /opt/homebrew on Apple Silicon, /usr/local on Intel
+    USER                installer's macOS short name
+    NODE_BIN_PATH       optional - extra node bin dir, e.g. ${HOMEBREW_PREFIX}/opt/node@22/bin
+
+  Restart cadence: daily at 05:00 local time. Matches the upstream Sean install
+  which has run successfully for months. Drop to 03:00 if you want a quieter
+  morning; rationale for "before-8am-briefing" is that the daily-briefing
+  heartbeat fires after the restart, so a fresh tmux session is in place.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.behalfbot.${BOT_NAME}-discord-restart</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${CUSTOMER_HOME}/scripts/restart-${BOT_NAME}-discord.sh</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>5</integer>
+        <key>Minute</key>
+        <integer>0</integer>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>${CHASSIS_HOME}</string>
+    <key>StandardErrorPath</key>
+    <string>${CUSTOMER_HOME}/logs/scheduled/discord-restart-stderr.log</string>
+    <key>StandardOutPath</key>
+    <string>${CUSTOMER_HOME}/logs/scheduled/discord-restart-stdout.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/${USER}/.local/bin:${HOMEBREW_PREFIX}/bin:${NODE_BIN_PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/${USER}</string>
+        <key>CUSTOMER_HOME</key>
+        <string>${CUSTOMER_HOME}</string>
+        <key>CHASSIS_HOME</key>
+        <string>${CHASSIS_HOME}</string>
+    </dict>
+</dict>
+</plist>
