@@ -1,4 +1,8 @@
 #!/bin/bash
+# Prepend brew prefix so tmux is found under launchd, which inherits a minimal
+# PATH. On Linux the brew dir does not exist and this prefix is a harmless no-op.
+export PATH="/opt/homebrew/bin:$PATH"
+
 # restart-${BOT_NAME}-discord.sh - chassis-rendered template.
 #
 # Kills and restarts the ${TMUX_SESSION_NAME} tmux session with a fresh
@@ -39,11 +43,10 @@ fi
 
 # Start new session.
 #
-# Working dir is CHASSIS_HOME so claude resolves CLAUDE.md from there. The
-# chassis tree contains the canonical CLAUDE.md.template; customer's rendered
-# CLAUDE.md lives under CUSTOMER_HOME but is symlinked / referenced via the
-# chassis tree at install time. See chassis/scripts/bootstrap-customer-scripts.sh
-# for the wiring.
+# Working dir is CUSTOMER_HOME so claude resolves the install's CLAUDE.md, .env,
+# .mcp.json directly. Customer state is the single source of truth - CHASSIS_HOME
+# is fully disposable per #6, so we never run claude from inside it. The chassis
+# tree carries only templates; rendered customer artifacts live under CUSTOMER_HOME.
 #
 # Per chassis OAuth-rotation rule: no forced "claude --print ping" token
 # refresh here - it rotates the Anthropic OAuth refresh-token server-side
@@ -52,7 +55,7 @@ fi
 # file<->keychain propagation (chassis/scripts/sync-claude-oauth-bridge.sh,
 # 30 min StartInterval).
 tmux new-session -s "${TMUX_SESSION_NAME}" -d \
-    "cd '${CHASSIS_HOME}' && claude --channels '${CLAUDE_CHANNELS}' --dangerously-skip-permissions"
+    "cd '${CUSTOMER_HOME}' && claude --channels '${CLAUDE_CHANNELS}' --dangerously-skip-permissions"
 
 sleep 2
 
