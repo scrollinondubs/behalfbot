@@ -70,7 +70,16 @@ jobs:
             while IFS= read -r f; do
               # Skip allowed-by-design exceptions
               case "$f" in
+                # Templates / examples / shipped chassis files - allowed.
                 *.template|*.example|chassis/scripts/templates/*|chassis/launchd/*|chassis/scheduled-tasks/*-prompt.md|chassis/scheduled-tasks/heartbeat-dispatcher.sh|chassis/HEARTBEATS.md.template|chassis/CLAUDE.md.template)
+                  continue ;;
+                # Top-level INSTALL_PROFILE.md and chassis.config.yaml are
+                # the chassis-shipped EXAMPLE templates that a customer
+                # overrides at install time. They're tracked deliberately so
+                # the wizard / self-serve install path has a starting point.
+                # The CUSTOMER copies live under CUSTOMER_HOME and are NOT
+                # tracked.
+                INSTALL_PROFILE.md|chassis.config.yaml)
                   continue ;;
               esac
               violators+=("$f")
