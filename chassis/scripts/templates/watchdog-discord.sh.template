@@ -1,4 +1,8 @@
 #!/bin/bash
+# Prepend brew prefix so tmux is found under launchd, which inherits a minimal
+# PATH. On Linux the brew dir does not exist and this prefix is a harmless no-op.
+export PATH="/opt/homebrew/bin:$PATH"
+
 # watchdog-${BOT_NAME}-discord.sh - chassis-rendered template.
 #
 # Monitors the ${TMUX_SESSION_NAME} tmux session for auth failures and
