@@ -1,0 +1,88 @@
+name: No customer state in chassis tree
+
+# Issue #6: customer state MUST live under CUSTOMER_HOME (~/.behalfbot/), not
+# inside the chassis git tree (~/behalfbot/). The full design is documented
+# in the issue and the project README. This workflow fails the build if any
+# tracked file looks like customer-side state that would survive a re-clone
+# of the chassis.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check-no-customer-state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan tracked tree for customer-state patterns
+        run: |
+          set -euo pipefail
+
+          # Patterns matched against every tracked file path. A match is a
+          # failure - the file should live under CUSTOMER_HOME on a customer
+          # machine, not in the chassis git repo.
+          #
+          # Carve-outs (allowed via the exception list below):
+          #   - chassis/scripts/templates/*.template   - canonical templates
+          #     for the rendered customer-side scripts, lives in chassis tree
+          #     by design (they're chassis-managed, expanded into CUSTOMER_HOME
+          #     by bootstrap-customer-scripts.sh).
+          #   - chassis/launchd/*.plist.template       - same shape, for plists
+          #   - any *.template, *.example file         - template/example, not
+          #     a runtime artifact
+          #   - chassis/scheduled-tasks/*-prompt.md    - shipped prompt files,
+          #     not state
+          #   - chassis/scheduled-tasks/*.sh           - dispatcher script
+
+          DISALLOWED=(
+            'scripts/restart-.*-discord\.sh$'
+            'scripts/watchdog-.*-discord\.sh$'
+            'state/.*\.json$'
+            'briefings/.*\.md$'
+            '^logs/'
+            '^temp/'
+            '^data/'
+            '^\.env$'
+            '^\.env\.baked$'
+            '^CLAUDE\.md$'
+            '^HEARTBEATS\.md$'
+            '^chassis\.config\.yaml$'
+            '^INSTALL_PROFILE\.md$'
+            'memory/lead_.*\.md$'
+            'memory/topic_.*\.md$'
+            'memory/feedback_.*\.md$'
+            'memory/project_.*\.md$'
+            'memory/reference_.*\.md$'
+            'memory/student_.*\.md$'
+            'memory/user_.*\.md$'
+            'memory/task_.*\.md$'
+            'memory/MEMORY\.md$'
+            'scheduled-tasks/heartbeat-state\.json$'
+            'scheduled-tasks/conservation-mode\.json$'
+          )
+
+          violators=()
+          for pat in "${DISALLOWED[@]}"; do
+            while IFS= read -r f; do
+              # Skip allowed-by-design exceptions
+              case "$f" in
+                *.template|*.example|chassis/scripts/templates/*|chassis/launchd/*|chassis/scheduled-tasks/*-prompt.md|chassis/scheduled-tasks/heartbeat-dispatcher.sh|chassis/HEARTBEATS.md.template|chassis/CLAUDE.md.template)
+                  continue ;;
+              esac
+              violators+=("$f")
+            done < <(git ls-files | grep -E "$pat" || true)
+          done
+
+          if [[ ${#violators[@]} -gt 0 ]]; then
+            echo "FAIL: customer-state files tracked in chassis tree (issue #6 violation):"
+            printf '  - %s\n' "${violators[@]}" | sort -u
+            echo ""
+            echo "These files belong under CUSTOMER_HOME (~/.behalfbot/) on a customer machine."
+            echo "Remove them from the chassis repo before merging."
+            exit 1
+          fi
+          echo "ok: no customer-state files in chassis tree"

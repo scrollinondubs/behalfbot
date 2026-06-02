@@ -54,12 +54,61 @@ Personal-security components (live-location tracking, duress codewords, mode inf
 | `INSTALL_PROFILE.md` | Generic installer template. The wizard fills this in for you, or you author by hand. |
 | `chassis.config.yaml` | Machine-readable config template. Same — wizard-generated or hand-authored. |
 | `chassis/` | Generic core: heartbeat dispatcher, briefing pipeline, MCP wiring stubs, guardrails, second-brain adapters |
+| `chassis/scripts/templates/` | Per-install script templates (restart/watchdog) rendered into CUSTOMER_HOME at bootstrap |
+| `chassis/launchd/` | macOS LaunchAgent plist templates (rendered into CUSTOMER_HOME/launchd/ at bootstrap) |
 | `chassis/skills/` | Skill scaffolding (templates; populated per install) |
 | `chassis/scripts/` | Shared utilities (gather scripts, bake helpers, OAuth bridge, hydration) |
 | `chassis/memory/` | Memory format + seeded entries (structure only; no install-specific content) |
 | `plugins/` | Opt-in plugins (see ecosystem section above) |
 | `docs/` | Install runbook, hydration guide, architecture notes, anti-patterns, lessons |
 | `bootstrap.sh` | Auto-bootstrap orchestrator — reads your profile + config, wires everything up |
+
+### Directory layout on a customer machine (post-issue-#6)
+
+Customer state and chassis code live in two physically separate trees:
+
+```
+~/behalfbot/              # CHASSIS_HOME - fully disposable, re-pullable
+  chassis/                # the vendored chassis subtree
+  plugins/                # chassis plugins
+  bootstrap.sh
+  docker-compose.yml
+  Dockerfile
+  README.md
+  requirements.txt
+
+~/.behalfbot/             # CUSTOMER_HOME - never touched by reinstall
+  .env                    # customer secrets
+  CLAUDE.md               # hydrated per-install
+  HEARTBEATS.md           # per-customer heartbeat config
+  chassis.config.yaml     # per-customer chassis config
+  INSTALL_PROFILE.md      # per-customer install profile
+  scripts/                # customer-side: restart-${BOT}-discord.sh, watchdog-${BOT}-discord.sh
+  state/                  # heartbeat-state.json, conservation-mode.json
+  scheduled-tasks/        # customer overrides + per-tick state
+  memory/                 # installer-specific memory
+  briefings/              # generated artifacts
+  logs/                   # all logs
+  data/                   # any customer data
+  temp/
+  launchd/                # rendered LaunchAgent plists (symlinked into ~/Library/LaunchAgents/)
+```
+
+`rm -rf ~/behalfbot && git clone https://github.com/scrollinondubs/behalfbot.git ~/behalfbot` is safe - customer state is at `~/.behalfbot/` and untouched.
+
+### Migration from a pre-issue-#6 install
+
+If your install was bootstrapped before issue #6 (customer state under `~/behalfbot/`), run the migration script once:
+
+```
+cd ~/behalfbot
+bash chassis/scripts/migrate-customer-state.sh --dry-run   # preview
+bash chassis/scripts/migrate-customer-state.sh             # execute
+```
+
+The script `mv`'s every customer-side artifact (`.env`, `CLAUDE.md`, `HEARTBEATS.md`, `scripts/`, `state/`, `briefings/`, `logs/`, `data/`, `temp/`, installer-specific `chassis/memory/*`) from `~/behalfbot/` to `~/.behalfbot/`, re-renders the customer-side restart/watchdog scripts from chassis templates, and reloads the LaunchAgent plists at the new paths.
+
+Refer to `chassis/scripts/migrate-customer-state.sh --help` for flag details. The script is idempotent: a sentinel at `~/.behalfbot/.migrated-from-chassis-home` makes subsequent runs a no-op.
 
 ---
 
