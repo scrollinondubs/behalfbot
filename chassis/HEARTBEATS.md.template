@@ -1,8 +1,23 @@
 # Heartbeats - chassis template
 
-**This file is the chassis template.** It is NOT read by the dispatcher. At install-time, `bootstrap.sh` copies this template to `${CHASSIS_HOME}/HEARTBEATS.md` (one level above `chassis/`). The installer edits the rendered file at `${CHASSIS_HOME}/HEARTBEATS.md`, never this template.
+**This file is the chassis template.** It is NOT read by the dispatcher. At install-time, `bootstrap.sh` copies this template to `${CUSTOMER_HOME}/HEARTBEATS.md`. The installer edits the rendered file at `${CUSTOMER_HOME}/HEARTBEATS.md`, never this template.
 
-Why: per `docs/architectural-anti-patterns.md` #17, customizations live OUTSIDE `chassis/`. The dispatcher reads `${CHASSIS_HOME}/HEARTBEATS.md`; this template ships from chassis with the schema docs only.
+Why: per `docs/architectural-anti-patterns.md` #17, customizations live OUTSIDE `chassis/`. The dispatcher reads `${CUSTOMER_HOME}/HEARTBEATS.md`; this template ships from chassis with the schema docs only.
+
+---
+
+## Path conventions
+
+After #6 split CUSTOMER_HOME from CHASSIS_HOME, picking the right env var for `gather` and `prompt` paths matters:
+
+| Scenario | Use this | Example |
+|---|---|---|
+| Invoking a chassis-shipped script | `${CHASSIS_HOME}/chassis/scripts/...` | `gather: ${CHASSIS_HOME}/chassis/scripts/gather-local-health.sh` |
+| Invoking a chassis-shipped prompt | `${CHASSIS_HOME}/chassis/scheduled-tasks/...` | `prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/example-prompt.md` |
+| Invoking your own gather (customer-side) | `${CUSTOMER_HOME}/scheduled-tasks/...` | `gather: ${CUSTOMER_HOME}/scheduled-tasks/gather-morning-briefing.sh` |
+| Invoking your own prompt (customer-side) | `${CUSTOMER_HOME}/scheduled-tasks/prompts/...` | `prompt: ${CUSTOMER_HOME}/scheduled-tasks/prompts/morning-briefing.md` |
+
+Rule of thumb: if the script or prompt ships with the chassis (lives under `${CHASSIS_HOME}/chassis/`), use CHASSIS_HOME. If you wrote it for this install (lives under `${CUSTOMER_HOME}/`), use CUSTOMER_HOME. Mixing them up resolves to the wrong tree post-migration - see Toby case study in #6.
 
 ---
 
@@ -38,11 +53,25 @@ Each heartbeat is one `##` heading + a fenced ` ```yaml ` block. The dispatcher 
 
 ## Format example (no real heartbeat — see commented sample below)
 
+Two example shapes - one calls a chassis-shipped script, one calls a customer-written script:
+
 ```yaml
+# Chassis-shipped (works on any install without customization)
 schedule: every 15m
 gather: ${CHASSIS_HOME}/chassis/scripts/gather-template.sh
 condition: threshold count > 0
 prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/example-prompt.md
+model: sonnet
+budget: 1
+criticality: normal
+```
+
+```yaml
+# Customer-side (per-install customization)
+schedule: daily 08:00
+gather: ${CUSTOMER_HOME}/scheduled-tasks/gather-morning-briefing.sh
+condition: always
+prompt: ${CUSTOMER_HOME}/scheduled-tasks/prompts/morning-briefing.md
 model: sonnet
 budget: 1
 criticality: normal
@@ -54,12 +83,13 @@ criticality: normal
 
 <!--
 This template ships with no active heartbeats. After bootstrap copies this
-file to ${CHASSIS_HOME}/HEARTBEATS.md, installer adds heartbeats there
+file to ${CUSTOMER_HOME}/HEARTBEATS.md, installer adds heartbeats there
 (NOT in this template). Hold to the schema above + the lessons baked into
 the dispatcher (gather-first, register-or-die, no destructive shared
 reads, cheap-no-op gates). When you add one, also remember:
 
-- Reference an absolute or `${CHASSIS_HOME}`-rooted path for `gather` + `prompt`
+- Pick the right env var per Path conventions section: ${CHASSIS_HOME} for
+  chassis-shipped scripts, ${CUSTOMER_HOME} for scripts you write
 - Keep gather scripts cheap; the dispatcher fires every 15 min
 - Each gather script must emit JSON (the dispatcher rejects bare key=value text)
 - Claude only fires when the condition evaluates true, so a "fail safe" gather
