@@ -40,10 +40,15 @@
 
 set -euo pipefail
 
-# CHASSIS_HOME must be set by the install runbook. Fail loud if missing —
-# downstream code assumes paths relative to it. No default; chassis location
-# varies per installer.
+# Issue #6 customer-state split: customer-side state lives under CUSTOMER_HOME,
+# chassis code under CHASSIS_HOME. For legacy installs both vars point at the
+# same dir (the pre-#6 layout). New / post-migration installs separate them.
+# Prefer CUSTOMER_HOME for state/log/heartbeat paths; fall back to CHASSIS_HOME
+# for backward compat so existing containerized installs (where both are
+# /app/customer) continue working unchanged.
 : "${CHASSIS_HOME:?CHASSIS_HOME must be exported before running this dispatcher (set by launchd plist / systemd unit)}"
+: "${CUSTOMER_HOME:=$CHASSIS_HOME}"
+export CHASSIS_HOME CUSTOMER_HOME
 
 # Cross-platform timeout binary. macOS-Homebrew ships gnu coreutils as
 # `gtimeout`; Debian (and the chassis Linux container) ships it as `timeout`.
@@ -55,11 +60,11 @@ set -euo pipefail
 # macOS path and broke every claude invocation inside the container.
 TIMEOUT_CMD="$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null || echo timeout)"
 
-HEARTBEATS_FILE="$CHASSIS_HOME/HEARTBEATS.md"
-STATE_FILE="$CHASSIS_HOME/scheduled-tasks/heartbeat-state.json"
-CONSERVATION_FILE="$CHASSIS_HOME/scheduled-tasks/conservation-mode.json"
-LOCK_FILE="$CHASSIS_HOME/logs/scheduled/dispatcher.lock"
-LOG_DIR="$CHASSIS_HOME/logs/scheduled"
+HEARTBEATS_FILE="$CUSTOMER_HOME/HEARTBEATS.md"
+STATE_FILE="$CUSTOMER_HOME/scheduled-tasks/heartbeat-state.json"
+CONSERVATION_FILE="$CUSTOMER_HOME/scheduled-tasks/conservation-mode.json"
+LOCK_FILE="$CUSTOMER_HOME/logs/scheduled/dispatcher.lock"
+LOG_DIR="$CUSTOMER_HOME/logs/scheduled"
 DATE=$(date +%Y-%m-%d)
 LOG_FILE="$LOG_DIR/${DATE}-dispatcher.log"
 OLLAMA_MODEL="${OLLAMA_MODEL:-gemma2}"
@@ -74,10 +79,10 @@ mkdir -p "$LOG_DIR"
 # into literal KEY=VALUE pairs there. The raw .env has a hydration call
 # that fails silently inside the container (no Keychain / bw-unlock auth),
 # leaving every VW-backed secret unset. .env.baked has the literals.
-if [[ -f "$CHASSIS_HOME/.env.baked" ]]; then
-    source "$CHASSIS_HOME/.env.baked"
-elif [[ -f "$CHASSIS_HOME/.env" ]]; then
-    source "$CHASSIS_HOME/.env"
+if [[ -f "$CUSTOMER_HOME/.env.baked" ]]; then
+    source "$CUSTOMER_HOME/.env.baked"
+elif [[ -f "$CUSTOMER_HOME/.env" ]]; then
+    source "$CUSTOMER_HOME/.env"
 fi
 
 # CRITICAL: unset ANTHROPIC_API_KEY so `claude -p` invocations fall through
@@ -115,7 +120,7 @@ unset ANTHROPIC_API_KEY
 # exec'd, so anything it sets stays in the dispatcher's environment for
 # the rest of the run. Safe to leave absent — chassis canonical behavior
 # applies when the file doesn't exist.
-HOOKS_FILE="$CHASSIS_HOME/scheduled-tasks/dispatcher-hooks.sh"
+HOOKS_FILE="$CUSTOMER_HOME/scheduled-tasks/dispatcher-hooks.sh"
 if [[ -f "$HOOKS_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$HOOKS_FILE"
@@ -521,11 +526,12 @@ list_heartbeats() {
 # --- Claude Invocation ---
 
 invoke_claude() {
-    local claude_input="$1" output_file="$2" model="$3" budget="$4" heartbeat_name="${5:-unknown}" cwd="${6:-$CHASSIS_HOME}"
+    local claude_input="$1" output_file="$2" model="$3" budget="$4" heartbeat_name="${5:-unknown}" cwd="${6:-$CUSTOMER_HOME}"
     # Timeout: 20 minutes per invocation (dating/briefing sessions need time for ADB/Playwright)
     # cwd: optional working directory for claude — heartbeats can scope to a sub-context
-    # like dating-context/ which has its own narrow CLAUDE.md. Defaults to $CHASSIS_HOME.
-    local telemetry_dir="$CHASSIS_HOME/logs/telemetry"
+    # like dating-context/ which has its own narrow CLAUDE.md. Defaults to $CUSTOMER_HOME
+    # (where the per-install CLAUDE.md and .mcp.json live, post issue #6).
+    local telemetry_dir="$CUSTOMER_HOME/logs/telemetry"
     local telemetry_file="$telemetry_dir/$DATE-usage.jsonl"
     local tmp_json="$LOG_DIR/.claude-out-$$.json"
     local start_ts exit_code end_ts wall_secs ts_iso
@@ -541,7 +547,7 @@ invoke_claude() {
             --max-budget-usd "$4" \
             --output-format json \
             > "$5" 2>> "$6"
-    ' -- "$claude_input" "$model" "$CHASSIS_HOME" "$budget" "$tmp_json" "$LOG_FILE" "$cwd"
+    ' -- "$claude_input" "$model" "$CUSTOMER_HOME" "$budget" "$tmp_json" "$LOG_FILE" "$cwd"
     exit_code=$?
 
     end_ts=$(date +%s)
@@ -705,7 +711,7 @@ run_output_validator() {
             --max-budget-usd 0.05 \
             --output-format json \
             > "$3" 2>> "$4"
-    ' -- "$validator_input" "$CHASSIS_HOME" "$validator_out" "$LOG_FILE" || {
+    ' -- "$validator_input" "$CUSTOMER_HOME" "$validator_out" "$LOG_FILE" || {
         log "VALIDATOR $name — haiku call failed or timed out, fail-open"
         rm -f "$validator_out"
         return 0
@@ -717,7 +723,7 @@ run_output_validator() {
         ts_iso=$(date +%Y-%m-%dT%H:%M:%S)
         cost_usd=$(jq -r '.cost_usd // .total_cost_usd // 0' "$validator_out" 2>/dev/null || echo 0)
         printf '%s\n' "{\"ts\":\"$ts_iso\",\"heartbeat\":\"${name}-validator\",\"model\":\"haiku\",\"cost_usd\":$cost_usd,\"input_tokens\":0,\"output_tokens\":0,\"cache_read_tokens\":0,\"cache_create_tokens\":0,\"wall_seconds\":0,\"exit_code\":0}" \
-            >> "$CHASSIS_HOME/logs/telemetry/$DATE-usage.jsonl" 2>> "$LOG_FILE" || true
+            >> "$CUSTOMER_HOME/logs/telemetry/$DATE-usage.jsonl" 2>> "$LOG_FILE" || true
 
         validator_result=$(jq -r '.result // ""' "$validator_out" 2>/dev/null || echo "")
     fi
@@ -770,7 +776,7 @@ run_output_validator() {
 # ship any recovery hooks; install-time activation is per-plugin.
 #
 # Source any installer-installed recovery hook scripts here.
-for _hook in "$CHASSIS_HOME/scheduled-tasks/recovery-hooks.d/"*.sh(N); do
+for _hook in "$CUSTOMER_HOME/scheduled-tasks/recovery-hooks.d/"*.sh(N); do
     # shellcheck disable=SC1090
     source "$_hook"
 done
@@ -847,7 +853,7 @@ main() {
         # Default model, budget, cwd, and criticality
         model=${model:-opus}
         budget=${budget:-5}
-        cwd=${cwd:-$CHASSIS_HOME}
+        cwd=${cwd:-$CUSTOMER_HOME}
         criticality=${criticality:-normal}
 
         # Conservation mode: skip non-critical heartbeats
@@ -869,7 +875,10 @@ main() {
         gather_cmd=$(get_config_multiline "$name" "gather")
         if [[ -n "$gather_cmd" ]]; then
             log "GATHER $name — running: $gather_cmd"
-            gathered_data=$(cd "$CHASSIS_HOME" && eval "$gather_cmd" 2>> "$LOG_FILE") || {
+            # Gather scripts execute with cwd=$CUSTOMER_HOME (state files,
+            # briefings, logs all live there). Scripts that need the chassis
+            # tree (chassis/scripts/...) reference $CHASSIS_HOME explicitly.
+            gathered_data=$(cd "$CUSTOMER_HOME" && eval "$gather_cmd" 2>> "$LOG_FILE") || {
                 log "ERROR $name — gather script failed"
                 set_state "$name" "last_checked" "$(date +%Y-%m-%dT%H:%M:%S)"
                 set_state "$name" "last_result" "gather_failed"
@@ -904,7 +913,19 @@ main() {
         fi
 
         # Fire Claude
-        local full_prompt_path="$CHASSIS_HOME/$prompt_file"
+        # prompt_file paths in HEARTBEATS.md may reference either chassis-side
+        # prompts (chassis/scheduled-tasks/*-prompt.md) or customer-side
+        # prompts (scheduled-tasks/*.md). Try CHASSIS_HOME first since most
+        # canonical prompts ship from chassis; fall back to CUSTOMER_HOME for
+        # per-install custom prompts.
+        local full_prompt_path
+        if [[ -f "$CHASSIS_HOME/$prompt_file" ]]; then
+            full_prompt_path="$CHASSIS_HOME/$prompt_file"
+        elif [[ -f "$CUSTOMER_HOME/$prompt_file" ]]; then
+            full_prompt_path="$CUSTOMER_HOME/$prompt_file"
+        else
+            full_prompt_path="$CHASSIS_HOME/$prompt_file"
+        fi
         if [[ ! -f "$full_prompt_path" ]]; then
             log "ERROR $name — prompt file not found: $full_prompt_path"
             set_state "$name" "last_result" "prompt_missing"
@@ -945,7 +966,7 @@ main() {
             continue
         fi
 
-        local output_dir="$CHASSIS_HOME/briefings"
+        local output_dir="$CUSTOMER_HOME/briefings"
         local output_file="$output_dir/${DATE}-${name}.md"
         mkdir -p "$output_dir"
 

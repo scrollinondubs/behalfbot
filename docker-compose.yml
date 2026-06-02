@@ -43,6 +43,16 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      # Issue #6: hard-split between chassis-disposable code and customer
+      # state. CUSTOMER_HOME is the canonical name for the customer-state
+      # mount; CHASSIS_HOME is kept as an alias to the SAME path so legacy
+      # chassis scripts (which read $CHASSIS_HOME/.env, $CHASSIS_HOME/briefings,
+      # etc.) continue to work without modification. New / updated code should
+      # prefer CUSTOMER_HOME for customer-side paths and CHASSIS_ROOT /
+      # CHASSIS_PLUGINS_ROOT (defined in the Dockerfile ENV) for chassis-side
+      # code paths. The Dockerfile bakes /app/chassis + /app/plugins as
+      # read-only image layers; only /app/customer is bind-mounted.
+      CUSTOMER_HOME: /app/customer
       CHASSIS_HOME: /app/customer
       DISPATCHER_INTERVAL_SECONDS: ${DISPATCHER_INTERVAL_SECONDS:-900}
       # Postgres DSN seen from inside the chassis network. The chassis

@@ -73,6 +73,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     CHASSIS_ROOT=/app/chassis \
     CHASSIS_PLUGINS_ROOT=/app/plugins \
+    CUSTOMER_HOME=/app/customer \
     CHASSIS_HOME=/app/customer \
     HOME=/home/chassis \
     PATH=/home/chassis/.local/bin:/home/chassis/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

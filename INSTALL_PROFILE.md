@@ -39,7 +39,7 @@ For V1 case studies we hand-author the artifacts directly from an interview. Onc
 | `target_runtime` | `<linux_baremetal \| cloudflare_containers \| mac_mini>` |
 | `host_class` | `<home_server \| vps \| cloud_container>` |
 | `state_storage` | `local-fs` (recommended for V1) |
-| `state_path` | `~/behalfbot/state` |
+| `state_path` | `~/.behalfbot/state` (issue #6: customer state lives at `$CUSTOMER_HOME`, NOT inside the chassis tree) |
 | `database` | **Postgres** (chassis default; see LESSONS_FROM_V1.md #34) |
 | `network` | `<tailscale_node_share \| cloudflare_tunnel \| direct_ssh>` |
 
@@ -125,7 +125,7 @@ Execution model: **(b) Sean+${ASSISTANT_NAME} drive via SSH** (see <v1-reference
 1. Installer completes homework (`docs/installer-homework-<installer>.md`)
 2. We SSH in via Tailscale-shared node
 3. We install Linux prereqs
-4. We clone the chassis repo to `~/behalfbot/`
+4. We clone the chassis repo to `~/behalfbot/` (CHASSIS_HOME). Customer state will land in `~/.behalfbot/` (CUSTOMER_HOME), created by `bootstrap.sh` on first run.
 5. We hydrate the chassis from this profile + `docs/install-<installer>-chassis-config.yaml`
 6. We boot chassis + run smoke tests
 7. First-heartbeat smoke test: 3 consecutive clean morning briefings = signed off

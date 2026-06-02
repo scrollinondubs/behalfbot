@@ -47,11 +47,16 @@
 
 set -euo pipefail
 
-: "${CHASSIS_HOME:?CHASSIS_HOME must be set (export to the install root that holds .env)}"
+# Issue #6: customer state - including .env / .env.baked - lives under
+# CUSTOMER_HOME. CHASSIS_HOME is kept as the legacy fallback so pre-#6
+# installs continue working without re-export.
+: "${CHASSIS_HOME:?CHASSIS_HOME must be set (export to the chassis tree root)}"
+: "${CUSTOMER_HOME:=$CHASSIS_HOME}"
+export CHASSIS_HOME CUSTOMER_HOME
 
 DRY_RUN="${DRY_RUN:-false}"
-SRC_ENV="$CHASSIS_HOME/.env"
-DST_BAKED="$CHASSIS_HOME/.env.baked"
+SRC_ENV="$CUSTOMER_HOME/.env"
+DST_BAKED="$CUSTOMER_HOME/.env.baked"
 
 if [[ ! -f "$SRC_ENV" ]]; then
     echo "ERR: $SRC_ENV not found" >&2
@@ -168,20 +173,21 @@ fi
 # <v1-reference-install>#697 + scrollinondubs/new-jaxity#49 for context.
 #
 # Path-shaped vars overridden here:
-#   CUSTOMER_HOME        -> $CHASSIS_HOME              (install root)
-#   REPO                 -> $CHASSIS_HOME              (legacy alias)
-#   MANIFEST             -> $CHASSIS_HOME/data/vaultwarden-migration-manifest.json
+#   CUSTOMER_HOME        -> $CUSTOMER_HOME             (host customer-state root)
+#   CHASSIS_HOME         -> $CHASSIS_HOME              (host chassis tree root)
+#   REPO                 -> $CHASSIS_HOME              (legacy alias for chassis tree)
+#   MANIFEST             -> $CUSTOMER_HOME/data/vaultwarden-migration-manifest.json
 #   CUSTOMER_CLAUDE_DIR  -> $HOME/.claude              (user's ~/.claude, install-agnostic)
 #
 # Strategy: strip these keys from APP_VARS, then append derived values. Loud
 # log so operators see what was overridden (in case a customer was relying on
 # a custom value).
-PATH_KEYS_REGEX='^(CUSTOMER_HOME|REPO|MANIFEST|CUSTOMER_CLAUDE_DIR)='
+PATH_KEYS_REGEX='^(CUSTOMER_HOME|CHASSIS_HOME|REPO|MANIFEST|CUSTOMER_CLAUDE_DIR)='
 PATH_ORIGINALS=$(echo "$APP_VARS" | grep -E "$PATH_KEYS_REGEX" | sort -u)
 if [[ -n "$PATH_ORIGINALS" ]]; then
     while IFS= read -r line; do
         key="${line%%=*}"
-        echo "INFO: overriding host-path var '$key' from \$CHASSIS_HOME/\$HOME (was: ${line#*=})" >&2
+        echo "INFO: overriding host-path var '$key' from host env (was: ${line#*=})" >&2
     done <<< "$PATH_ORIGINALS"
 fi
 
@@ -191,9 +197,10 @@ APP_VARS=$(echo "$APP_VARS" | grep -vE "$PATH_KEYS_REGEX" || true)
 # points at the host user's ~/.claude (Claude Code's data dir), not the
 # install root. The container reads these via env_file at boot.
 APP_VARS="$APP_VARS
-CUSTOMER_HOME=$CHASSIS_HOME
+CUSTOMER_HOME=$CUSTOMER_HOME
+CHASSIS_HOME=$CHASSIS_HOME
 REPO=$CHASSIS_HOME
-MANIFEST=$CHASSIS_HOME/data/vaultwarden-migration-manifest.json
+MANIFEST=$CUSTOMER_HOME/data/vaultwarden-migration-manifest.json
 CUSTOMER_CLAUDE_DIR=$HOME/.claude"
 
 n_keys=$(echo "$APP_VARS" | grep -c '^[A-Z]' || true)

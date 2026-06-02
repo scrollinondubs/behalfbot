@@ -60,6 +60,10 @@
 set -euo pipefail
 
 : "${CHASSIS_HOME:?CHASSIS_HOME must be set (export it before running, or invoke from the install runbook)}"
+# Issue #6: prefer CUSTOMER_HOME for .env / .mcp.json output; CHASSIS_HOME
+# fallback keeps legacy installs working.
+: "${CUSTOMER_HOME:=$CHASSIS_HOME}"
+export CHASSIS_HOME CUSTOMER_HOME
 
 # Resolve template relative to THIS script's location. Chassis is reachable
 # through two layouts:
@@ -71,8 +75,8 @@ set -euo pipefail
 # Either way, the template sits one directory above this script's parent.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE="${SCRIPT_DIR%/scripts}/.mcp.json.template"
-TARGET="$CHASSIS_HOME/.mcp.json"
-ENV_FILE="$CHASSIS_HOME/.env"
+TARGET="$CUSTOMER_HOME/.mcp.json"
+ENV_FILE="$CUSTOMER_HOME/.env"
 
 FORCE=0
 DRY_RUN=0
@@ -139,9 +143,9 @@ for ph in "${PLACEHOLDERS[@]}"; do
     fi
 done
 
-# Shell-expand ${CHASSIS_HOME} (kept literal in the template so the file is
-# self-documenting). Only substitute the exact `${CHASSIS_HOME}` token.
-OUTPUT=$(printf '%s' "$OUTPUT" | sed "s|\${CHASSIS_HOME}|$CHASSIS_HOME|g")
+# Shell-expand ${CHASSIS_HOME} and ${CUSTOMER_HOME} (kept literal in the
+# template so the file is self-documenting). Only substitute the exact tokens.
+OUTPUT=$(printf '%s' "$OUTPUT" | sed -e "s|\${CHASSIS_HOME}|$CHASSIS_HOME|g" -e "s|\${CUSTOMER_HOME}|$CUSTOMER_HOME|g")
 
 # Drop the `_README` key from the top-level object and any `_role` / `_enable_when`
 # / `_install_note` keys from servers. They're documentation, not config — jq
