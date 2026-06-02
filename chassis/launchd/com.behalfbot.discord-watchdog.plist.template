@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.behalfbot.${BOT_NAME}-discord-watchdog.plist - chassis-rendered template.
+
+  Generated from chassis/launchd/com.behalfbot.discord-watchdog.plist.template
+  by chassis/scripts/bootstrap-customer-scripts.sh.
+
+  Template variables - same set as the sibling restart plist (see comment
+  block in com.behalfbot.discord-restart.plist.template).
+
+  Cadence: every 30 minutes (StartInterval 1800). Restarts only fire when
+  the watchdog actually detects a dead session or an auth-failure pattern
+  in the tmux pane buffer - the wakeup itself is cheap, the bot stays up.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.behalfbot.${BOT_NAME}-discord-watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${CUSTOMER_HOME}/scripts/watchdog-${BOT_NAME}-discord.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>1800</integer>
+    <key>WorkingDirectory</key>
+    <string>${CHASSIS_HOME}</string>
+    <key>StandardErrorPath</key>
+    <string>${CUSTOMER_HOME}/logs/scheduled/watchdog-stderr.log</string>
+    <key>StandardOutPath</key>
+    <string>${CUSTOMER_HOME}/logs/scheduled/watchdog-stdout.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/${USER}/.local/bin:${HOMEBREW_PREFIX}/bin:${NODE_BIN_PATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/${USER}</string>
+        <key>CUSTOMER_HOME</key>
+        <string>${CUSTOMER_HOME}</string>
+        <key>CHASSIS_HOME</key>
+        <string>${CHASSIS_HOME}</string>
+    </dict>
+</dict>
+</plist>

@@ -1,0 +1,64 @@
+#!/bin/bash
+# restart-${BOT_NAME}-discord.sh - chassis-rendered template.
+#
+# Kills and restarts the ${TMUX_SESSION_NAME} tmux session with a fresh
+# Claude Code process. Invoked daily by the discord-restart LaunchAgent and
+# on-demand by the discord-watchdog LaunchAgent.
+#
+# Generated from chassis/scripts/templates/restart-discord.sh.template by
+# chassis/scripts/bootstrap-customer-scripts.sh. Do NOT edit the rendered copy
+# directly - the chassis bootstrap can re-render it, clobbering local edits.
+# Customise the template if a per-install behavior change is needed, or open
+# an issue on scrollinondubs/behalfbot.
+#
+# Template variables (expanded at render time):
+#   BOT_NAME            - logical bot name (e.g. jax, asimov, ozzy)
+#   TMUX_SESSION_NAME   - tmux session label (typically ${BOT_NAME}-discord)
+#   CUSTOMER_HOME       - per-customer state root (e.g. ~/.behalfbot)
+#   CHASSIS_HOME        - chassis git tree root (e.g. ~/behalfbot)
+#   CLAUDE_CHANNELS     - --channels flag value (default plugin:discord@claude-plugins-official)
+
+set -euo pipefail
+
+LOG_DIR="${CUSTOMER_HOME}/logs/scheduled"
+LOG_FILE="$LOG_DIR/discord-restart.log"
+mkdir -p "$LOG_DIR"
+
+timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+
+echo "[$(timestamp)] Discord session restart starting for ${BOT_NAME}..." >> "$LOG_FILE"
+
+# Kill existing session if present
+if tmux has-session -t "${TMUX_SESSION_NAME}" 2>/dev/null; then
+    echo "[$(timestamp)] Killing existing ${TMUX_SESSION_NAME} session" >> "$LOG_FILE"
+    tmux kill-session -t "${TMUX_SESSION_NAME}"
+    sleep 2
+else
+    echo "[$(timestamp)] No existing ${TMUX_SESSION_NAME} session found" >> "$LOG_FILE"
+fi
+
+# Start new session.
+#
+# Working dir is CHASSIS_HOME so claude resolves CLAUDE.md from there. The
+# chassis tree contains the canonical CLAUDE.md.template; customer's rendered
+# CLAUDE.md lives under CUSTOMER_HOME but is symlinked / referenced via the
+# chassis tree at install time. See chassis/scripts/bootstrap-customer-scripts.sh
+# for the wiring.
+#
+# Per chassis OAuth-rotation rule: no forced "claude --print ping" token
+# refresh here - it rotates the Anthropic OAuth refresh-token server-side
+# and invalidates peer claude processes still holding the old one. The OAuth
+# bridge sync handles freshness via lazy-refresh-on-use plus bidirectional
+# file<->keychain propagation (chassis/scripts/sync-claude-oauth-bridge.sh,
+# 30 min StartInterval).
+tmux new-session -s "${TMUX_SESSION_NAME}" -d \
+    "cd '${CHASSIS_HOME}' && claude --channels '${CLAUDE_CHANNELS}' --dangerously-skip-permissions"
+
+sleep 2
+
+if tmux has-session -t "${TMUX_SESSION_NAME}" 2>/dev/null; then
+    echo "[$(timestamp)] ${TMUX_SESSION_NAME} session restarted successfully" >> "$LOG_FILE"
+else
+    echo "[$(timestamp)] ERROR: Failed to start ${TMUX_SESSION_NAME} session" >> "$LOG_FILE"
+    exit 1
+fi

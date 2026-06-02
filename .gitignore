@@ -1,4 +1,16 @@
-# Secrets — never commit
+# =========================================================================
+# CHASSIS_HOME hygiene (issue #6).
+#
+# Customer state must NEVER land in the chassis git tree (~/behalfbot/).
+# After issue #6 all customer-side state lives in CUSTOMER_HOME (~/.behalfbot/)
+# which is outside this repo entirely. The patterns below are kept as a
+# belt-and-braces guard against accidental commits during the transition
+# period (legacy installs still co-locate state here). A CI check
+# (.github/workflows/no-customer-state-in-chassis.yml) enforces the same
+# rules and will fail the build if customer-state files are ever tracked.
+# =========================================================================
+
+# Secrets - never commit
 .env
 .env.*
 !.env.example
@@ -7,7 +19,7 @@
 secrets/
 .vaultwarden-token
 
-# Per-installer state — populated at runtime, never templated in
+# Per-installer state - populated at runtime, never templated in
 chassis/memory/installer/
 chassis/memory/MEMORY.md
 chassis/memory/lead_*.md
@@ -19,11 +31,27 @@ chassis/memory/student_*.md
 chassis/memory/user_*.md
 chassis/memory/task_*.md
 
-# Briefings + ephemeral artifacts
+# Customer-side directories (must live under CUSTOMER_HOME, never CHASSIS_HOME)
 briefings/
 logs/
 temp/
 data/
+state/
+
+# Customer-side scripts rendered into CUSTOMER_HOME/scripts/ by
+# chassis/scripts/bootstrap-customer-scripts.sh. Never tracked.
+scripts/restart-*.sh
+scripts/watchdog-*.sh
+
+# Customer-side scheduled-task state. The template files (e.g. *.template,
+# *-prompt.md.template) live in chassis/ and remain tracked.
+scheduled-tasks/heartbeat-state.json
+scheduled-tasks/conservation-mode.json
+scheduled-tasks/quota-last-block-start.txt
+
+# Bootstrap / migration sentinel files (created inside CUSTOMER_HOME).
+.bootstrap-marker
+.migrated-from-chassis-home
 
 # Local DB
 *.db

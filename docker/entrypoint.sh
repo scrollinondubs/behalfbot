@@ -20,7 +20,13 @@ set -euo pipefail
 
 : "${CHASSIS_ROOT:=/app/chassis}"
 : "${CHASSIS_PLUGINS_ROOT:=/app/plugins}"
-: "${CHASSIS_HOME:=/app/customer}"
+# Issue #6 customer-state split. CUSTOMER_HOME is the canonical name for the
+# customer-state mount inside the container; CHASSIS_HOME is kept as an alias
+# pointing at the SAME path so legacy chassis scripts (which read
+# $CHASSIS_HOME/.env, $CHASSIS_HOME/briefings, etc.) keep working untouched.
+: "${CUSTOMER_HOME:=/app/customer}"
+: "${CHASSIS_HOME:=$CUSTOMER_HOME}"
+export CUSTOMER_HOME CHASSIS_HOME CHASSIS_ROOT CHASSIS_PLUGINS_ROOT
 : "${DISPATCHER_INTERVAL_SECONDS:=900}"
 : "${DISPATCHER_SCRIPT:=$CHASSIS_ROOT/scheduled-tasks/heartbeat-dispatcher.sh}"
 
@@ -33,7 +39,9 @@ log() {
 
 ensure_customer_layout() {
     # Bind-mount may be empty on first run. Don't clobber existing state.
-    mkdir -p "$CHASSIS_HOME"/{briefings,logs/scheduled,scheduled-tasks,state,data,memory,plugins,temp}
+    # Use CUSTOMER_HOME (which equals CHASSIS_HOME in the container) so the
+    # naming matches the new issue #6 semantics.
+    mkdir -p "$CUSTOMER_HOME"/{briefings,logs/scheduled,scheduled-tasks,state,data,memory,plugins,temp,scripts}
 }
 
 source_env() {

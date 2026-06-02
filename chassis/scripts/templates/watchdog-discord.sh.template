@@ -1,0 +1,50 @@
+#!/bin/bash
+# watchdog-${BOT_NAME}-discord.sh - chassis-rendered template.
+#
+# Monitors the ${TMUX_SESSION_NAME} tmux session for auth failures and
+# restarts it via the sibling restart script when needed. Runs every 30
+# minutes via the discord-watchdog LaunchAgent.
+#
+# Generated from chassis/scripts/templates/watchdog-discord.sh.template by
+# chassis/scripts/bootstrap-customer-scripts.sh. Do NOT edit the rendered copy.
+#
+# Template variables (expanded at render time):
+#   BOT_NAME            - logical bot name
+#   TMUX_SESSION_NAME   - tmux session label
+#   CUSTOMER_HOME       - per-customer state root
+
+set -euo pipefail
+
+LOG_DIR="${CUSTOMER_HOME}/logs/scheduled"
+LOG_FILE="$LOG_DIR/watchdog.log"
+RESTART_SCRIPT="${CUSTOMER_HOME}/scripts/restart-${BOT_NAME}-discord.sh"
+mkdir -p "$LOG_DIR"
+
+timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+
+# Defensive: refuse to run if the restart script is missing rather than
+# silently retry every 30 min with exit 127 (the Toby case study, #6).
+if [[ ! -x "$RESTART_SCRIPT" ]]; then
+    echo "[$(timestamp)] FATAL: restart script missing at $RESTART_SCRIPT" >> "$LOG_FILE"
+    echo "[$(timestamp)]   This watchdog cannot recover the session without it." >> "$LOG_FILE"
+    echo "[$(timestamp)]   Re-render via: bash \$CHASSIS_HOME/chassis/scripts/bootstrap-customer-scripts.sh" >> "$LOG_FILE"
+    exit 2
+fi
+
+# Check if session exists
+if ! tmux has-session -t "${TMUX_SESSION_NAME}" 2>/dev/null; then
+    echo "[$(timestamp)] Session missing - restarting" >> "$LOG_FILE"
+    bash "$RESTART_SCRIPT"
+    exit 0
+fi
+
+# Capture recent pane output and check for auth failure indicators
+PANE_OUTPUT=$(tmux capture-pane -t "${TMUX_SESSION_NAME}" -p -S -50 2>/dev/null)
+
+if echo "$PANE_OUTPUT" | grep -qiE "Not logged in|Please run /login|authentication.*failed|token.*expired"; then
+    echo "[$(timestamp)] Auth failure detected - restarting" >> "$LOG_FILE"
+    bash "$RESTART_SCRIPT"
+    exit 0
+fi
+
+echo "[$(timestamp)] Session healthy" >> "$LOG_FILE"

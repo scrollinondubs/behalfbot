@@ -2,10 +2,27 @@
 # bootstrap.sh — chassis install / re-install orchestrator.
 #
 # Usage:
-#   CHASSIS_HOME=/path/to/chassis bash bootstrap.sh [--dry-run] [--skip-deps]
+#   CHASSIS_HOME=/path/to/chassis-tree \
+#     CUSTOMER_HOME=/path/to/customer-state \
+#     bash bootstrap.sh [--dry-run] [--skip-deps]
+#
+# As of issue #6 the chassis enforces a hard split between chassis-disposable
+# code and customer state:
+#
+#   CHASSIS_HOME   - chassis tree (chassis/, plugins/, bootstrap.sh, Dockerfile).
+#                    Fully disposable: rm -rf && git clone is safe.
+#                    Default: $HOME/behalfbot
+#   CUSTOMER_HOME  - customer state (.env, CLAUDE.md, HEARTBEATS.md, scripts/,
+#                    state/, logs/, briefings/, memory/, data/). NEVER touched
+#                    by reinstall. Default: $HOME/.behalfbot
+#
+# On first-install: this script creates $CUSTOMER_HOME and scaffolds the initial
+# subdir tree, then renders the customer-side scripts from chassis templates.
+# On re-bootstrap: this script verifies $CUSTOMER_HOME exists and never
+# overwrites anything inside it - only chassis-side setup runs.
 #
 # Idempotent: re-run after a partial install picks up where it left off.
-# Every command run gets logged to ${CHASSIS_HOME}/logs/bootstrap-<date>.log
+# Every command run gets logged to ${CUSTOMER_HOME}/logs/bootstrap-<date>.log
 # so installer #2 (the next case study) can run a near-identical transcript.
 #
 # Prerequisites (installer's homework, NOT this script's job):
@@ -21,17 +38,19 @@
 #
 # What this script does (in order):
 #   1. Validate environment + tool prerequisites
-#   2. Hydrate .env from installer's password manager (interactive prompts for paths)
-#   3. Render INSTALL_PROFILE.md + chassis.config.yaml validations
-#   4. Hydrate .mcp.json from .mcp.json.template + .env values
-#   5. Hydrate CLAUDE.md from CLAUDE.md.template + INSTALL_PROFILE.md values
-#   6. Initialize HEARTBEATS.md (copy chassis/HEARTBEATS.md.template -> $CHASSIS_HOME/HEARTBEATS.md, append chassis-defaults + plugin-registered heartbeats)
-#   7. Activate enabled plugins (per chassis.config.yaml.modules)
-#   8. Seed memory entries from INSTALL_PROFILE.md (no fabrication)
-#   9. Install OS-level deps (Python 3.12+, Node 20+, ffmpeg, sqlite3, jq, curl, Claude Code)
-#  10. Set up launchd plist (macOS) or systemd unit (Linux) for the dispatcher
-#  11. Run smoke tests (each plugin's basic functionality)
-#  12. Report status — green = install complete, yellow = follow-ups needed
+#   2. Scaffold $CUSTOMER_HOME if missing (first install)
+#   3. Hydrate .env from installer's password manager (interactive prompts for paths)
+#   4. Render INSTALL_PROFILE.md + chassis.config.yaml validations
+#   5. Hydrate .mcp.json from .mcp.json.template + .env values
+#   6. Hydrate CLAUDE.md from CLAUDE.md.template + INSTALL_PROFILE.md values
+#   7. Initialize HEARTBEATS.md (copy chassis/HEARTBEATS.md.template -> $CUSTOMER_HOME/HEARTBEATS.md, append chassis-defaults + plugin-registered heartbeats)
+#   8. Render customer-side scripts (restart/watchdog) from chassis templates
+#   9. Activate enabled plugins (per chassis.config.yaml.modules)
+#  10. Seed memory entries from INSTALL_PROFILE.md (no fabrication)
+#  11. Install OS-level deps (Python 3.12+, Node 20+, ffmpeg, sqlite3, jq, curl, Claude Code)
+#  12. Set up launchd plist (macOS) or systemd unit (Linux) for the dispatcher
+#  13. Run smoke tests (each plugin's basic functionality)
+#  14. Report status — green = install complete, yellow = follow-ups needed
 #
 # Each step is its own function. Failures within a step exit non-zero
 # with a clear message about what to fix + where to re-run from.
@@ -42,15 +61,43 @@ set -euo pipefail
 # 1. Setup + validation
 # ============================================================
 
-: "${CHASSIS_HOME:?CHASSIS_HOME must be set (export before running)}"
+: "${CHASSIS_HOME:?CHASSIS_HOME must be set (export before running; chassis git tree root)}"
+# CUSTOMER_HOME defaults to $HOME/.behalfbot per the issue #6 hard-split.
+# Pre-issue-#6 installs co-located customer state with CHASSIS_HOME; those
+# installs should run chassis/scripts/migrate-customer-state.sh first.
+CUSTOMER_HOME="${CUSTOMER_HOME:-$HOME/.behalfbot}"
+export CHASSIS_HOME CUSTOMER_HOME
 
 DRY_RUN="${DRY_RUN:-false}"
 SKIP_DEPS="${SKIP_DEPS:-false}"
+
+# CLI flag parsing
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dry-run)    DRY_RUN=true; shift ;;
+        --skip-deps)  SKIP_DEPS=true; shift ;;
+        -h|--help)
+            sed -n '1,50p' "$0" | sed 's/^# *//'
+            exit 0 ;;
+        *)
+            echo "unknown flag: $1" >&2
+            exit 2 ;;
+    esac
+done
+
 DATE=$(date +%Y-%m-%d)
-LOG_DIR="$CHASSIS_HOME/logs"
+LOG_DIR="$CUSTOMER_HOME/logs"
 TRANSCRIPT="$LOG_DIR/bootstrap-$DATE.log"
 
-mkdir -p "$LOG_DIR"
+# Don't create the log dir on dry-run - we promised CUSTOMER_HOME is untouched
+# if dry-run is on.
+if [[ "$DRY_RUN" != "true" ]]; then
+    mkdir -p "$LOG_DIR"
+else
+    # Re-route the transcript to a tmp location so logging still works.
+    TRANSCRIPT="${TMPDIR:-/tmp}/bootstrap-dryrun-$DATE.log"
+    : > "$TRANSCRIPT"
+fi
 
 log() {
     local msg="[$(date +%H:%M:%S)] $*"
@@ -78,10 +125,15 @@ step() {
 # ============================================================
 
 validate_environment() {
-    step "1/12" "Validate environment + tool prerequisites"
+    step "1/14" "Validate environment + tool prerequisites"
 
     if [[ ! -d "$CHASSIS_HOME" ]]; then
         log "FAIL: CHASSIS_HOME ($CHASSIS_HOME) does not exist"
+        exit 2
+    fi
+
+    if [[ ! -d "$CHASSIS_HOME/chassis" ]]; then
+        log "FAIL: $CHASSIS_HOME does not look like a chassis tree (no chassis/ subdir)"
         exit 2
     fi
 
@@ -97,16 +149,88 @@ validate_environment() {
         exit 2
     fi
 
-    if [[ ! -f "$CHASSIS_HOME/INSTALL_PROFILE.md" ]]; then
-        log "FAIL: $CHASSIS_HOME/INSTALL_PROFILE.md missing — needed for hydration"
+    # INSTALL_PROFILE.md + chassis.config.yaml are PER-INSTALL artifacts. They
+    # live under CUSTOMER_HOME post-#6; for legacy installs they sit at
+    # CHASSIS_HOME. Accept either to make this script work mid-migration.
+    local profile_src config_src
+    profile_src="$(first_existing "$CUSTOMER_HOME/INSTALL_PROFILE.md" "$CHASSIS_HOME/INSTALL_PROFILE.md")"
+    config_src="$(first_existing "$CUSTOMER_HOME/chassis.config.yaml" "$CHASSIS_HOME/chassis.config.yaml")"
+
+    if [[ -z "$profile_src" ]]; then
+        log "FAIL: INSTALL_PROFILE.md missing - looked under $CUSTOMER_HOME and $CHASSIS_HOME"
         exit 2
     fi
-    if [[ ! -f "$CHASSIS_HOME/chassis.config.yaml" ]]; then
-        log "FAIL: $CHASSIS_HOME/chassis.config.yaml missing — needed for hydration"
+    if [[ -z "$config_src" ]]; then
+        log "FAIL: chassis.config.yaml missing - looked under $CUSTOMER_HOME and $CHASSIS_HOME"
         exit 2
     fi
 
     log "✓ environment OK"
+    log "  CHASSIS_HOME  (chassis tree)    : $CHASSIS_HOME"
+    log "  CUSTOMER_HOME (customer state)  : $CUSTOMER_HOME"
+    log "  INSTALL_PROFILE.md source       : $profile_src"
+    log "  chassis.config.yaml source      : $config_src"
+}
+
+# first_existing <path...> - echo the first path arg that exists; empty if none.
+first_existing() {
+    local p
+    for p in "$@"; do
+        if [[ -e "$p" ]]; then
+            printf '%s' "$p"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# ============================================================
+# 2. Scaffold CUSTOMER_HOME (first install only)
+# ============================================================
+
+scaffold_customer_home() {
+    step "2/14" "Scaffold CUSTOMER_HOME"
+
+    # Per issue #6: never overwrite anything inside CUSTOMER_HOME on re-bootstrap.
+    # Only create the dir structure if it doesn't already exist.
+    if [[ -d "$CUSTOMER_HOME" && -f "$CUSTOMER_HOME/.bootstrap-marker" ]]; then
+        log "  $CUSTOMER_HOME already scaffolded, skipping (re-bootstrap path)"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would create $CUSTOMER_HOME and standard subdirs"
+        return 0
+    fi
+
+    local subdirs=(
+        scripts
+        state
+        scheduled-tasks
+        memory
+        briefings
+        logs
+        logs/scheduled
+        logs/telemetry
+        data
+        temp
+        launchd
+    )
+    for d in "${subdirs[@]}"; do
+        mkdir -p "$CUSTOMER_HOME/$d"
+    done
+
+    # Marker so re-runs know scaffolding already happened.
+    cat > "$CUSTOMER_HOME/.bootstrap-marker" <<EOF
+# Behalf.bot CUSTOMER_HOME bootstrap marker (issue #6).
+# Presence signals to bootstrap.sh that this customer dir has been initialised.
+# Re-bootstrap will NOT overwrite anything else inside CUSTOMER_HOME while this
+# marker is present. Delete the marker to force re-scaffold (which still only
+# creates absent subdirs - existing customer state is never clobbered).
+bootstrapped_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+chassis_home: $CHASSIS_HOME
+EOF
+    log "  ✓ scaffolded $CUSTOMER_HOME"
 }
 
 # ============================================================
@@ -114,9 +238,9 @@ validate_environment() {
 # ============================================================
 
 hydrate_env() {
-    step "2/12" "Hydrate .env from password manager"
+    step "3/14" "Hydrate .env from password manager"
 
-    local env_file="$CHASSIS_HOME/.env"
+    local env_file="$CUSTOMER_HOME/.env"
     if [[ -f "$env_file" ]]; then
         log "  $env_file exists; idempotent re-run will skip prompts for already-set values"
     fi
@@ -164,7 +288,7 @@ EOF
 # ============================================================
 
 validate_install_artifacts() {
-    step "3/12" "Validate INSTALL_PROFILE + chassis.config.yaml"
+    step "4/14" "Validate INSTALL_PROFILE + chassis.config.yaml"
 
     log "TODO: lint INSTALL_PROFILE.md for required sections"
     log "TODO: validate chassis.config.yaml against schema (yq + json-schema OR python jsonschema)"
@@ -184,7 +308,7 @@ validate_install_artifacts() {
 # ============================================================
 
 hydrate_mcp_json() {
-    step "4/12" "Hydrate .mcp.json from template"
+    step "5/14" "Hydrate .mcp.json from template"
 
     log "TODO: jq-based template-substitution from .mcp.json.template"
     log "  - Read chassis.config.yaml.modules.* flags"
@@ -196,7 +320,7 @@ hydrate_mcp_json() {
 }
 
 hydrate_claude_md() {
-    step "5/12" "Hydrate CLAUDE.md from template"
+    step "6/14" "Hydrate CLAUDE.md from template"
 
     log "TODO: sed-based template-substitution from chassis/CLAUDE.md.template"
     log "  Read INSTALL_PROFILE.md + chassis.config.yaml for {{PLACEHOLDER}} values:"
@@ -205,14 +329,14 @@ hydrate_claude_md() {
     log "    {{PRIMARY_CHANNEL}}, {{OPS_CHANNEL}}, {{BRIEFINGS_CHANNEL}}"
     log "    {{SECOND_BRAIN_BACKEND}}, {{INSTALLER_GITHUB_OWNER}}, etc."
     log "  Append per-plugin '## Plugin: <name>' sections from each enabled plugin's CLAUDE-section template"
-    log "  Write hydrated CLAUDE.md at \$CHASSIS_HOME/CLAUDE.md"
+    log "  Write hydrated CLAUDE.md at \$CUSTOMER_HOME/CLAUDE.md"
 }
 
 initialize_heartbeats() {
-    step "6/12" "Initialize HEARTBEATS.md"
+    step "7/14" "Initialize HEARTBEATS.md"
 
     local template="$CHASSIS_HOME/chassis/HEARTBEATS.md.template"
-    local rendered="$CHASSIS_HOME/HEARTBEATS.md"
+    local rendered="$CUSTOMER_HOME/HEARTBEATS.md"
 
     if [[ ! -f "$template" ]]; then
         log "  ERROR: $template missing - chassis install incomplete"
@@ -247,8 +371,35 @@ initialize_heartbeats() {
 # 8. Activate enabled plugins
 # ============================================================
 
+render_customer_scripts() {
+    step "8/14" "Render customer-side scripts from chassis templates"
+
+    local renderer="$CHASSIS_HOME/chassis/scripts/bootstrap-customer-scripts.sh"
+    if [[ ! -x "$renderer" ]]; then
+        log "  WARN: $renderer missing or not executable - skipping script render"
+        log "        Without this step, customer-side restart/watchdog scripts"
+        log "        will be absent until the install is patched. See issue #6."
+        return 0
+    fi
+
+    # BOT_NAME resolution lives inside the renderer; if it can't determine one
+    # it falls back to literal 'bot'. Installers should set BOT_NAME explicitly
+    # in their environment (or in chassis.config.yaml) for a clean render.
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run: $renderer --plists"
+        return 0
+    fi
+
+    if ! CUSTOMER_HOME="$CUSTOMER_HOME" CHASSIS_HOME="$CHASSIS_HOME" \
+        bash "$renderer" --plists 2>&1 | tee -a "$TRANSCRIPT"; then
+        log "  ERROR: bootstrap-customer-scripts.sh failed - investigate before continuing"
+        return 1
+    fi
+    log "  ✓ customer-side scripts + plists rendered"
+}
+
 activate_plugins() {
-    step "7/12" "Activate enabled plugins"
+    step "9/14" "Activate enabled plugins"
 
     log "TODO: for each plugin in plugins/ directory:"
     log "  - Read its openclaw.plugin.json"
@@ -257,14 +408,14 @@ activate_plugins() {
     log "  - Write chassis-env.sh that the launchd/systemd unit sources"
     log ""
     log "Per-plugin chassis-env.sh exports (V1-known):"
-    log "  whatsapp: CHASSIS_WHATSAPP_SAFE=\$CHASSIS_HOME/plugins/whatsapp/scripts/wacli-safe.sh"
+    log "  whatsapp: CHASSIS_WHATSAPP_SAFE=\$CHASSIS_PLUGINS_ROOT/whatsapp/scripts/wacli-safe.sh"
     log "  bfl:      BFL_ARCHIVE_DIR=<from config>"
     log "  dating:   SOCIAL_CHANNEL_ID=<from config>"
     log "  etc."
     log ""
     log "Plugin trigger merge (per chassis/scripts/merge-plugin-triggers.sh):"
     log "  - Reads contracts.triggers from each enabled plugin's openclaw.plugin.json"
-    log "  - Writes merged registry to \$CHASSIS_HOME/chassis/triggers.yaml"
+    log "  - Writes merged registry to \$CUSTOMER_HOME/triggers.yaml"
     log "  - Read by chassis/scripts/dispatch-trigger.sh on every inbound message"
     log "  - Re-run any time a plugin is enabled/disabled or its manifest changes"
 }
@@ -274,7 +425,7 @@ activate_plugins() {
 # ============================================================
 
 seed_memory() {
-    step "8/12" "Seed memory entries from INSTALL_PROFILE"
+    step "10/14" "Seed memory entries from INSTALL_PROFILE"
 
     log "TODO: per docs/memory-seeding.md — generate seed entries from interview signals"
     log ""
@@ -300,7 +451,7 @@ seed_memory() {
 # ============================================================
 
 install_os_deps() {
-    step "9/12" "Install OS-level dependencies"
+    step "11/14" "Install OS-level dependencies"
 
     if [[ "$SKIP_DEPS" == "true" ]]; then
         log "  SKIP_DEPS=true; assuming installer pre-installed everything"
@@ -336,17 +487,18 @@ install_os_deps() {
 # ============================================================
 
 setup_dispatcher_unit() {
-    step "10/12" "Set up dispatcher launchd / systemd unit"
+    step "12/14" "Set up dispatcher launchd / systemd unit"
 
     log "TODO: detect OS (macOS vs Linux) + emit appropriate unit:"
     log ""
-    log "macOS — write /Library/LaunchDaemons/com.behalfbot.heartbeat-dispatcher.plist"
-    log "  (LaunchDaemons survive reboots per lesson #26; LaunchAgents need GUI session)"
-    log "  UserName=<installer>"
-    log "  StartInterval=900 (every 15 min)"
-    log "  EnvironmentVariables: CHASSIS_HOME, INSTANCE_NAME, plus chassis-env.sh sourcing"
-    log "  ProgramArguments: bash -c 'source \$CHASSIS_HOME/chassis-env.sh && exec \$CHASSIS_HOME/chassis/scheduled-tasks/heartbeat-dispatcher.sh'"
-    log "  StandardOutPath / StandardErrorPath: \$CHASSIS_HOME/logs/scheduled/launchd-stdout.log"
+    log "macOS — chassis ships a plist template at chassis/launchd/"
+    log "  com.behalfbot.heartbeat-dispatcher.plist.template. The earlier"
+    log "  render_customer_scripts step (with --plists) writes the rendered"
+    log "  copy into \$CUSTOMER_HOME/launchd/. From there:"
+    log "    ln -sf \$CUSTOMER_HOME/launchd/com.behalfbot.heartbeat-dispatcher.plist \\"
+    log "         ~/Library/LaunchAgents/"
+    log "    launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.behalfbot.heartbeat-dispatcher.plist"
+    log "  Containerized installs do NOT need this plist - docker compose handles cadence."
     log ""
     log "Linux — write /etc/systemd/system/behalfbot-heartbeat-dispatcher.{service,timer}"
     log "  (system-scope, NOT --user, per lesson #26)"
@@ -358,7 +510,7 @@ setup_dispatcher_unit() {
     log "  IMPORTANT: embed Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
     log "    in the .service file — systemd strips PATH, uv run silently fails without it (#35)"
     log "  timer OnCalendar=*:0/15 (every 15 min)"
-    log "  Restart=on-failure; ConditionPathExists=\$CHASSIS_HOME"
+    log "  Restart=on-failure; ConditionPathExists=\$CUSTOMER_HOME"
     log ""
     log "Both: load + enable + start; verify with first-tick log entry"
 }
@@ -368,7 +520,7 @@ setup_dispatcher_unit() {
 # ============================================================
 
 run_smoke_tests() {
-    step "11/12" "Run smoke tests"
+    step "13/14" "Run smoke tests"
 
     log "TODO: per-plugin smoke checks:"
     log "  - chassis-core: dispatcher fires once + dry-runs every registered heartbeat"
@@ -388,7 +540,7 @@ run_smoke_tests() {
 # ============================================================
 
 report_status() {
-    step "12/12" "Install summary"
+    step "14/14" "Install summary"
 
     log ""
     log "Bootstrap transcript: $TRANSCRIPT"
@@ -406,16 +558,20 @@ report_status() {
 # ============================================================
 
 main() {
-    log "Behalf.bot bootstrap starting — CHASSIS_HOME=$CHASSIS_HOME"
-    log "Dry-run: $DRY_RUN | Skip-deps: $SKIP_DEPS"
-    log "Transcript: $TRANSCRIPT"
+    log "Behalf.bot bootstrap starting"
+    log "  CHASSIS_HOME (chassis tree)   : $CHASSIS_HOME"
+    log "  CUSTOMER_HOME (customer state): $CUSTOMER_HOME"
+    log "  Dry-run: $DRY_RUN | Skip-deps: $SKIP_DEPS"
+    log "  Transcript: $TRANSCRIPT"
 
     validate_environment
+    scaffold_customer_home
     hydrate_env
     validate_install_artifacts
     hydrate_mcp_json
     hydrate_claude_md
     initialize_heartbeats
+    render_customer_scripts
     activate_plugins
     seed_memory
     install_os_deps

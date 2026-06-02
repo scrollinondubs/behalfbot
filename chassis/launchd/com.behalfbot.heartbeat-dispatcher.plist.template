@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.behalfbot.heartbeat-dispatcher.plist - chassis-rendered template.
+
+  Generated from chassis/launchd/com.behalfbot.heartbeat-dispatcher.plist.template
+  by chassis/scripts/bootstrap-customer-scripts.sh. This is the macOS legacy
+  bare-metal path for the dispatcher loop. Container installs do NOT use this
+  plist - the dispatcher runs inside the chassis container per docker-compose.yml.
+
+  Only install this plist on macOS hosts running the chassis without the
+  container (the pre-containerization V1 layout). For containerized installs,
+  the LaunchAgent simply restarts the `behalfbot` compose stack on boot.
+
+  Template variables (expanded at render time):
+    CUSTOMER_HOME       per-customer state root
+    CHASSIS_HOME        chassis git tree root
+    INSTANCE_NAME       bot persona label (e.g. Jax, Asimov, Ozzy) - used in
+                        Discord notifications
+    USER                installer's macOS short name
+    USER_UID            installer's numeric UID
+    HOMEBREW_PREFIX     /opt/homebrew on Apple Silicon, /usr/local on Intel
+
+  Cadence: every 15 minutes (StartInterval 900). The dispatcher runs cheap
+  gather scripts on every tick; only fires `claude -p` when an actual work
+  condition is true. See chassis/scheduled-tasks/heartbeat-dispatcher.sh.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.behalfbot.heartbeat-dispatcher</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/zsh</string>
+        <string>-c</string>
+        <string>exec ${CHASSIS_HOME}/chassis/scheduled-tasks/heartbeat-dispatcher.sh</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <key>WorkingDirectory</key>
+    <string>${CUSTOMER_HOME}</string>
+    <key>StandardErrorPath</key>
+    <string>${CUSTOMER_HOME}/logs/scheduled/dispatcher-stderr.log</string>
+    <key>StandardOutPath</key>
+    <string>${CUSTOMER_HOME}/logs/scheduled/dispatcher-stdout.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/${USER}/.local/bin:${HOMEBREW_PREFIX}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/${USER}</string>
+        <key>CUSTOMER_HOME</key>
+        <string>${CUSTOMER_HOME}</string>
+        <key>CHASSIS_HOME</key>
+        <string>${CHASSIS_HOME}</string>
+        <key>CHASSIS_ROOT</key>
+        <string>${CHASSIS_HOME}/chassis</string>
+        <key>CHASSIS_PLUGINS_ROOT</key>
+        <string>${CHASSIS_HOME}/plugins</string>
+        <key>INSTANCE_NAME</key>
+        <string>${INSTANCE_NAME}</string>
+    </dict>
+</dict>
+</plist>
