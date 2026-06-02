@@ -107,7 +107,7 @@ if [[ "$KC_EXPIRES" -lt "$FILE_EXPIRES" ]]; then
     fi
     # security add-generic-password -U updates the existing item in place,
     # preserving the service/account labels.
-    if security add-generic-password -U -s "Claude Code-credentials" -a <v1-reference-install> -w "$FILE_JSON" 2>/dev/null; then
+    if security add-generic-password -U -s "Claude Code-credentials" -a "$KEYCHAIN_ACCOUNT" -w "$FILE_JSON" 2>/dev/null; then
         log "reverse-synced: file expiresAt=$FILE_EXPIRES → keychain (was $KC_EXPIRES)"
         exit 0
     else
