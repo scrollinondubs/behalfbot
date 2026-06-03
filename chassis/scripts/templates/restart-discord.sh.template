@@ -3,6 +3,18 @@
 # PATH. On Linux the brew dir does not exist and this prefix is a harmless no-op.
 export PATH="/opt/homebrew/bin:$PATH"
 
+# Wait up to 90s for Docker daemon to be available (Colima VM boot on cold
+# start). Without this guard, a system-domain LaunchDaemon that races Colima
+# at reboot spawns tmux + claude before docker.sock exists; MCP plugins that
+# docker-exec the chassis container fail-loop until Colima catches up.
+# 30 iterations x 3s = 90s ceiling. First successful docker-info breaks early,
+# so a 15s Colima boot only waits 15s. Linux installs where docker is always
+# up (or N/A) succeed on first iteration. See chassis#16.
+for i in {1..30}; do
+    if docker info >/dev/null 2>&1; then break; fi
+    sleep 3
+done
+
 # restart-${BOT_NAME}-discord.sh - chassis-rendered template.
 #
 # Kills and restarts the ${TMUX_SESSION_NAME} tmux session with a fresh

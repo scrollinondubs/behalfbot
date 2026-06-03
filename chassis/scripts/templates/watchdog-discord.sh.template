@@ -3,6 +3,17 @@
 # PATH. On Linux the brew dir does not exist and this prefix is a harmless no-op.
 export PATH="/opt/homebrew/bin:$PATH"
 
+# Wait up to 90s for Docker daemon to be available (Colima VM boot on cold
+# start). The watchdog itself doesn't docker-exec, but its restart-script
+# child does. Waiting here ensures the recovery path lands on a live docker
+# socket rather than tearing down + recreating a tmux session that would
+# fail-loop until Colima catches up. Linux installs no-op on iteration 1.
+# See chassis#16.
+for i in {1..30}; do
+    if docker info >/dev/null 2>&1; then break; fi
+    sleep 3
+done
+
 # watchdog-${BOT_NAME}-discord.sh - chassis-rendered template.
 #
 # Monitors the ${TMUX_SESSION_NAME} tmux session for auth failures and
