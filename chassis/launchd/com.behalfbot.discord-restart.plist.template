@@ -26,6 +26,13 @@
   morning; rationale for "before-8am-briefing" is that the daily-briefing
   heartbeat fires after the restart, so a fresh tmux session is in place.
 
+  RunAtLoad=true: also fire once when launchd bootstraps the daemon (i.e.
+  immediately post-boot). Without this, an unattended-reboot install waits
+  until the next 05:00 trigger for Discord-bot recovery - up to 24h of
+  Discord downtime. The restart script's docker-info retry loop handles
+  the Colima cold-boot race, so post-bootstrap firing is safe even when
+  the chassis container hasn't come up yet.
+
   Daemon-specific notes:
     - UserName/GroupName pin execution to the installer's user, NOT root.
       Without these, the daemon runs as root and breaks file-perm assumptions
@@ -47,6 +54,8 @@
         <string>/bin/bash</string>
         <string>${CUSTOMER_HOME}/scripts/restart-${BOT_NAME}-discord.sh</string>
     </array>
+    <key>RunAtLoad</key>
+    <true/>
     <key>StartCalendarInterval</key>
     <dict>
         <key>Hour</key>
