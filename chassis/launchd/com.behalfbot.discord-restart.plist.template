@@ -7,23 +7,41 @@
   Generated from chassis/launchd/com.behalfbot.discord-restart.plist.template
   by chassis/scripts/bootstrap-customer-scripts.sh.
 
+  DOMAIN: LaunchDaemon (system-level, /Library/LaunchDaemons/).
+  Promoted from user LaunchAgent in #14 so it survives unattended reboots
+  on installer Macs that don't auto-login. This job only `docker exec`s
+  the chassis container - no GUI/Aqua session needed. See chassis docs:
+  "LaunchDaemon vs LaunchAgent - which to use" for the decision rule.
+
   Template variables (expanded at render time):
     BOT_NAME            logical bot name (e.g. jax, asimov, ozzy)
     CUSTOMER_HOME       per-customer state root (e.g. /Users/<user>/.behalfbot)
     CHASSIS_HOME        chassis git tree root (e.g. /Users/<user>/behalfbot)
     HOMEBREW_PREFIX     /opt/homebrew on Apple Silicon, /usr/local on Intel
-    USER                installer's macOS short name
+    USER                installer's macOS short name (also used as UserName)
     NODE_BIN_PATH       optional - extra node bin dir, e.g. ${HOMEBREW_PREFIX}/opt/node@22/bin
 
   Restart cadence: daily at 05:00 local time. Matches the upstream Sean install
   which has run successfully for months. Drop to 03:00 if you want a quieter
   morning; rationale for "before-8am-briefing" is that the daily-briefing
   heartbeat fires after the restart, so a fresh tmux session is in place.
+
+  Daemon-specific notes:
+    - UserName/GroupName pin execution to the installer's user, NOT root.
+      Without these, the daemon runs as root and breaks file-perm assumptions
+      in the restart script (which writes to logs under ${CUSTOMER_HOME}).
+    - All paths must be absolute. Daemons can't rely on `~` / `$HOME` shell
+      expansion the same way user agents can; the template substitutes
+      `/Users/${USER}` explicitly.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.behalfbot.${BOT_NAME}-discord-restart</string>
+    <key>UserName</key>
+    <string>${USER}</string>
+    <key>GroupName</key>
+    <string>staff</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>

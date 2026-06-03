@@ -237,7 +237,7 @@ if [[ $RENDER_RC -ne 0 ]]; then
     exit 3
 fi
 
-section "Step 4: reload LaunchAgent plists (macOS only)"
+section "Step 4: reload launchd plists (macOS only)"
 if [[ "$SKIP_LAUNCHD" == "true" ]]; then
     say "  skipped (--skip-launchd)"
 elif ! command -v launchctl >/dev/null 2>&1; then
@@ -246,8 +246,12 @@ else
     USER_UID="${USER_UID:-$(id -u)}"
     PLIST_DIR="$CUSTOMER_HOME/launchd"
     LA_DIR="$HOME/Library/LaunchAgents"
+    LD_DIR="/Library/LaunchDaemons"
 
     # Bootout any of the existing per-bot plists so the new ones load clean.
+    # Check both the gui/<uid> domain (legacy LaunchAgent install) and the
+    # system domain (LaunchDaemon, post-#14). Either may be in flight on a
+    # mid-upgrade install.
     for legacy in \
         "com.${BOT_NAME}.discord-restart" \
         "com.${BOT_NAME}.discord-watchdog" \
@@ -258,22 +262,51 @@ else
         if launchctl print "gui/${USER_UID}/${legacy}" >/dev/null 2>&1; then
             run launchctl bootout "gui/${USER_UID}/${legacy}" || true
         fi
+        if sudo -n launchctl print "system/${legacy}" >/dev/null 2>&1; then
+            run sudo launchctl bootout "system/${legacy}" || true
+        fi
+        # Remove any stale agent symlink that points at the old per-customer
+        # plist - we're moving these to the daemon domain.
+        if [[ -L "$LA_DIR/${legacy}.plist" ]]; then
+            run rm -f "$LA_DIR/${legacy}.plist"
+        fi
     done
 
-    # Symlink new plists in and bootstrap them.
-    mkdir -p "$LA_DIR"
+    # Promote discord-restart + discord-watchdog to LaunchDaemons (chassis#14)
+    # so they survive unattended reboots without a GUI login.
+    say ""
+    say "  Promoting discord-restart + discord-watchdog to LaunchDaemons."
+    say "  This requires sudo. You may be prompted for your password."
+    if [[ "$DRY_RUN" != "true" ]]; then
+        sudo -v || {
+            say "  WARNING: sudo refused - daemons not installed; falling back to manual step."
+            say "          Re-run with sudo cached, or install manually:"
+            say "            sudo cp $PLIST_DIR/com.behalfbot.${BOT_NAME}-discord-{restart,watchdog}.plist /Library/LaunchDaemons/"
+            say "            sudo chown root:wheel /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-{restart,watchdog}.plist"
+            say "            sudo chmod 644       /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-{restart,watchdog}.plist"
+            say "            sudo launchctl bootstrap system /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-restart.plist"
+            say "            sudo launchctl bootstrap system /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-watchdog.plist"
+            SKIP_DAEMON_INSTALL=true
+        }
+    fi
+
     for plist in \
         "com.behalfbot.${BOT_NAME}-discord-restart.plist" \
         "com.behalfbot.${BOT_NAME}-discord-watchdog.plist"; do
         src="$PLIST_DIR/$plist"
-        dst="$LA_DIR/$plist"
+        dst="$LD_DIR/$plist"
         if [[ ! -f "$src" ]]; then
             say "  WARNING: rendered plist missing at $src - skipping"
             continue
         fi
-        run ln -sf "$src" "$dst"
-        run launchctl bootstrap "gui/${USER_UID}" "$dst" || true
-        say "  loaded $dst"
+        if [[ "${SKIP_DAEMON_INSTALL:-false}" == "true" ]]; then
+            continue
+        fi
+        run sudo cp "$src" "$dst"
+        run sudo chown root:wheel "$dst"
+        run sudo chmod 644 "$dst"
+        run sudo launchctl bootstrap system "$dst" || true
+        say "  loaded daemon: $dst"
     done
 fi
 

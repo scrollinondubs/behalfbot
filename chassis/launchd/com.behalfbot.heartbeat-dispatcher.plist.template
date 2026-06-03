@@ -4,6 +4,19 @@
 <!--
   com.behalfbot.heartbeat-dispatcher.plist - chassis-rendered template.
 
+  ============================================================================
+  DEPRECATED (2026-06-03, chassis#14): the dispatcher now runs inside the
+  chassis Docker container as a `while true; do dispatcher.sh; sleep 900;
+  done` loop (see docker-compose.yml). This host-side plist is retained
+  only for the pre-containerization V1 bare-metal install path, which no
+  longer ships as a supported layout.
+
+  Do NOT promote this template to a LaunchDaemon (chassis#14 would otherwise
+  cover it). If you find yourself reaching for this plist on a new install,
+  use the containerized path instead - it's the supported way to run the
+  dispatcher on macOS now. Slated for full removal in a follow-up cleanup.
+  ============================================================================
+
   Generated from chassis/launchd/com.behalfbot.heartbeat-dispatcher.plist.template
   by chassis/scripts/bootstrap-customer-scripts.sh. This is the macOS legacy
   bare-metal path for the dispatcher loop. Container installs do NOT use this
