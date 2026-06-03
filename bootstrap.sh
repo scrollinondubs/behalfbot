@@ -317,6 +317,23 @@ hydrate_mcp_json() {
     log "  - Write hydrated .mcp.json (gitignored)"
     log ""
     log "Reference: docs/mcp-setup.md"
+
+    # chassis#5 item 6: until the full hydration step lands, guarantee that
+    # ${CUSTOMER_HOME}/.mcp.json exists with an empty mcpServers object so the
+    # heartbeat dispatcher's `claude -p --mcp-config ...` invocation does not
+    # crash on a fresh or post-migration install. The dispatcher has a defense-
+    # in-depth absence guard too; this ensures the canonical path always exists.
+    local mcp_file="$CUSTOMER_HOME/.mcp.json"
+    if [[ ! -f "$mcp_file" ]]; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log "  [dry-run] would create $mcp_file with empty mcpServers"
+        else
+            printf '%s\n' '{"mcpServers": {}}' > "$mcp_file"
+            log "  ✓ wrote empty $mcp_file (placeholder until hydration TODO lands)"
+        fi
+    else
+        log "  $mcp_file exists, leaving untouched"
+    fi
 }
 
 hydrate_claude_md() {
