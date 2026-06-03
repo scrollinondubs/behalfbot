@@ -150,3 +150,96 @@ After Step 5 completes:
 - **OpenClaw plugins:** the chassis is OpenClaw-compatible - any plugin from https://clawhub.ai drops in cleanly
 
 If you get stuck, the managed-install option at https://behalf.bot has a maintainer drive the steps over SSH. Hand them your install repo, they finish the bootstrap, you take ownership at signoff.
+
+---
+
+## Migrating an existing install to a re-anchored chassis
+
+If you already have a running install and need to re-anchor the chassis subtree (e.g. the upstream chassis repo was renamed or moved), the canonical sequence is:
+
+```bash
+# 1. Tar up the old clone as a complete backup.
+tar czf ~/install-backup-$(date +%Y%m%d).tgz -C $HOME <your-install-name>
+
+# 2. Move the old clone aside (do NOT delete it yet - the restore step needs it).
+mv ~/<your-install-name> ~/<your-install-name>.bak
+
+# 3. Re-clone your install repo (the one that vendors the chassis subtree).
+git clone https://github.com/<your-namespace>/<your-install-name>.git
+cd ~/<your-install-name>
+
+# 4. Re-add the chassis subtree at the new remote URL if it changed.
+#    Skip this step if only your install repo moved and the chassis remote is the same.
+git subtree pull --prefix=chassis https://github.com/scrollinondubs/behalfbot.git main --squash
+
+# 5. Restore customer files from the backup using the helper script. It uses
+#    an INVERSE allowlist so anything the new chassis subtree provides is
+#    preserved, and everything else (.env, .mcp.json, scheduled-tasks/,
+#    skills/, plugins/, scripts/, data/, state/, briefings/, memory/, etc.)
+#    is restored from the backup. Always start with --dry-run.
+bash chassis/scripts/migrate-from-old-clone.sh \
+    --backup-dir ~/<your-install-name>.bak \
+    --target-dir ~/<your-install-name> \
+    --dry-run
+
+# Review the dry-run output, then run for real:
+bash chassis/scripts/migrate-from-old-clone.sh \
+    --backup-dir ~/<your-install-name>.bak \
+    --target-dir ~/<your-install-name>
+
+# 6. Re-run bootstrap.sh so customer-side scripts (launchd plists, watchdogs)
+#    pick up the new chassis paths.
+CHASSIS_HOME=$(pwd) bash bootstrap.sh
+
+# 7. Smoke-test the dispatcher in dry-run before re-enabling the launchd
+#    unit:
+DRY_RUN=true bash chassis/scheduled-tasks/heartbeat-dispatcher.sh
+```
+
+Once the first dispatcher tick after re-enable lands cleanly in your ops channel, delete the `.bak` backup. The migration script is idempotent - re-running it after a partial restore is safe.
+
+---
+
+## Discord channel access + `requireMention` toggle
+
+The Discord plugin at `~/.claude/channels/discord/access.json` controls which channels the bot reads from and whether it ignores messages that do not @-tag it. The chassis populates this file automatically during `bootstrap.sh` via `chassis/scripts/bootstrap-discord-access.sh` using the `DISCORD_*_CHANNEL_ID` env vars + `INSTALLER_DISCORD_USER_ID`. Default per-channel behavior:
+
+| Channel key (env var) | `requireMention` |
+|---|---|
+| `DISCORD_PRIMARY_CHANNEL_ID` | `false` - natural conversation, no @-tag needed |
+| `DISCORD_ALERTS_CHANNEL_ID` | `true` |
+| `DISCORD_OPS_CHANNEL_ID` | `true` |
+| `DISCORD_BRIEFINGS_CHANNEL_ID` | `true` |
+| `DISCORD_LEADS_CHANNEL_ID` | `true` |
+| `DISCORD_SOCIAL_CHANNEL_ID` | `true` |
+
+The primary channel intentionally defaults to `requireMention: false` because that is where the installer expects to talk to the bot conversationally. Every other channel defaults to `true` so the bot stays quiet unless explicitly addressed - the safer choice for shared, multi-participant channels.
+
+If you want to flip a channel between the two modes after bootstrap, edit `~/.claude/channels/discord/access.json` directly or use the plugin's slash command from a running Claude Code session:
+
+```
+/discord:access group add <channel_id> --no-mention --allow <user_id>   # requireMention=false
+/discord:access group add <channel_id> --mention    --allow <user_id>   # requireMention=true
+```
+
+After editing, restart any long-running `claude --channels` tmux session so it picks up the new state.
+
+---
+
+## macOS host prereq: Full Disk Access
+
+**macOS installs only.** Linux + Windows installs can skip this section.
+
+The chassis dispatcher runs inside a long-lived `tmux` session and reads from `$CUSTOMER_HOME` (under your home dir) on every tick. Recent macOS releases prompt for Full Disk Access the first time a binary in a tmux pane reads from a path the system considers protected. The prompt fires on every fresh tmux session, which can interrupt the install flow into a permission-popup loop.
+
+Fix it once, before you start the install:
+
+1. Open **System Settings -> Privacy & Security -> Full Disk Access**.
+2. Click the **+** button and grant Full Disk Access to:
+   - **Terminal.app** (or iTerm2 / Ghostty / whichever terminal you actually use)
+   - **tmux** - browse to the binary directly. Homebrew on Apple Silicon ships it at `/opt/homebrew/bin/tmux`; on Intel Macs it's `/usr/local/bin/tmux`. Use `which tmux` to confirm the path on your host.
+3. Restart the terminal app so the change takes effect.
+
+Granting Full Disk Access to your terminal + tmux suppresses the popup loop for the entire install flow. Without these grants, the install still proceeds but the popups appear every time `bootstrap.sh`, `tmux`, or the dispatcher reads a config file under `~/.behalfbot/` or `~/.claude/`.
+
+This is a macOS-only prereq. The chassis itself does not require Full Disk Access on any other OS.

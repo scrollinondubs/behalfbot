@@ -539,15 +539,30 @@ invoke_claude() {
     mkdir -p "$telemetry_dir"
     start_ts=$(date +%s)
 
+    # chassis#5 item 6: guard against a missing .mcp.json. If the customer file
+    # is absent (post-migration, fresh install before bootstrap finished, etc.),
+    # passing --mcp-config <missing-path> crashes `claude -p` immediately and
+    # the heartbeat fails silently. Drop the flag when the file isn't there;
+    # `claude -p` falls back to its default MCP config search (~/.claude/...).
+    # bootstrap.sh writes an empty-{} .mcp.json so the file should exist on a
+    # clean install - this is defense in depth for the partial-restore case.
+    local mcp_config_path="$CUSTOMER_HOME/.mcp.json"
+    local mcp_flag=""
+    if [[ -f "$mcp_config_path" ]]; then
+        mcp_flag="--mcp-config $mcp_config_path"
+    else
+        log "WARN $heartbeat_name - $mcp_config_path missing, invoking claude without --mcp-config"
+    fi
+
     $TIMEOUT_CMD 1200 /bin/zsh -c '
         cd "$7" && echo "$1" | claude -p \
             --dangerously-skip-permissions \
             --model "$2" \
-            --mcp-config "$3/.mcp.json" \
+            ${=3} \
             --max-budget-usd "$4" \
             --output-format json \
             > "$5" 2>> "$6"
-    ' -- "$claude_input" "$model" "$CUSTOMER_HOME" "$budget" "$tmp_json" "$LOG_FILE" "$cwd"
+    ' -- "$claude_input" "$model" "$mcp_flag" "$budget" "$tmp_json" "$LOG_FILE" "$cwd"
     exit_code=$?
 
     end_ts=$(date +%s)
@@ -702,16 +717,25 @@ run_output_validator() {
     local validator_out="$LOG_DIR/.validator-out-$$.json"
     local validator_result
 
+    # Mirror chassis#5 item 6 mcp-config absence guard from invoke_claude. If
+    # the customer .mcp.json is missing, drop the flag rather than crashing the
+    # validator subprocess.
+    local mcp_config_path="$CUSTOMER_HOME/.mcp.json"
+    local mcp_flag=""
+    if [[ -f "$mcp_config_path" ]]; then
+        mcp_flag="--mcp-config $mcp_config_path"
+    fi
+
     # Run haiku validator; fail-open if it errors
     $TIMEOUT_CMD 120 /bin/zsh -c '
         echo "$1" | claude -p \
             --dangerously-skip-permissions \
             --model haiku \
-            --mcp-config "$2/.mcp.json" \
+            ${=2} \
             --max-budget-usd 0.05 \
             --output-format json \
             > "$3" 2>> "$4"
-    ' -- "$validator_input" "$CUSTOMER_HOME" "$validator_out" "$LOG_FILE" || {
+    ' -- "$validator_input" "$mcp_flag" "$validator_out" "$LOG_FILE" || {
         log "VALIDATOR $name — haiku call failed or timed out, fail-open"
         rm -f "$validator_out"
         return 0

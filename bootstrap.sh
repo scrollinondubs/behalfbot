@@ -317,6 +317,23 @@ hydrate_mcp_json() {
     log "  - Write hydrated .mcp.json (gitignored)"
     log ""
     log "Reference: docs/mcp-setup.md"
+
+    # chassis#5 item 6: until the full hydration step lands, guarantee that
+    # ${CUSTOMER_HOME}/.mcp.json exists with an empty mcpServers object so the
+    # heartbeat dispatcher's `claude -p --mcp-config ...` invocation does not
+    # crash on a fresh or post-migration install. The dispatcher has a defense-
+    # in-depth absence guard too; this ensures the canonical path always exists.
+    local mcp_file="$CUSTOMER_HOME/.mcp.json"
+    if [[ ! -f "$mcp_file" ]]; then
+        if [[ "$DRY_RUN" == "true" ]]; then
+            log "  [dry-run] would create $mcp_file with empty mcpServers"
+        else
+            printf '%s\n' '{"mcpServers": {}}' > "$mcp_file"
+            log "  ✓ wrote empty $mcp_file (placeholder until hydration TODO lands)"
+        fi
+    else
+        log "  $mcp_file exists, leaving untouched"
+    fi
 }
 
 hydrate_claude_md() {
@@ -396,6 +413,72 @@ render_customer_scripts() {
         return 1
     fi
     log "  ✓ customer-side scripts + plists rendered"
+}
+
+populate_discord_access() {
+    # chassis#5 item 1: auto-populate the Discord plugin's access.json with the
+    # install channel ID(s) + principal user_id at install time so the bot can
+    # respond in its channels without a manual `/discord:access group add ...`
+    # step. Sourced from .env vars (DISCORD_*_CHANNEL_ID + INSTALLER_DISCORD_USER_ID).
+    #
+    # No-ops cleanly if either INSTALLER_DISCORD_USER_ID or all the channel
+    # vars are unset (installer's homework not done yet) - the script prints a
+    # warning and returns 0 so bootstrap can continue.
+    step "8b/14" "Populate Discord channel access (chassis#5 item 1)"
+
+    local helper="$CHASSIS_HOME/chassis/scripts/bootstrap-discord-access.sh"
+    if [[ ! -x "$helper" ]]; then
+        log "  WARN: $helper missing or not executable - skipping discord-access bootstrap"
+        return 0
+    fi
+
+    # Source .env so the channel + user_id vars are in scope.
+    if [[ -f "$CUSTOMER_HOME/.env" ]]; then
+        # shellcheck disable=SC1091
+        set -a
+        source "$CUSTOMER_HOME/.env"
+        set +a
+    fi
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run: $helper --dry-run"
+        bash "$helper" --dry-run 2>&1 | tee -a "$TRANSCRIPT" || true
+        return 0
+    fi
+
+    if ! bash "$helper" 2>&1 | tee -a "$TRANSCRIPT"; then
+        log "  WARN: bootstrap-discord-access.sh exited non-zero (channels may need manual allowlist)"
+    fi
+}
+
+preflight_bot_identity() {
+    # chassis#5 item 3: pre-flight check that the bot's outbound webhook
+    # identity (INSTANCE_NAME + per-channel webhook URLs) matches the
+    # configured identity.assistant.name in chassis.config.yaml BEFORE the
+    # first heartbeat fires. Without this, Toby's first morning briefing
+    # posted under the chassis maintainer's stale bot persona ("Captain
+    # Hook") instead of Asimov's persona.
+    step "8c/14" "Pre-flight: bot identity matches webhooks (chassis#5 item 3)"
+
+    local helper="$CHASSIS_HOME/chassis/scripts/preflight-bot-identity.sh"
+    if [[ ! -x "$helper" ]]; then
+        log "  WARN: $helper missing or not executable - skipping pre-flight"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run: $helper"
+        return 0
+    fi
+
+    if ! CUSTOMER_HOME="$CUSTOMER_HOME" CHASSIS_HOME="$CHASSIS_HOME" \
+        bash "$helper" 2>&1 | tee -a "$TRANSCRIPT"; then
+        log ""
+        log "  FAIL: bot-identity pre-flight blocked bootstrap completion."
+        log "  Resolve the items above (likely: set INSTANCE_NAME in .env,"
+        log "  configure the briefings/ops webhook URLs), then re-run bootstrap.sh."
+        return 1
+    fi
 }
 
 activate_plugins() {
@@ -572,6 +655,8 @@ main() {
     hydrate_claude_md
     initialize_heartbeats
     render_customer_scripts
+    populate_discord_access
+    preflight_bot_identity
     activate_plugins
     seed_memory
     install_os_deps
