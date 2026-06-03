@@ -197,3 +197,29 @@ DRY_RUN=true bash chassis/scheduled-tasks/heartbeat-dispatcher.sh
 ```
 
 Once the first dispatcher tick after re-enable lands cleanly in your ops channel, delete the `.bak` backup. The migration script is idempotent - re-running it after a partial restore is safe.
+
+---
+
+## Discord channel access + `requireMention` toggle
+
+The Discord plugin at `~/.claude/channels/discord/access.json` controls which channels the bot reads from and whether it ignores messages that do not @-tag it. The chassis populates this file automatically during `bootstrap.sh` via `chassis/scripts/bootstrap-discord-access.sh` using the `DISCORD_*_CHANNEL_ID` env vars + `INSTALLER_DISCORD_USER_ID`. Default per-channel behavior:
+
+| Channel key (env var) | `requireMention` |
+|---|---|
+| `DISCORD_PRIMARY_CHANNEL_ID` | `false` - natural conversation, no @-tag needed |
+| `DISCORD_ALERTS_CHANNEL_ID` | `true` |
+| `DISCORD_OPS_CHANNEL_ID` | `true` |
+| `DISCORD_BRIEFINGS_CHANNEL_ID` | `true` |
+| `DISCORD_LEADS_CHANNEL_ID` | `true` |
+| `DISCORD_SOCIAL_CHANNEL_ID` | `true` |
+
+The primary channel intentionally defaults to `requireMention: false` because that is where the installer expects to talk to the bot conversationally. Every other channel defaults to `true` so the bot stays quiet unless explicitly addressed - the safer choice for shared, multi-participant channels.
+
+If you want to flip a channel between the two modes after bootstrap, edit `~/.claude/channels/discord/access.json` directly or use the plugin's slash command from a running Claude Code session:
+
+```
+/discord:access group add <channel_id> --no-mention --allow <user_id>   # requireMention=false
+/discord:access group add <channel_id> --mention    --allow <user_id>   # requireMention=true
+```
+
+After editing, restart any long-running `claude --channels` tmux session so it picks up the new state.
