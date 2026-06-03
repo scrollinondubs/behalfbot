@@ -105,6 +105,22 @@ Reference install (scrollinondubs/new-jaxity, post-2026-05-25 cutover):
 
 Future state: if/when the chassis runtime grows native "host-resident plugin" support (RPC bridge, container-side stubs that delegate to a host helper daemon), the dating plugin can move back under the container dispatcher. Until then, this is the supported pattern for installs that want dating.
 
+### Trade-off: dating swipes run as user LaunchAgents (not LaunchDaemons)
+
+Most chassis-shipped host plists were promoted to **LaunchDaemons** in chassis#14 so they survive an unattended Mac reboot (no GUI login required to boot the job). Dating-swipe plists are the exception — they stay as user LaunchAgents in `~/Library/LaunchAgents/` because:
+
+- The Android emulator window is an Aqua-session resource — qemu/AndroidStudio needs `WindowServer` to render the AVD. Without a logged-in GUI session, the emulator binary won't start.
+- Playwright Chromium on macOS likewise needs an Aqua session even in `headless: true` mode (Chromium's launcher path on darwin assumes a `WindowServer` connection during init).
+
+Consequence: **if your install Mac reboots while you're away and you don't have auto-login enabled, the day's missed swipe slots are lost — they don't replay.** Each slot fires once at its scheduled time; if nothing was loaded to fire it, the slot just doesn't happen.
+
+Your two mitigations:
+
+1. **Keep the Mac logged in.** Don't reboot when you're not present, and don't let the OS auto-reboot for updates (System Settings → General → Software Update → Automatic Updates → off for "Restart automatically").
+2. **Enable auto-login.** System Settings → Users & Groups → Automatic login → pick your user. The Mac boots straight into Aqua without password entry, so the LaunchAgent loads on reboot. The security trade-off is that anyone with physical access skips the login prompt. Your call.
+
+See `docs/launchd-domains.md` for the broader LaunchDaemon vs LaunchAgent decision rule and the chassis#14 incident context.
+
 ## Architecture
 
 Three layers of separation:

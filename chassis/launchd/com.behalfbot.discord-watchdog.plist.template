@@ -7,17 +7,34 @@
   Generated from chassis/launchd/com.behalfbot.discord-watchdog.plist.template
   by chassis/scripts/bootstrap-customer-scripts.sh.
 
+  DOMAIN: LaunchDaemon (system-level, /Library/LaunchDaemons/).
+  Promoted from user LaunchAgent in #14 so it survives unattended reboots
+  on installer Macs that don't auto-login. This job only `docker exec`s
+  the chassis container - no GUI/Aqua session needed. See chassis docs:
+  "LaunchDaemon vs LaunchAgent - which to use" for the decision rule.
+
   Template variables - same set as the sibling restart plist (see comment
   block in com.behalfbot.discord-restart.plist.template).
 
   Cadence: every 30 minutes (StartInterval 1800). Restarts only fire when
   the watchdog actually detects a dead session or an auth-failure pattern
   in the tmux pane buffer - the wakeup itself is cheap, the bot stays up.
+
+  Daemon-specific notes:
+    - UserName/GroupName pin execution to the installer's user, NOT root.
+      Without these, the daemon runs as root and breaks file-perm assumptions
+      in the watchdog script (writes logs under ${CUSTOMER_HOME}, talks to
+      the user's Docker socket).
+    - All paths must be absolute - no `~` / `$HOME` expansion shortcuts.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.behalfbot.${BOT_NAME}-discord-watchdog</string>
+    <key>UserName</key>
+    <string>${USER}</string>
+    <key>GroupName</key>
+    <string>staff</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>

@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
-# bootstrap-customer-scripts.sh - render per-customer scripts and LaunchAgent
-# plists from chassis-shipped templates into $CUSTOMER_HOME.
+# bootstrap-customer-scripts.sh - render per-customer scripts and launchd
+# plists from chassis-shipped templates into $CUSTOMER_HOME, then (optionally)
+# install them into the right launchd domain.
+#
+# Per chassis#14, chassis-shipped host plists split into two domains:
+#   - LaunchDaemon (/Library/LaunchDaemons/, system-level)  - survives
+#     unattended reboot, no GUI/Aqua session needed. Requires sudo to install.
+#     Default for jobs that only docker-exec / hit network / run headless.
+#   - LaunchAgent  (~/Library/LaunchAgents/, user-level)    - needs an Aqua
+#     session, dies silently across an unattended reboot. Use only for jobs
+#     that genuinely touch the display (Android emulator, Playwright Chromium).
 #
 # Invoked by:
 #   - bootstrap.sh (first install) - scaffolds the script set
@@ -30,10 +39,15 @@
 #       bash chassis/scripts/bootstrap-customer-scripts.sh [--dry-run]
 #
 # Flags:
-#   --dry-run   show what would be rendered, write nothing.
-#   --plists    also render the LaunchAgent plists into $CUSTOMER_HOME/launchd/.
-#               (Default: scripts only - plists are macOS-specific and require
-#               an explicit follow-up `launchctl bootstrap` step.)
+#   --dry-run    show what would be rendered, write nothing.
+#   --plists     also render the launchd plists into $CUSTOMER_HOME/launchd/.
+#                (Default: scripts only - plists are macOS-specific and require
+#                an explicit follow-up activation step, see --activate-plists.)
+#   --activate-plists
+#                after rendering, actually install the plists into the right
+#                launchd domain (LaunchDaemons or LaunchAgents) and bootstrap
+#                them. This will prompt for sudo for daemon-domain plists.
+#                Implies --plists. No-op on non-macOS hosts.
 
 set -euo pipefail
 
@@ -44,11 +58,13 @@ source "$SCRIPT_DIR/_env.sh"
 
 DRY_RUN="${DRY_RUN:-false}"
 RENDER_PLISTS=false
+ACTIVATE_PLISTS=false
 for arg in "$@"; do
     case "$arg" in
-        --dry-run)  DRY_RUN=true ;;
-        --plists)   RENDER_PLISTS=true ;;
-        *)          echo "unknown arg: $arg" >&2; exit 2 ;;
+        --dry-run)          DRY_RUN=true ;;
+        --plists)           RENDER_PLISTS=true ;;
+        --activate-plists)  RENDER_PLISTS=true; ACTIVATE_PLISTS=true ;;
+        *)                  echo "unknown arg: $arg" >&2; exit 2 ;;
     esac
 done
 
@@ -137,8 +153,122 @@ if [[ "$RENDER_PLISTS" == "true" ]]; then
         "$OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-restart.plist"
     render_template "$LAUNCHD_DIR/com.behalfbot.discord-watchdog.plist.template" \
         "$OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-watchdog.plist"
+    # The heartbeat-dispatcher plist is deprecated as of chassis#14 (the
+    # dispatcher now runs inside the chassis container). Still rendered for
+    # the legacy bare-metal V1 install path; do NOT activate it as a daemon.
     render_template "$LAUNCHD_DIR/com.behalfbot.heartbeat-dispatcher.plist.template" \
         "$OUT_PLISTS/com.behalfbot.heartbeat-dispatcher.plist"
+fi
+
+# install_plist <rendered-plist-path> <agent|daemon>
+# Install a rendered plist into the correct launchd domain and bootstrap it.
+#   agent:   ~/Library/LaunchAgents/, gui/<uid> domain, no sudo.
+#   daemon:  /Library/LaunchDaemons/, system domain, requires sudo.
+# Re-runs are idempotent: bootouts any existing job at the same label first,
+# then re-bootstraps the fresh copy.
+install_plist() {
+    local src="$1" type="$2"
+    if [[ ! -f "$src" ]]; then
+        echo "  WARN: plist not found, skipping: $src" >&2
+        return 0
+    fi
+
+    local label
+    label="$(basename "$src" .plist)"
+
+    case "$type" in
+        agent)
+            local la_dir="$HOME/Library/LaunchAgents"
+            local dst
+            dst="$la_dir/$(basename "$src")"
+            if [[ "$DRY_RUN" == "true" ]]; then
+                echo "  [dry-run] install agent: $src -> $dst"
+                echo "  [dry-run] launchctl bootout gui/${USER_UID}/${label} (if loaded)"
+                echo "  [dry-run] launchctl bootstrap gui/${USER_UID} $dst"
+                return 0
+            fi
+            mkdir -p "$la_dir"
+            ln -sf "$src" "$dst"
+            if launchctl print "gui/${USER_UID}/${label}" >/dev/null 2>&1; then
+                launchctl bootout "gui/${USER_UID}/${label}" || true
+            fi
+            launchctl bootstrap "gui/${USER_UID}" "$dst" || true
+            echo "  loaded agent: $dst"
+            ;;
+        daemon)
+            local ld_dir="/Library/LaunchDaemons"
+            local dst
+            dst="$ld_dir/$(basename "$src")"
+            if [[ "$DRY_RUN" == "true" ]]; then
+                echo "  [dry-run] install daemon: sudo cp $src $dst"
+                echo "  [dry-run] sudo chown root:wheel $dst && sudo chmod 644 $dst"
+                echo "  [dry-run] sudo launchctl bootout system/${label} (if loaded)"
+                echo "  [dry-run] sudo launchctl bootstrap system $dst"
+                return 0
+            fi
+            sudo cp "$src" "$dst"
+            sudo chown root:wheel "$dst"
+            sudo chmod 644 "$dst"
+            if sudo launchctl print "system/${label}" >/dev/null 2>&1; then
+                sudo launchctl bootout "system/${label}" || true
+            fi
+            sudo launchctl bootstrap system "$dst" || true
+            echo "  loaded daemon: $dst"
+            ;;
+        *)
+            echo "  ERROR: install_plist: unknown type '$type' (expected agent|daemon)" >&2
+            return 2
+            ;;
+    esac
+}
+
+# DOMAIN MAP for chassis-shipped host plists. Update this list when adding
+# new chassis-side plists. See docs section "LaunchDaemon vs LaunchAgent -
+# which to use" for the decision rule.
+#
+# Format: "<plist-basename> <agent|daemon>". Plists not listed here are
+# rendered but not auto-installed; the operator activates them manually.
+CHASSIS_PLIST_DOMAINS=(
+    "com.behalfbot.${BOT_NAME}-discord-restart.plist daemon"
+    "com.behalfbot.${BOT_NAME}-discord-watchdog.plist daemon"
+    # heartbeat-dispatcher.plist deliberately NOT listed - deprecated per #14.
+)
+
+if [[ "$ACTIVATE_PLISTS" == "true" ]]; then
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        echo "  --activate-plists requested but host is not macOS; skipping."
+    else
+        # Pre-flight sudo prompt so the operator isn't surprised mid-loop.
+        daemon_count=0
+        for entry in "${CHASSIS_PLIST_DOMAINS[@]}"; do
+            # shellcheck disable=SC2086
+            set -- $entry
+            [[ "${2:-}" == "daemon" ]] && daemon_count=$((daemon_count + 1))
+        done
+        if [[ "$daemon_count" -gt 0 && "$DRY_RUN" != "true" ]]; then
+            echo ""
+            echo "About to install $daemon_count LaunchDaemon(s) into /Library/LaunchDaemons/."
+            echo "This requires sudo. You may be prompted for your password now."
+            # Touch sudo once up front so the rest of the loop runs without
+            # additional prompts (within sudo's default timestamp window).
+            sudo -v || {
+                echo "  sudo refused; skipping daemon installation." >&2
+                ACTIVATE_PLISTS=false
+            }
+        fi
+    fi
+fi
+
+if [[ "$ACTIVATE_PLISTS" == "true" && "$(uname -s)" == "Darwin" ]]; then
+    echo ""
+    echo "Activating chassis-shipped host plists..."
+    for entry in "${CHASSIS_PLIST_DOMAINS[@]}"; do
+        # shellcheck disable=SC2086
+        set -- $entry
+        plist_name="$1"
+        plist_type="${2:-agent}"
+        install_plist "$OUT_PLISTS/$plist_name" "$plist_type"
+    done
 fi
 
 if [[ "$DRY_RUN" != "true" ]]; then
@@ -146,11 +276,23 @@ if [[ "$DRY_RUN" != "true" ]]; then
     echo "Customer-side scripts rendered into: $OUT_SCRIPTS"
     if [[ "$RENDER_PLISTS" == "true" ]]; then
         echo "Customer-side plists rendered into:  $OUT_PLISTS"
-        echo ""
-        echo "Next: link the plists into ~/Library/LaunchAgents and load them:"
-        echo "  ln -sf $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-restart.plist ~/Library/LaunchAgents/"
-        echo "  ln -sf $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-watchdog.plist ~/Library/LaunchAgents/"
-        echo "  launchctl bootstrap gui/${USER_UID} ~/Library/LaunchAgents/com.behalfbot.${BOT_NAME}-discord-restart.plist"
-        echo "  launchctl bootstrap gui/${USER_UID} ~/Library/LaunchAgents/com.behalfbot.${BOT_NAME}-discord-watchdog.plist"
+        if [[ "$ACTIVATE_PLISTS" != "true" ]]; then
+            echo ""
+            echo "Next: activate the plists into the right launchd domain."
+            echo "      (chassis#14: discord-restart + discord-watchdog are now"
+            echo "       LaunchDaemons so they survive unattended reboots.)"
+            echo ""
+            echo "      Easiest: re-run this script with --activate-plists, which"
+            echo "      handles the sudo-cp-bootstrap dance for daemons and the"
+            echo "      symlink-bootstrap dance for agents."
+            echo ""
+            echo "      Or manually, for each daemon:"
+            echo "        sudo cp $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-restart.plist  /Library/LaunchDaemons/"
+            echo "        sudo cp $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-watchdog.plist /Library/LaunchDaemons/"
+            echo "        sudo chown root:wheel /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-{restart,watchdog}.plist"
+            echo "        sudo chmod 644       /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-{restart,watchdog}.plist"
+            echo "        sudo launchctl bootstrap system /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-restart.plist"
+            echo "        sudo launchctl bootstrap system /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-watchdog.plist"
+        fi
     fi
 fi
