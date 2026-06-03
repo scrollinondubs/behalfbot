@@ -545,13 +545,13 @@ invoke_claude() {
     # the heartbeat fails silently. Drop the flag when the file isn't there;
     # `claude -p` falls back to its default MCP config search (~/.claude/...).
     # bootstrap.sh writes an empty-{} .mcp.json so the file should exist on a
-    # clean install — this is defense in depth for the partial-restore case.
+    # clean install - this is defense in depth for the partial-restore case.
     local mcp_config_path="$CUSTOMER_HOME/.mcp.json"
     local mcp_flag=""
     if [[ -f "$mcp_config_path" ]]; then
         mcp_flag="--mcp-config $mcp_config_path"
     else
-        log "WARN $heartbeat_name — $mcp_config_path missing, invoking claude without --mcp-config"
+        log "WARN $heartbeat_name - $mcp_config_path missing, invoking claude without --mcp-config"
     fi
 
     $TIMEOUT_CMD 1200 /bin/zsh -c '
