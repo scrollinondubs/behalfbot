@@ -150,3 +150,50 @@ After Step 5 completes:
 - **OpenClaw plugins:** the chassis is OpenClaw-compatible - any plugin from https://clawhub.ai drops in cleanly
 
 If you get stuck, the managed-install option at https://behalf.bot has a maintainer drive the steps over SSH. Hand them your install repo, they finish the bootstrap, you take ownership at signoff.
+
+---
+
+## Migrating an existing install to a re-anchored chassis
+
+If you already have a running install and need to re-anchor the chassis subtree (e.g. the upstream chassis repo was renamed or moved), the canonical sequence is:
+
+```bash
+# 1. Tar up the old clone as a complete backup.
+tar czf ~/install-backup-$(date +%Y%m%d).tgz -C $HOME <your-install-name>
+
+# 2. Move the old clone aside (do NOT delete it yet - the restore step needs it).
+mv ~/<your-install-name> ~/<your-install-name>.bak
+
+# 3. Re-clone your install repo (the one that vendors the chassis subtree).
+git clone https://github.com/<your-namespace>/<your-install-name>.git
+cd ~/<your-install-name>
+
+# 4. Re-add the chassis subtree at the new remote URL if it changed.
+#    Skip this step if only your install repo moved and the chassis remote is the same.
+git subtree pull --prefix=chassis https://github.com/scrollinondubs/behalfbot.git main --squash
+
+# 5. Restore customer files from the backup using the helper script. It uses
+#    an INVERSE allowlist so anything the new chassis subtree provides is
+#    preserved, and everything else (.env, .mcp.json, scheduled-tasks/,
+#    skills/, plugins/, scripts/, data/, state/, briefings/, memory/, etc.)
+#    is restored from the backup. Always start with --dry-run.
+bash chassis/scripts/migrate-from-old-clone.sh \
+    --backup-dir ~/<your-install-name>.bak \
+    --target-dir ~/<your-install-name> \
+    --dry-run
+
+# Review the dry-run output, then run for real:
+bash chassis/scripts/migrate-from-old-clone.sh \
+    --backup-dir ~/<your-install-name>.bak \
+    --target-dir ~/<your-install-name>
+
+# 6. Re-run bootstrap.sh so customer-side scripts (launchd plists, watchdogs)
+#    pick up the new chassis paths.
+CHASSIS_HOME=$(pwd) bash bootstrap.sh
+
+# 7. Smoke-test the dispatcher in dry-run before re-enabling the launchd
+#    unit:
+DRY_RUN=true bash chassis/scheduled-tasks/heartbeat-dispatcher.sh
+```
+
+Once the first dispatcher tick after re-enable lands cleanly in your ops channel, delete the `.bak` backup. The migration script is idempotent - re-running it after a partial restore is safe.
