@@ -39,11 +39,23 @@ identity:
     #   "<agent-name> - <principal-full-name>'s AI assistant"
 
 # Discord channel mapping. Per-install Discord server topology. Channel IDs
-# are runtime-only; never in committed files. Bootstrap reads from .env vars
-# named DISCORD_PRIMARY_CHANNEL_ID, DISCORD_ALERTS_CHANNEL_ID,
-# DISCORD_OPS_CHANNEL_ID. Labels are user-facing strings for prompt prose
-# (e.g. "#<primary>", "#installer-devops"); they CAN live here since they're
-# non-secret display strings.
+# are runtime-only; never in committed files. Bootstrap reads from .env vars:
+#   DISCORD_PRIMARY_CHANNEL_ID    - daily-driver conversation channel. Marked
+#                                   `primary` in access.json (requireMention=false)
+#                                   per chassis#5 item 2 so the installer can talk
+#                                   to the bot without @-tagging it every time.
+#   DISCORD_ALERTS_CHANNEL_ID     - infra alerts
+#   DISCORD_OPS_CHANNEL_ID        - ops signals
+#   DISCORD_BRIEFINGS_CHANNEL_ID  - daily briefing target (optional)
+#   DISCORD_LEADS_CHANNEL_ID      - lead signals (optional)
+#   DISCORD_SOCIAL_CHANNEL_ID     - dating/social surface (optional)
+# Plus:
+#   INSTALLER_DISCORD_USER_ID     - principal's Discord user_id (snowflake).
+#                                   Allowlisted on every channel populated above.
+#                                   Required by chassis/scripts/bootstrap-discord-access.sh.
+#
+# Labels are user-facing strings for prompt prose (e.g. "#<primary>",
+# "#installer-devops"); they CAN live here since they're non-secret display strings.
 discord_channels:
   primary_label: <#primary-channel>         # E.g. "#<primary>". Daily-driver conversation channel.
   alerts_label: <#alerts-channel>           # E.g. "#installer-devops". Infrastructure alerts.

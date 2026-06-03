@@ -415,6 +415,42 @@ render_customer_scripts() {
     log "  ✓ customer-side scripts + plists rendered"
 }
 
+populate_discord_access() {
+    # chassis#5 item 1: auto-populate the Discord plugin's access.json with the
+    # install channel ID(s) + principal user_id at install time so the bot can
+    # respond in its channels without a manual `/discord:access group add ...`
+    # step. Sourced from .env vars (DISCORD_*_CHANNEL_ID + INSTALLER_DISCORD_USER_ID).
+    #
+    # No-ops cleanly if either INSTALLER_DISCORD_USER_ID or all the channel
+    # vars are unset (installer's homework not done yet) - the script prints a
+    # warning and returns 0 so bootstrap can continue.
+    step "8b/14" "Populate Discord channel access (chassis#5 item 1)"
+
+    local helper="$CHASSIS_HOME/chassis/scripts/bootstrap-discord-access.sh"
+    if [[ ! -x "$helper" ]]; then
+        log "  WARN: $helper missing or not executable - skipping discord-access bootstrap"
+        return 0
+    fi
+
+    # Source .env so the channel + user_id vars are in scope.
+    if [[ -f "$CUSTOMER_HOME/.env" ]]; then
+        # shellcheck disable=SC1091
+        set -a
+        source "$CUSTOMER_HOME/.env"
+        set +a
+    fi
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run: $helper --dry-run"
+        bash "$helper" --dry-run 2>&1 | tee -a "$TRANSCRIPT" || true
+        return 0
+    fi
+
+    if ! bash "$helper" 2>&1 | tee -a "$TRANSCRIPT"; then
+        log "  WARN: bootstrap-discord-access.sh exited non-zero (channels may need manual allowlist)"
+    fi
+}
+
 activate_plugins() {
     step "9/14" "Activate enabled plugins"
 
@@ -589,6 +625,7 @@ main() {
     hydrate_claude_md
     initialize_heartbeats
     render_customer_scripts
+    populate_discord_access
     activate_plugins
     seed_memory
     install_os_deps
