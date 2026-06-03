@@ -223,3 +223,23 @@ If you want to flip a channel between the two modes after bootstrap, edit `~/.cl
 ```
 
 After editing, restart any long-running `claude --channels` tmux session so it picks up the new state.
+
+---
+
+## macOS host prereq: Full Disk Access
+
+**macOS installs only.** Linux + Windows installs can skip this section.
+
+The chassis dispatcher runs inside a long-lived `tmux` session and reads from `$CUSTOMER_HOME` (under your home dir) on every tick. Recent macOS releases prompt for Full Disk Access the first time a binary in a tmux pane reads from a path the system considers protected. The prompt fires on every fresh tmux session, which can interrupt the install flow into a permission-popup loop.
+
+Fix it once, before you start the install:
+
+1. Open **System Settings -> Privacy & Security -> Full Disk Access**.
+2. Click the **+** button and grant Full Disk Access to:
+   - **Terminal.app** (or iTerm2 / Ghostty / whichever terminal you actually use)
+   - **tmux** - browse to the binary directly. Homebrew on Apple Silicon ships it at `/opt/homebrew/bin/tmux`; on Intel Macs it's `/usr/local/bin/tmux`. Use `which tmux` to confirm the path on your host.
+3. Restart the terminal app so the change takes effect.
+
+Granting Full Disk Access to your terminal + tmux suppresses the popup loop for the entire install flow. Without these grants, the install still proceeds but the popups appear every time `bootstrap.sh`, `tmux`, or the dispatcher reads a config file under `~/.behalfbot/` or `~/.claude/`.
+
+This is a macOS-only prereq. The chassis itself does not require Full Disk Access on any other OS.
