@@ -144,7 +144,7 @@ COMPOSE_MANAGED_VARS_REGEX='^(CHASSIS_PG_DSN|CHASSIS_PG_HOST|CHASSIS_PG_PORT|CHA
 # Operators sometimes export these intentionally for a different purpose; the
 # WARN makes it visible that bake-env stripped them rather than silently
 # losing the var.
-TOXIC_PRESENT=$(echo "$NEW_VARS" | grep -E '^[A-Z][A-Z0-9_]+=' | grep -E "$TOXIC_VARS_REGEX" | sed 's/=.*$//' | sort -u)
+TOXIC_PRESENT=$(echo "$NEW_VARS" | grep -E '^[A-Z][A-Z0-9_]+=' | grep -E "$TOXIC_VARS_REGEX" | sed 's/=.*$//' | sort -u || true)
 if [[ -n "$TOXIC_PRESENT" ]]; then
     while IFS= read -r toxic_var; do
         echo "WARN: dispatcher-toxic var '$toxic_var' present at bake time; excluded from .env.baked (see chassis/scripts/bake-env.sh TOXIC_VARS_REGEX)" >&2
@@ -158,48 +158,52 @@ if [[ -z "$APP_VARS" ]]; then
     exit 2
 fi
 
-# Host-path overrides. CUSTOMER_HOME / REPO / MANIFEST / CUSTOMER_CLAUDE_DIR
-# must reflect the install root the bake is being run for, NOT whatever the
-# customer's .env hardcoded from a previous install location. This makes the
-# same .env portable across install roots — bake-env stamps the right paths
-# at bake time based on $CHASSIS_HOME (install root) and $HOME (user).
+# Host-path overrides. CUSTOMER_HOME / CHASSIS_HOME / REPO are deliberately
+# NOT re-appended after stripping - inside the chassis container these vars
+# are set authoritatively by compose's `environment:` block to /app/customer
+# (the bind-mount destination). If they were in .env.baked, the entrypoint's
+# source_env step would re-source after compose env has been applied,
+# overwriting the container path with whatever host path the bake recorded.
+# The dispatcher would then `cd "$CUSTOMER_HOME"` to a host path that doesn't
+# exist inside the container and every gather script would fail with "no
+# such file or directory". Concrete incident 2026-06-03 (Ben's fatboy
+# cutover): all gather scripts failed-loop on `cd: /home/ozzy/ben-install`
+# because that host path doesn't exist in the chassis container. Fix is to
+# strip and NOT re-append - compose's environment block already owns the
+# container-side values.
 #
-# Without this, moving an install from $CHASSIS_HOME to $HOME/work/
-# new-jaxity required a manual rewrite of .env before re-baking, and any
-# missed key caused the chassis container to mount the WRONG host directory
-# (silent wrong-bind-mount). Confirmed during the 2026-05-24 Phase 6 cutover
-# attempt — chassis came up healthy but bind-mount source was the old path
-# because the baked CUSTOMER_HOME still pointed at $CHASSIS_HOME. See
-# <v1-reference-install>#697 + scrollinondubs/new-jaxity#49 for context.
+# MANIFEST + CUSTOMER_CLAUDE_DIR stay overridden because:
+#   - MANIFEST: derived from CUSTOMER_HOME, only read by host-side migration
+#     scripts (vaultwarden-migration-manifest.json lives on host).
+#   - CUSTOMER_CLAUDE_DIR: $HOME/.claude is the user's Claude Code data dir
+#     on the HOST; compose interpolates it as a bind-mount source. The
+#     container side of that mount is /home/chassis/.claude regardless.
 #
-# Path-shaped vars overridden here:
-#   CUSTOMER_HOME        -> $CUSTOMER_HOME             (host customer-state root)
-#   CHASSIS_HOME         -> $CHASSIS_HOME              (host chassis tree root)
-#   REPO                 -> $CHASSIS_HOME              (legacy alias for chassis tree)
-#   MANIFEST             -> $CUSTOMER_HOME/data/vaultwarden-migration-manifest.json
-#   CUSTOMER_CLAUDE_DIR  -> $HOME/.claude              (user's ~/.claude, install-agnostic)
-#
-# Strategy: strip these keys from APP_VARS, then append derived values. Loud
-# log so operators see what was overridden (in case a customer was relying on
-# a custom value).
+# Without this strip-only behavior, moving an install from $CHASSIS_HOME to
+# $HOME/work/new-jaxity required a manual rewrite of .env before re-baking,
+# and any missed key caused the chassis container to mount the WRONG host
+# directory (silent wrong-bind-mount). Confirmed during the 2026-05-24
+# Phase 6 cutover attempt - chassis came up healthy but bind-mount source
+# was the old path because the baked CUSTOMER_HOME still pointed at
+# $CHASSIS_HOME. See <v1-reference-install>#697 + scrollinondubs/
+# new-jaxity#49 for context. The strip step still does that work; only the
+# re-append for the three container-overridden keys is removed.
 PATH_KEYS_REGEX='^(CUSTOMER_HOME|CHASSIS_HOME|REPO|MANIFEST|CUSTOMER_CLAUDE_DIR)='
 PATH_ORIGINALS=$(echo "$APP_VARS" | grep -E "$PATH_KEYS_REGEX" | sort -u)
 if [[ -n "$PATH_ORIGINALS" ]]; then
     while IFS= read -r line; do
         key="${line%%=*}"
-        echo "INFO: overriding host-path var '$key' from host env (was: ${line#*=})" >&2
+        echo "INFO: stripping host-path var '$key' from .env.baked (was: ${line#*=})" >&2
     done <<< "$PATH_ORIGINALS"
 fi
 
 APP_VARS=$(echo "$APP_VARS" | grep -vE "$PATH_KEYS_REGEX" || true)
 
-# Append the derived path values. CUSTOMER_CLAUDE_DIR uses $HOME because it
-# points at the host user's ~/.claude (Claude Code's data dir), not the
-# install root. The container reads these via env_file at boot.
+# Re-append only the keys that legitimately need to reach the container as
+# host paths (MANIFEST is host-side only; CUSTOMER_CLAUDE_DIR is interpolated
+# by compose). CUSTOMER_HOME / CHASSIS_HOME / REPO are intentionally absent -
+# see the comment block above.
 APP_VARS="$APP_VARS
-CUSTOMER_HOME=$CUSTOMER_HOME
-CHASSIS_HOME=$CHASSIS_HOME
-REPO=$CHASSIS_HOME
 MANIFEST=$CUSTOMER_HOME/data/vaultwarden-migration-manifest.json
 CUSTOMER_CLAUDE_DIR=$HOME/.claude"
 
