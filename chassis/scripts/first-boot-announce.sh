@@ -66,12 +66,26 @@ fi
 
 EMITTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
+# chassis#5 item 3: sanity-check INSTANCE_NAME against the live Discord bot
+# username. If they disagree, the first briefing will post under the wrong
+# persona (e.g. "Captain Hook" instead of "Asimov"). Log loud so the
+# installer sees the mismatch in the first-boot log before the dispatcher
+# starts firing scheduled posts.
+IDENTITY_WARNING=""
+if [[ -n "$BOT_USERNAME" && -n "${INSTANCE_NAME:-}" && "$INSTANCE_NAME" != "$BOT_USERNAME" ]]; then
+    IDENTITY_WARNING="WARNING: INSTANCE_NAME=${INSTANCE_NAME} does not match Discord bot username=${BOT_USERNAME}. Outbound webhooks will display '${INSTANCE_NAME}' as the sender but the bot account itself is registered as '${BOT_USERNAME}'. Fix INSTANCE_NAME in .env to match before the first heartbeat fires, or rename the Discord bot to match INSTANCE_NAME."
+    log "BEHALFBOT_FIRST_BOOT: $IDENTITY_WARNING"
+fi
+
 # Build the three-line message (or a degraded version when ID unavailable).
 if [[ -n "$BOT_USER_ID" ]]; then
     OAUTH_URL="https://discord.com/oauth2/authorize?client_id=${BOT_USER_ID}&scope=bot+applications.commands&permissions=379968"
     LINE1="Behalfbot connected as ${BOT_USERNAME} (Discord user ID: ${BOT_USER_ID}). Share this with Sean to add me to the install channel."
     LINE2="OAuth invite URL: ${OAUTH_URL}"
     LINE3="Once added: run \`/discord:access group add <channel_id> --no-mention --allow <SEAN_ID>,<JAXBOT_ID>\` on this host to allowlist the channel."
+    if [[ -n "$IDENTITY_WARNING" ]]; then
+        LINE3="${LINE3}\n\n${IDENTITY_WARNING}"
+    fi
 else
     LINE1="BEHALFBOT_FIRST_BOOT: DISCORD_BOT_TOKEN not set or Discord API call failed. Set DISCORD_BOT_TOKEN in .env and recheck."
     LINE2="Once the token is set, delete ${SENTINEL} and restart the container to re-emit."
@@ -104,7 +118,15 @@ jq -n \
     --arg emitted_at "$EMITTED_AT" \
     --arg bot_user_id "$BOT_USER_ID" \
     --arg bot_username "$BOT_USERNAME" \
-    '{emitted_at: $emitted_at, bot_user_id: $bot_user_id, bot_username: $bot_username}' \
+    --arg instance_name "${INSTANCE_NAME:-}" \
+    --arg identity_warning "$IDENTITY_WARNING" \
+    '{
+        emitted_at: $emitted_at,
+        bot_user_id: $bot_user_id,
+        bot_username: $bot_username,
+        instance_name: $instance_name,
+        identity_warning: $identity_warning
+    }' \
     > "$SENTINEL"
 
 log "first-boot announce complete - sentinel written at $SENTINEL"

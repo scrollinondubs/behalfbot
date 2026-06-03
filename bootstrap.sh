@@ -451,6 +451,36 @@ populate_discord_access() {
     fi
 }
 
+preflight_bot_identity() {
+    # chassis#5 item 3: pre-flight check that the bot's outbound webhook
+    # identity (INSTANCE_NAME + per-channel webhook URLs) matches the
+    # configured identity.assistant.name in chassis.config.yaml BEFORE the
+    # first heartbeat fires. Without this, Toby's first morning briefing
+    # posted under the chassis maintainer's stale bot persona ("Captain
+    # Hook") instead of Asimov's persona.
+    step "8c/14" "Pre-flight: bot identity matches webhooks (chassis#5 item 3)"
+
+    local helper="$CHASSIS_HOME/chassis/scripts/preflight-bot-identity.sh"
+    if [[ ! -x "$helper" ]]; then
+        log "  WARN: $helper missing or not executable - skipping pre-flight"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run: $helper"
+        return 0
+    fi
+
+    if ! CUSTOMER_HOME="$CUSTOMER_HOME" CHASSIS_HOME="$CHASSIS_HOME" \
+        bash "$helper" 2>&1 | tee -a "$TRANSCRIPT"; then
+        log ""
+        log "  FAIL: bot-identity pre-flight blocked bootstrap completion."
+        log "  Resolve the items above (likely: set INSTANCE_NAME in .env,"
+        log "  configure the briefings/ops webhook URLs), then re-run bootstrap.sh."
+        return 1
+    fi
+}
+
 activate_plugins() {
     step "9/14" "Activate enabled plugins"
 
@@ -626,6 +656,7 @@ main() {
     initialize_heartbeats
     render_customer_scripts
     populate_discord_access
+    preflight_bot_identity
     activate_plugins
     seed_memory
     install_os_deps
