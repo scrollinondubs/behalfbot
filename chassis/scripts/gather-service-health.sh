@@ -26,13 +26,22 @@
 #       {"name": "vaultwarden", "url": "https://vault.example.com/alive"}
 #     ],
 #     "timeout_seconds": 10,
-#     "expected_status_codes": [200, 204]
+#     "expected_status_codes": [200, 204],
+#     "min_consecutive_failures": 2
 #   }
 #
-# `timeout_seconds` and `expected_status_codes` are both optional with
-# sensible defaults (10s, [200] respectively). Each service URL is
-# probed with `curl -sf` so any 4xx/5xx counts as a failure; if you
-# need broader acceptance, override `expected_status_codes`.
+# `timeout_seconds`, `expected_status_codes`, and `min_consecutive_failures`
+# are all optional with sensible defaults (10s, [200], 1 respectively).
+# Each service URL is probed with `curl -sf` so any 4xx/5xx counts as a
+# failure; if you need broader acceptance, override `expected_status_codes`.
+#
+# `min_consecutive_failures` adds hysteresis: a service must fail the probe
+# this many ticks in a row before it contributes to the gather `count` /
+# `issues` array. Default 1 = fire on first failure (legacy behavior). Set
+# to 2 (or higher) to suppress transient blips that self-recover by the
+# next tick. State is persisted per-service in `service-health-state.json`
+# alongside the endpoints file; a single successful probe resets the
+# counter. Probes still run every tick — only the *reporting* is gated.
 #
 # The 10s default is intentionally generous: cloudflared-tunneled and
 # other reverse-proxied endpoints can take >5s under brief network
@@ -42,7 +51,7 @@
 #
 # Output (gather JSON contract):
 #   {
-#     "count": N,                            # failing services count
+#     "count": N,                            # reportable failing services
 #     "issues": ["n8n_unreachable_503", ...],
 #     "checked": N_total,
 #     "ts_utc": "2026-05-21T13:00:00Z"
@@ -53,6 +62,7 @@ set -euo pipefail
 : "${CHASSIS_HOME:?CHASSIS_HOME must be set (chassis dispatcher exports it)}"
 
 ENDPOINTS_FILE="${CHASSIS_HOME}/scheduled-tasks/service-endpoints.json"
+STATE_FILE="${CHASSIS_HOME}/scheduled-tasks/service-health-state.json"
 
 if [[ ! -f "$ENDPOINTS_FILE" ]]; then
     # Heartbeat configured to use this script but no endpoints file present.
@@ -63,9 +73,18 @@ fi
 
 TIMEOUT_S=$(jq -r '.timeout_seconds // 10' "$ENDPOINTS_FILE")
 ACCEPTED_CODES=$(jq -r '.expected_status_codes // [200] | map(tostring) | join(",")' "$ENDPOINTS_FILE")
+MIN_CONSECUTIVE=$(jq -r '.min_consecutive_failures // 1' "$ENDPOINTS_FILE")
+
+# Initialize state file on first run so jq reads/writes don't fail.
+if [[ ! -f "$STATE_FILE" ]]; then
+    echo '{}' > "$STATE_FILE"
+fi
 
 issues=()
 checked=0
+# Per-tick state updates accumulate in a jq filter applied once at the end
+# (avoids N temp-file rewrites of the state file inside the loop).
+state_updates=()
 
 while IFS=$'\t' read -r name url; do
     [[ -z "$name" || -z "$url" ]] && continue
@@ -85,13 +104,41 @@ while IFS=$'\t' read -r name url; do
     http_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time "$TIMEOUT_S" "$url" 2>/dev/null) || true
     http_code="${http_code:-000}"
 
-    # Match against accepted codes list. 000 = connection failure / timeout.
+    # Classify probe result and build the candidate issue label.
+    issue=""
     if [[ "$http_code" == "000" ]]; then
-        issues+=("${name}_unreachable")
+        issue="${name}_unreachable"
     elif ! echo ",$ACCEPTED_CODES," | grep -q ",$http_code,"; then
-        issues+=("${name}_http_${http_code}")
+        issue="${name}_http_${http_code}"
+    fi
+
+    if [[ -z "$issue" ]]; then
+        # Success — reset the consecutive-failure counter.
+        state_updates+=(".\"${name}\" = {\"consecutive_failures\": 0, \"last_issue\": null}")
+    else
+        # Failure — bump counter; only surface to gather output once the
+        # counter meets the configured min_consecutive_failures threshold.
+        prior=$(jq -r --arg n "$name" '.[$n].consecutive_failures // 0' "$STATE_FILE")
+        # Defensive parse: state file could have been hand-edited.
+        if ! [[ "$prior" =~ ^[0-9]+$ ]]; then
+            prior=0
+        fi
+        new_count=$((prior + 1))
+        state_updates+=(".\"${name}\" = {\"consecutive_failures\": ${new_count}, \"last_issue\": \"${issue}\"}")
+
+        if [[ $new_count -ge $MIN_CONSECUTIVE ]]; then
+            issues+=("$issue")
+        fi
     fi
 done < <(jq -r '.services[]? | [.name, .url] | @tsv' "$ENDPOINTS_FILE")
+
+# Apply all state updates atomically.
+if [[ ${#state_updates[@]} -gt 0 ]]; then
+    filter=$(printf '%s | ' "${state_updates[@]}")
+    filter="${filter% | }"
+    tmp="${STATE_FILE}.tmp"
+    jq "$filter" "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
+fi
 
 count=${#issues[@]}
 ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
