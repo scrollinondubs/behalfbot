@@ -53,11 +53,36 @@ if ! tmux has-session -t "${TMUX_SESSION_NAME}" 2>/dev/null; then
     exit 0
 fi
 
-# Capture recent pane output and check for auth failure indicators
+# Capture recent pane output for state inspection.
 PANE_OUTPUT=$(tmux capture-pane -t "${TMUX_SESSION_NAME}" -p -S -50 2>/dev/null)
 
 if echo "$PANE_OUTPUT" | grep -qiE "Not logged in|Please run /login|authentication.*failed|token.*expired"; then
     echo "[$(timestamp)] Auth failure detected - restarting" >> "$LOG_FILE"
+    bash "$RESTART_SCRIPT"
+    exit 0
+fi
+
+# Folder-trust prompt detection (chassis#21). Claude Code's per-directory
+# trust gate runs before --dangerously-skip-permissions can apply, so a
+# claude process launched into an untrusted directory parks on this prompt
+# forever - tmux session looks alive, bot is dead. Bootstrap pre-seed
+# (chassis#22) makes this unreachable on new installs, but the watchdog
+# detection is the belt-and-suspenders catch for any future variant of
+# "tmux alive but bot parked on a prompt".
+if echo "$PANE_OUTPUT" | grep -qiE "Is this a project you trust|Accessing workspace:.*trust"; then
+    echo "[$(timestamp)] Folder-trust prompt detected - restarting" >> "$LOG_FILE"
+    echo "[$(timestamp)]   (run bootstrap-customer-scripts.sh to pre-seed trust for CUSTOMER_HOME)" >> "$LOG_FILE"
+    bash "$RESTART_SCRIPT"
+    exit 0
+fi
+
+# Generic interactive-prompt detection. Any TUI menu pattern ("> 1." style
+# selectable list) in the pane means the process is parked waiting for input
+# nothing will provide. Conservative regex: requires a current-selection
+# arrow at the start of a line followed by a numbered option, which Claude's
+# prompts produce and steady-state log output does not.
+if echo "$PANE_OUTPUT" | grep -qE '^[[:space:]]*[>❯][[:space:]]+[0-9]+\.'; then
+    echo "[$(timestamp)] Interactive prompt detected (unknown menu) - restarting" >> "$LOG_FILE"
     bash "$RESTART_SCRIPT"
     exit 0
 fi
