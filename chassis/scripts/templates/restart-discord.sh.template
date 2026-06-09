@@ -53,6 +53,23 @@ else
     echo "[$(timestamp)] No existing ${TMUX_SESSION_NAME} session found" >> "$LOG_FILE"
 fi
 
+# Re-seed Claude Code's folder-trust state for CUSTOMER_HOME before launch.
+# Idempotent - cheap no-op when the trust entry is already present, which
+# is the normal case. The reason this lives in the restart path (and not
+# just bootstrap) is the chassis#21 follow-up: if the trust entry is
+# wiped between runs (manual cleanup, ~/.claude.json corruption, restored
+# backup, etc.) the watchdog would otherwise loop forever - it'd detect
+# the trust prompt and restart claude, which would re-park because trust
+# is still missing. Calling the pre-seed helper here means the restart
+# path is self-healing for trust state. See chassis#23 follow-up PR for
+# the full post-mortem.
+if [[ -x "${CHASSIS_HOME}/chassis/scripts/preseed-claude-trust.sh" ]]; then
+    bash "${CHASSIS_HOME}/chassis/scripts/preseed-claude-trust.sh" "${CUSTOMER_HOME}" >> "$LOG_FILE" 2>&1 || \
+        echo "[$(timestamp)] WARN: preseed-claude-trust.sh failed; claude may park on trust prompt" >> "$LOG_FILE"
+else
+    echo "[$(timestamp)] WARN: preseed-claude-trust.sh not found at ${CHASSIS_HOME}/chassis/scripts/; skipping trust pre-seed" >> "$LOG_FILE"
+fi
+
 # Start new session.
 #
 # Working dir is CUSTOMER_HOME so claude resolves the install's CLAUDE.md, .env,
