@@ -66,12 +66,18 @@ fi
 # trust gate runs before --dangerously-skip-permissions can apply, so a
 # claude process launched into an untrusted directory parks on this prompt
 # forever - tmux session looks alive, bot is dead. Bootstrap pre-seed
-# (chassis#22) makes this unreachable on new installs, but the watchdog
-# detection is the belt-and-suspenders catch for any future variant of
-# "tmux alive but bot parked on a prompt".
-if echo "$PANE_OUTPUT" | grep -qiE "Is this a project you trust|Accessing workspace:.*trust"; then
-    echo "[$(timestamp)] Folder-trust prompt detected - restarting" >> "$LOG_FILE"
-    echo "[$(timestamp)]   (run bootstrap-customer-scripts.sh to pre-seed trust for CUSTOMER_HOME)" >> "$LOG_FILE"
+# (chassis#22) makes this unreachable on new installs; the restart
+# template also calls preseed-claude-trust.sh on every restart (chassis#23
+# follow-up) so this detection rule has a real recovery path - the restart
+# now re-seeds trust before re-launching claude, breaking the previous
+# infinite restart loop on trust-wipe.
+#
+# Regex matches the actual current Claude Code wording: "Quick safety
+# check: Is this a project you created or one you trust?" The earlier
+# tighter regex matched neither alternative on the real prompt and was
+# only saved by the generic-menu fallback below (chassis#23 review by Toby).
+if echo "$PANE_OUTPUT" | grep -qiE "Quick safety check|trust this folder|Is this a project you"; then
+    echo "[$(timestamp)] Folder-trust prompt detected - restarting (restart will re-seed trust via preseed-claude-trust.sh)" >> "$LOG_FILE"
     bash "$RESTART_SCRIPT"
     exit 0
 fi
