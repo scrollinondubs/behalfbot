@@ -148,6 +148,95 @@ render_template "$TEMPLATES_DIR/restart-discord.sh.template" \
 render_template "$TEMPLATES_DIR/watchdog-discord.sh.template" \
     "$OUT_SCRIPTS/watchdog-${BOT_NAME}-discord.sh"
 
+# Pre-seed Claude Code's per-directory folder-trust state for CUSTOMER_HOME.
+#
+# Claude Code stores folder-trust per absolute path in ~/.claude.json under
+# projects["<abs path>"].hasTrustDialogAccepted. --dangerously-skip-permissions
+# does NOT bypass this gate; it controls the per-tool permission classifier,
+# which only runs after trust is established. If CUSTOMER_HOME is not already
+# trusted, claude boots into an interactive trust prompt and parks forever -
+# the Discord tmux session stays alive (so the watchdog session-existence check
+# passes) but the bot never connects. Reported by Toby on asimov via #21.
+#
+# This step is idempotent: re-running merges fields rather than clobbering
+# unrelated state.
+preseed_claude_trust() {
+    local target_dir="$1"
+    local claude_config="$HOME/.claude.json"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        echo "[dry-run] would pre-seed claude folder-trust for $target_dir in $claude_config"
+        return 0
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "  WARN: python3 not on PATH; skipping claude-trust pre-seed for $target_dir" >&2
+        echo "        First Discord launch will hit the trust prompt and park." >&2
+        return 0
+    fi
+
+    if ! python3 - "$claude_config" "$target_dir" <<'PYEOF'
+import json
+import os
+import sys
+import tempfile
+
+config_path, target_dir = sys.argv[1], sys.argv[2]
+
+if os.path.exists(config_path):
+    try:
+        with open(config_path) as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"  ERROR: {config_path} is not valid JSON: {e}", file=sys.stderr)
+        print(f"         Refusing to overwrite. Fix or delete the file and re-run.", file=sys.stderr)
+        sys.exit(1)
+    if not isinstance(data, dict):
+        print(f"  ERROR: {config_path} top-level is not a JSON object; refusing to edit.", file=sys.stderr)
+        sys.exit(1)
+else:
+    data = {}
+
+projects = data.setdefault("projects", {})
+if not isinstance(projects, dict):
+    print(f"  ERROR: {config_path} 'projects' is not an object; refusing to edit.", file=sys.stderr)
+    sys.exit(1)
+
+entry = projects.setdefault(target_dir, {})
+if not isinstance(entry, dict):
+    print(f"  ERROR: {config_path} projects['{target_dir}'] is not an object; refusing to edit.", file=sys.stderr)
+    sys.exit(1)
+
+already_trusted = entry.get("hasTrustDialogAccepted") is True and entry.get("hasCompletedProjectOnboarding") is True
+entry["hasTrustDialogAccepted"] = True
+entry["hasCompletedProjectOnboarding"] = True
+
+tmp_fd, tmp_path = tempfile.mkstemp(prefix=".claude.json.", dir=os.path.dirname(config_path) or ".")
+try:
+    with os.fdopen(tmp_fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.replace(tmp_path, config_path)
+except Exception:
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
+    raise
+
+if already_trusted:
+    print(f"  claude folder-trust for {target_dir}: already set (no-op)")
+else:
+    print(f"  claude folder-trust for {target_dir}: pre-seeded in {config_path}")
+PYEOF
+    then
+        echo "  ERROR: claude-trust pre-seed for $target_dir failed; aborting bootstrap." >&2
+        return 1
+    fi
+}
+
+preseed_claude_trust "$CUSTOMER_HOME"
+
 if [[ "$RENDER_PLISTS" == "true" ]]; then
     render_template "$LAUNCHD_DIR/com.behalfbot.discord-restart.plist.template" \
         "$OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-restart.plist"
