@@ -95,10 +95,21 @@ with open(sys.argv[1], 'w') as f:
         if ! command -v adb >/dev/null 2>&1; then
             return 1
         fi
-        if ! adb devices 2>/dev/null | grep -q "emulator-5554"; then
+        if ! adb devices 2>/dev/null | grep -q "emulator-5554	device"; then
             return 1
         fi
         if ! adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -q "^1$"; then
+            return 1
+        fi
+        # boot_completed=1 is necessary but not sufficient: a wedged AVD can
+        # hit boot_completed=1 with the launcher dead (mCurrentFocus=null, no
+        # foreground activity). Treat null-focus as not-ready so the
+        # recovery hook forces a respawn instead of declaring success on a
+        # useless device. Observed 2026-06-17 in the v1 reference install
+        # after 114h uptime — see commit message.
+        local _focus
+        _focus=$(adb shell dumpsys window 2>/dev/null | grep -m1 mCurrentFocus | tr -d '\r')
+        if [[ -z "$_focus" ]] || echo "$_focus" | grep -q "mCurrentFocus=null"; then
             return 1
         fi
         return 0
@@ -128,29 +139,44 @@ with open(sys.argv[1], 'w') as f:
     if pgrep -f "qemu-system.*$AVD_NAME" > /dev/null 2>&1; then
         _log "Killing zombie emulator process before restart"
         pkill -f "qemu-system.*$AVD_NAME" 2>/dev/null || true
-        sleep 2
+        sleep 3
     fi
 
-    if [[ ! -x "$START_SCRIPT" ]]; then
-        _log "Emulator start script not executable at $START_SCRIPT — installer must provide it"
-        _save_state "$RESTART_ATTEMPT_TIME" $(( CONSECUTIVE_FAILURES + 1 )) "$LAST_ALERT_SENT"
-        return 1
+    # If an installer runs the emulator under launchd KeepAlive (or systemd
+    # Restart=always, etc.), the supervisor will have respawned qemu by now.
+    # In that case calling START_SCRIPT races the supervisor and consistently
+    # bails with "already running", causing BOOT_OK to stay false and any
+    # explicit-reboot flag to never clear. Detect the respawn and skip the
+    # start call.
+    local SUPERVISOR_RESPAWNED=false
+    if pgrep -f "qemu-system.*$AVD_NAME" > /dev/null 2>&1; then
+        _log "qemu respawned after kill — supervisor (launchd/systemd) owns the lifecycle; skipping START_SCRIPT"
+        SUPERVISOR_RESPAWNED=true
     fi
 
-    bash "$START_SCRIPT" start >> "$LOG_FILE" 2>&1 &
-    local EMULATOR_PID=$!
+    if [[ "$SUPERVISOR_RESPAWNED" == "false" ]]; then
+        if [[ ! -x "$START_SCRIPT" ]]; then
+            _log "Emulator start script not executable at $START_SCRIPT — installer must provide it"
+            _save_state "$RESTART_ATTEMPT_TIME" $(( CONSECUTIVE_FAILURES + 1 )) "$LAST_ALERT_SENT"
+            return 1
+        fi
+        bash "$START_SCRIPT" start >> "$LOG_FILE" 2>&1 &
+        local EMULATOR_PID=$!
+        wait "$EMULATOR_PID" 2>/dev/null || true
+    fi
 
-    # Wait up to 60 seconds for boot.
+    # Wait up to 120 seconds for boot AND launcher focus. The focus check
+    # in _emulator_ready means we wait past kernel-boot for the launcher to
+    # come up, not just for boot_completed=1.
     local BOOT_OK=false
     local _i
-    for _i in $(seq 1 60); do
+    for _i in $(seq 1 120); do
         sleep 1
         if _emulator_ready; then
             BOOT_OK=true
             break
         fi
     done
-    wait "$EMULATOR_PID" 2>/dev/null || true
 
     if [[ "$BOOT_OK" == "true" ]]; then
         _log "Restart successful — emulator $AVD_NAME now ready"
