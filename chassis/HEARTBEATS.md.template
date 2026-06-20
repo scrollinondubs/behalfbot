@@ -79,6 +79,26 @@ criticality: normal
 
 ---
 
+## bootstrap-audit (chassis-shipped, default-on)
+
+Weekly verification of the five known install gaps (see
+`chassis/scripts/bootstrap-audit.sh`). Silent on a clean install; fires
+Claude only when one or more checks fail. Catches silent regressions -
+e.g. an OS update bootouts a LaunchDaemon, a `.mcp.json` edit drops the
+memory block, the customer remote gets re-pointed.
+
+```yaml
+schedule: weekly sunday 09:00
+gather: ${CHASSIS_HOME}/chassis/scripts/gather-bootstrap-audit.sh
+condition: threshold count > 0
+prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/bootstrap-audit-prompt.md
+model: sonnet
+budget: 1
+criticality: background
+```
+
+---
+
 ## Active heartbeats
 
 <!--
