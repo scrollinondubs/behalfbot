@@ -600,39 +600,110 @@ install_os_deps() {
 setup_dispatcher_unit() {
     step "12/14" "Set up dispatcher launchd / systemd unit"
 
-    log "TODO: detect OS (macOS vs Linux) + emit appropriate unit:"
-    log ""
-    log "macOS — chassis ships a plist template at chassis/launchd/"
-    log "  com.behalfbot.heartbeat-dispatcher.plist.template. The earlier"
-    log "  render_customer_scripts step (with --plists) writes the rendered"
-    log "  copy into \$CUSTOMER_HOME/launchd/. From there:"
-    log "    ln -sf \$CUSTOMER_HOME/launchd/com.behalfbot.heartbeat-dispatcher.plist \\"
-    log "         ~/Library/LaunchAgents/"
-    log "    launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.behalfbot.heartbeat-dispatcher.plist"
-    log "  Containerized installs do NOT need this plist - docker compose handles cadence."
-    log ""
-    log "Linux — write /etc/systemd/system/behalfbot-heartbeat-dispatcher.{service,timer}"
-    log "  (system-scope, NOT --user, per lesson #26)"
-    log "  service ExecStart sources chassis-env.sh + invokes dispatcher.sh"
-    # installer-1 install lesson (#35): systemd strips PATH — uv and user-local binaries won't resolve
-    # without an explicit Environment= line. Embed:
-    #   Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin
-    # in the .service file. Without it every heartbeat invoking "uv run" silently fails.
-    log "  IMPORTANT: embed Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
-    log "    in the .service file — systemd strips PATH, uv run silently fails without it (#35)"
-    log "  timer OnCalendar=*:0/15 (every 15 min)"
-    log "  Restart=on-failure; ConditionPathExists=\$CUSTOMER_HOME"
-    log ""
-    log "Both: load + enable + start; verify with first-tick log entry"
+    local os
+    os="$(uname -s)"
+
+    if [[ "$os" == "Darwin" ]]; then
+        # On macOS the chassis ships discord-restart + discord-watchdog as
+        # LaunchDaemons (promoted from LaunchAgents in chassis#14). They're
+        # rendered into $CUSTOMER_HOME/launchd/ during step 8 by
+        # bootstrap-customer-scripts.sh. This step copies them into
+        # /Library/LaunchDaemons/ and bootstraps the system domain.
+        #
+        # heartbeat-dispatcher is DEPRECATED in containerized installs
+        # (docker-compose handles cadence) so we skip it by default. Set
+        # BOOTSTRAP_DISPATCHER_LEGACY_PLIST=1 to opt in for bare-metal layouts.
+
+        local daemons=(
+            "com.behalfbot.${BOT_NAME:-bot}-discord-restart"
+            "com.behalfbot.${BOT_NAME:-bot}-discord-watchdog"
+        )
+        if [[ "${BOOTSTRAP_DISPATCHER_LEGACY_PLIST:-0}" == "1" ]]; then
+            daemons+=("com.behalfbot.heartbeat-dispatcher")
+        fi
+
+        local need_sudo=0
+        for label in "${daemons[@]}"; do
+            local src="$CUSTOMER_HOME/launchd/${label}.plist"
+            local dst="/Library/LaunchDaemons/${label}.plist"
+            if [[ ! -f "$src" ]]; then
+                log "  WARN: $src not rendered - skip $label (step 8 may have failed)"
+                continue
+            fi
+            if [[ "$DRY_RUN" == "true" ]]; then
+                log "  [dry-run] would: sudo cp $src $dst"
+                log "  [dry-run] would: sudo launchctl bootout system/$label (if loaded)"
+                log "  [dry-run] would: sudo launchctl bootstrap system $dst"
+                continue
+            fi
+            need_sudo=1
+            log "  Installing LaunchDaemon: $label"
+            sudo cp "$src" "$dst"
+            sudo chown root:wheel "$dst"
+            sudo chmod 644 "$dst"
+            # Bootout first so re-runs replace cleanly; ignore stderr when not loaded.
+            sudo launchctl bootout "system/$label" >/dev/null 2>&1 || true
+            if sudo launchctl bootstrap system "$dst"; then
+                log "    ✓ $label loaded into system domain"
+            else
+                log "    ERROR: bootstrap failed for $label (see launchctl output above)"
+                return 1
+            fi
+        done
+
+        if [[ "$need_sudo" == "0" && "$DRY_RUN" != "true" ]]; then
+            log "  no daemons to install (nothing rendered in $CUSTOMER_HOME/launchd/)"
+        fi
+        return 0
+    fi
+
+    if [[ "$os" == "Linux" ]]; then
+        log "TODO: Linux systemd unit emission not yet implemented"
+        log "  - write /etc/systemd/system/behalfbot-heartbeat-dispatcher.{service,timer}"
+        log "    (system-scope, NOT --user, per lesson #26)"
+        log "  - service ExecStart sources chassis-env.sh + invokes dispatcher.sh"
+        # installer-1 install lesson (#35): systemd strips PATH — uv and user-local binaries won't resolve
+        # without an explicit Environment= line. Embed:
+        #   Environment=PATH=/home/<user>/.local/bin:/usr/local/bin:/usr/bin:/bin
+        # in the .service file. Without it every heartbeat invoking "uv run" silently fails.
+        log "  - embed Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+        log "    in the .service file - systemd strips PATH, uv run silently fails without it (#35)"
+        log "  - timer OnCalendar=*:0/15 (every 15 min)"
+        log "  - Restart=on-failure; ConditionPathExists=\$CUSTOMER_HOME"
+        return 0
+    fi
+
+    log "  WARN: unsupported OS '$os' - skip unit setup"
 }
 
 # ============================================================
 # 12. Smoke tests
 # ============================================================
 
-run_smoke_tests() {
-    step "13/14" "Run smoke tests"
+run_bootstrap_audit() {
+    # Post-install audit. Runs the 5-gap verification routine and surfaces
+    # any silent regression before declaring the install complete.
+    local auditor="$CHASSIS_HOME/chassis/scripts/bootstrap-audit.sh"
+    if [[ ! -x "$auditor" ]]; then
+        log "  WARN: $auditor missing - skipping post-install audit"
+        return 0
+    fi
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run: CUSTOMER_HOME=$CUSTOMER_HOME BOT_NAME=${BOT_NAME:-bot} bash $auditor"
+        return 0
+    fi
+    # Audit script exits non-zero on failures; surface but don't abort the
+    # bootstrap (the installer should see the report and fix, then re-run).
+    CUSTOMER_HOME="$CUSTOMER_HOME" BOT_NAME="${BOT_NAME:-bot}" \
+        bash "$auditor" 2>&1 | tee -a "$TRANSCRIPT" || true
+}
 
+run_smoke_tests() {
+    step "13/14" "Run smoke tests + post-install audit"
+
+    run_bootstrap_audit
+
+    log ""
     log "TODO: per-plugin smoke checks:"
     log "  - chassis-core: dispatcher fires once + dry-runs every registered heartbeat"
     log "  - github MCP: gh auth status returns agent-side identity"
