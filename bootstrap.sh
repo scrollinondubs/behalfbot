@@ -310,30 +310,58 @@ validate_install_artifacts() {
 hydrate_mcp_json() {
     step "5/14" "Hydrate .mcp.json from template"
 
-    log "TODO: jq-based template-substitution from .mcp.json.template"
-    log "  - Read chassis.config.yaml.modules.* flags"
-    log "  - Filter .mcp.json.template entries by _enable_when matching active modules"
-    log "  - Substitute <PLACEHOLDER> values from .env"
-    log "  - Write hydrated .mcp.json (gitignored)"
-    log ""
-    log "Reference: docs/mcp-setup.md"
-
-    # chassis#5 item 6: until the full hydration step lands, guarantee that
-    # ${CUSTOMER_HOME}/.mcp.json exists with an empty mcpServers object so the
-    # heartbeat dispatcher's `claude -p --mcp-config ...` invocation does not
-    # crash on a fresh or post-migration install. The dispatcher has a defense-
-    # in-depth absence guard too; this ensures the canonical path always exists.
+    local template="$CHASSIS_HOME/chassis/.mcp.json.template"
+    local hydrator="$CHASSIS_HOME/chassis/scripts/hydrate-mcp-json.py"
+    local config="$CUSTOMER_HOME/chassis.config.yaml"
+    local env_file="$CUSTOMER_HOME/.env"
     local mcp_file="$CUSTOMER_HOME/.mcp.json"
-    if [[ ! -f "$mcp_file" ]]; then
-        if [[ "$DRY_RUN" == "true" ]]; then
-            log "  [dry-run] would create $mcp_file with empty mcpServers"
-        else
-            printf '%s\n' '{"mcpServers": {}}' > "$mcp_file"
-            log "  ✓ wrote empty $mcp_file (placeholder until hydration TODO lands)"
-        fi
-    else
-        log "  $mcp_file exists, leaving untouched"
+
+    if [[ ! -f "$template" ]]; then
+        log "  ERROR: $template missing - chassis install incomplete"
+        return 1
     fi
+    if [[ ! -x "$hydrator" ]]; then
+        log "  ERROR: $hydrator missing or not executable"
+        return 1
+    fi
+    if [[ ! -f "$config" ]]; then
+        log "  WARN: $config missing - falling back to empty mcpServers"
+        log "        Bootstrap should have produced chassis.config.yaml in an"
+        log "        earlier step. Investigate before depending on MCP servers."
+        if [[ "$DRY_RUN" != "true" ]] && [[ ! -f "$mcp_file" ]]; then
+            printf '%s\n' '{"mcpServers": {}}' > "$mcp_file"
+        fi
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run: $hydrator --config $config --template $template --env $env_file --output $mcp_file"
+        return 0
+    fi
+
+    # Hydrate. The script exits 2 when placeholders are unresolved; that's a
+    # warn-but-not-fatal condition (the .mcp.json is still written, with the
+    # offending <TOKEN> values left in place for the installer to fill).
+    local hydrate_rc=0
+    local env_arg=()
+    [[ -f "$env_file" ]] && env_arg=(--env "$env_file")
+    python3 "$hydrator" --config "$config" --template "$template" \
+        "${env_arg[@]}" --output "$mcp_file" 2>&1 | tee -a "$TRANSCRIPT" || hydrate_rc=$?
+
+    case "$hydrate_rc" in
+        0)
+            log "  ✓ hydrated $mcp_file"
+            ;;
+        2)
+            log "  ⚠ hydrated $mcp_file with unresolved <PLACEHOLDER> tokens"
+            log "    Inspect the warnings above and update .env. Re-run bootstrap"
+            log "    (or this step) to finalize."
+            ;;
+        *)
+            log "  ERROR: hydrate-mcp-json.py exited $hydrate_rc - $mcp_file may be incomplete"
+            return 1
+            ;;
+    esac
 }
 
 hydrate_claude_md() {
