@@ -50,10 +50,36 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Bot name fallback: read from chassis.config.yaml, then bot identity, then 'bot'.
-if [[ -z "$BOT_NAME" ]] && command -v python3 >/dev/null 2>&1; then
+# Bot name resolution order:
+#   1. --bot-name flag (already parsed above)
+#   2. $BOT_NAME env var
+#   3. .env file: BOT_NAME=...
+#   4. chassis.config.yaml: identity.assistant.name (lowercased)
+#   5. Loaded LaunchDaemon detection: parse the discord-restart label
+#   6. Literal 'bot' as last-ditch
+resolve_bot_name() {
+    [[ -n "$BOT_NAME" ]] && return 0
+
+    if [[ -f "$CUSTOMER_HOME/.env" ]]; then
+        local val
+        val="$(grep -E '^(export +)?BOT_NAME=' "$CUSTOMER_HOME/.env" 2>/dev/null \
+              | head -1 | sed -E 's/^(export +)?BOT_NAME=//; s/^"(.*)"$/\1/; s/^.(.*).$/\1/' \
+              | head -c 64)"
+        [[ -n "$val" ]] && { BOT_NAME="$val"; return 0; }
+    fi
+
     if [[ -f "$CUSTOMER_HOME/chassis.config.yaml" ]]; then
-        BOT_NAME="$(python3 -c "
+        # Try yq if installed (clean)
+        if command -v yq >/dev/null 2>&1; then
+            local v
+            v="$(yq '.identity.assistant.name // ""' "$CUSTOMER_HOME/chassis.config.yaml" 2>/dev/null \
+                | tr -d '"' | tr '[:upper:]' '[:lower:]')"
+            [[ -n "$v" && "$v" != "null" ]] && { BOT_NAME="$v"; return 0; }
+        fi
+        # Try python+yaml (works if pyyaml installed)
+        if command -v python3 >/dev/null 2>&1; then
+            local v
+            v="$(python3 -c "
 import sys
 try:
     import yaml
@@ -64,9 +90,35 @@ try:
 except Exception:
     pass
 " 2>/dev/null)"
+            [[ -n "$v" ]] && { BOT_NAME="$v"; return 0; }
+        fi
+        # Grep fallback: scrape `name:` line under `assistant:` block. Works for
+        # the standard chassis template indentation; gives up cleanly if not.
+        local v
+        v="$(awk '
+            /^  assistant:/ {in_block=1; next}
+            in_block && /^    name: / {print $2; exit}
+            in_block && /^  [a-z]/ {exit}
+        ' "$CUSTOMER_HOME/chassis.config.yaml" 2>/dev/null | tr -d '"' | tr '[:upper:]' '[:lower:]')"
+        [[ -n "$v" ]] && { BOT_NAME="$v"; return 0; }
     fi
-fi
-[[ -z "$BOT_NAME" ]] && BOT_NAME="bot"
+
+    # Last resort: find a loaded discord-restart daemon and parse the bot name
+    # out of its label. Fragile (only works if step 12 already ran) but useful.
+    if command -v launchctl >/dev/null 2>&1; then
+        local label
+        label="$(launchctl list 2>/dev/null \
+                | awk '$3 ~ /^com\.behalfbot\..*-discord-restart$/ {print $3; exit}')"
+        if [[ -n "$label" ]]; then
+            BOT_NAME="${label#com.behalfbot.}"
+            BOT_NAME="${BOT_NAME%-discord-restart}"
+            return 0
+        fi
+    fi
+
+    BOT_NAME="bot"
+}
+resolve_bot_name
 
 OS="$(uname -s)"
 PASS=0
