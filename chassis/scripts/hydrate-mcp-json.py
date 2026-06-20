@@ -1,0 +1,241 @@
+#!/usr/bin/env python3
+"""hydrate-mcp-json.py - Build customer .mcp.json from template + chassis config + .env.
+
+Replaces the bootstrap.sh `hydrate_mcp_json()` TODO stub.
+
+Algorithm:
+1. Load chassis.config.yaml (resolved customer-side path passed in).
+2. Load .mcp.json.template (chassis-side path passed in).
+3. Load .env (customer-side, optional) for placeholder substitution.
+4. For each mcpServers entry:
+   - Skip entries whose key starts with '_' (template-only dividers).
+   - If entry has `_enable_when`, evaluate the predicate against the config;
+     drop the entry if false.
+   - Strip all keys starting with '_' from the kept entry.
+   - Substitute <PLACEHOLDER> tokens in string values from .env (or env vars).
+     Tokens whose substitution value is missing are LEFT IN PLACE - bootstrap
+     should warn loud but not silently emit a broken config.
+5. Write hydrated JSON to the output path.
+
+Usage:
+    python3 hydrate-mcp-json.py \\
+        --config /path/to/chassis.config.yaml \\
+        --template /path/to/.mcp.json.template \\
+        --env /path/to/.env \\
+        --output /path/to/.mcp.json [--dry-run]
+
+Exit codes:
+    0 - hydrated successfully
+    1 - bad input (file missing, malformed YAML/JSON)
+    2 - unresolved placeholders detected (file still written; bootstrap should warn)
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+
+
+def load_yaml(path):
+    try:
+        import yaml
+    except ImportError:
+        print(f'ERROR: PyYAML not installed. apt-get install python3-yaml '
+              f'OR pip install pyyaml', file=sys.stderr)
+        sys.exit(1)
+    with open(path) as f:
+        return yaml.safe_load(f) or {}
+
+
+def load_json(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def load_env(path):
+    """Parse a .env file into a dict. Tolerates `export FOO=bar`, comments,
+    quoted values. Empty values become ''."""
+    env = {}
+    if not path or not os.path.exists(path):
+        return env
+    with open(path) as f:
+        for raw in f:
+            line = raw.strip()
+            if not line or line.startswith('#'):
+                continue
+            if line.startswith('export '):
+                line = line[len('export '):]
+            if '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            key = key.strip()
+            value = value.strip()
+            if (value.startswith('"') and value.endswith('"')) or \
+               (value.startswith("'") and value.endswith("'")):
+                value = value[1:-1]
+            env[key] = value
+    return env
+
+
+def resolve_path(config, dotted):
+    """Resolve a dotted path like 'chassis.config.yaml.modules.research.brave'
+    against the loaded config. Strips the `chassis.config.yaml.` prefix.
+
+    Returns None if any segment is missing. Returns the leaf value otherwise.
+    """
+    if dotted.startswith('chassis.config.yaml.'):
+        dotted = dotted[len('chassis.config.yaml.'):]
+    cur = config
+    for segment in dotted.split('.'):
+        if isinstance(cur, dict) and segment in cur:
+            cur = cur[segment]
+        else:
+            return None
+    return cur
+
+
+_LITERAL_PAT = re.compile(r"""
+    ^                                # start
+    (?:
+        (?P<bool>true|false)         # boolean literal
+        | '(?P<sq>[^']*)'            # single-quoted string
+        | "(?P<dq>[^"]*)"            # double-quoted string
+        | (?P<bare>[\w\-]+)          # bareword (number-ish, identifier)
+    )
+    $                                # end
+""", re.VERBOSE)
+
+
+def parse_literal(token):
+    """Parse a literal token from an `_enable_when` RHS.
+
+    Returns (kind, value):
+        kind ∈ {'bool', 'str', 'bare'}
+        value is the parsed Python value.
+    """
+    m = _LITERAL_PAT.match(token.strip())
+    if not m:
+        return None
+    if m.group('bool'):
+        return ('bool', m.group('bool') == 'true')
+    if m.group('sq') is not None:
+        return ('str', m.group('sq'))
+    if m.group('dq') is not None:
+        return ('str', m.group('dq'))
+    if m.group('bare'):
+        return ('bare', m.group('bare'))
+    return None
+
+
+def evaluate_enable_when(predicate, config):
+    """Evaluate a simple `<dotted.path> == <literal>` predicate.
+
+    Returns True if the LHS resolves and equals the literal, False otherwise.
+    Conservatively returns False on any unrecognized predicate shape - we
+    prefer dropping an entry over emitting a broken one when the predicate
+    cannot be parsed.
+    """
+    if '==' not in predicate:
+        return False
+    lhs, _, rhs = predicate.partition('==')
+    actual = resolve_path(config, lhs.strip())
+    parsed = parse_literal(rhs)
+    if parsed is None:
+        return False
+    _, expected = parsed
+    return actual == expected
+
+
+_PLACEHOLDER_PAT = re.compile(r'<([A-Z_][A-Z0-9_]*)>')
+
+
+def substitute_placeholders(value, env, unresolved):
+    """Replace <PLACEHOLDER> tokens with env values. Records unresolved tokens."""
+    if isinstance(value, str):
+        def repl(match):
+            key = match.group(1)
+            if key in env:
+                return env[key]
+            if key in os.environ:
+                return os.environ[key]
+            unresolved.add(key)
+            return match.group(0)  # leave as-is
+        return _PLACEHOLDER_PAT.sub(repl, value)
+    if isinstance(value, list):
+        return [substitute_placeholders(v, env, unresolved) for v in value]
+    if isinstance(value, dict):
+        return {k: substitute_placeholders(v, env, unresolved)
+                for k, v in value.items()}
+    return value
+
+
+def strip_meta_keys(entry):
+    """Drop keys starting with `_` from a dict (template-only metadata)."""
+    return {k: v for k, v in entry.items() if not k.startswith('_')}
+
+
+def hydrate(config, template, env):
+    """Build the hydrated mcpServers dict and return (output, unresolved)."""
+    unresolved = set()
+    out = {}
+    servers = template.get('mcpServers', {})
+    for name, entry in servers.items():
+        if name.startswith('_'):
+            continue  # divider/placeholder entry
+        if not isinstance(entry, dict):
+            continue
+        predicate = entry.get('_enable_when')
+        if predicate is not None:
+            if not evaluate_enable_when(predicate, config):
+                continue
+        stripped = strip_meta_keys(entry)
+        substituted = substitute_placeholders(stripped, env, unresolved)
+        out[name] = substituted
+    return {'mcpServers': out}, unresolved
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('--config', required=True, help='chassis.config.yaml path')
+    p.add_argument('--template', required=True, help='.mcp.json.template path')
+    p.add_argument('--env', default=None, help='.env path (optional)')
+    p.add_argument('--output', required=True, help='target .mcp.json path')
+    p.add_argument('--dry-run', action='store_true',
+                   help='print hydrated JSON to stdout, do not write')
+    args = p.parse_args()
+
+    for path, label in [(args.config, 'config'), (args.template, 'template')]:
+        if not os.path.exists(path):
+            print(f'ERROR: {label} not found: {path}', file=sys.stderr)
+            sys.exit(1)
+
+    config = load_yaml(args.config)
+    template = load_json(args.template)
+    env = load_env(args.env)
+
+    hydrated, unresolved = hydrate(config, template, env)
+    output_text = json.dumps(hydrated, indent=2)
+
+    if args.dry_run:
+        print(output_text)
+    else:
+        with open(args.output, 'w') as f:
+            f.write(output_text)
+            f.write('\n')
+        print(f'wrote {args.output} '
+              f'({len(hydrated["mcpServers"])} mcpServers)')
+
+    if unresolved:
+        print(f'WARN: unresolved placeholders left in output: '
+              f'{sorted(unresolved)}', file=sys.stderr)
+        print(f'      these are <TOKEN> values not found in --env or os.environ. '
+              f'Fix .env and re-run.', file=sys.stderr)
+        sys.exit(2)
+
+    sys.exit(0)
+
+
+if __name__ == '__main__':
+    main()
