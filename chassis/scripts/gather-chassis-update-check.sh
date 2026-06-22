@@ -17,7 +17,13 @@ set -uo pipefail
 CHASSIS_HOME="${CHASSIS_HOME:?CHASSIS_HOME must be set}"
 CUSTOMER_HOME="${CUSTOMER_HOME:-${HOME}/.behalfbot}"
 
-LOCAL_VERSION_FILE="${CHASSIS_HOME}/chassis/VERSION"
+# Resolve VERSION + CHANGELOG paths RELATIVE TO THIS SCRIPT, not $CHASSIS_HOME.
+# Survives both install layouts:
+#   - vendored-subtree (chassis lives at ${CHASSIS_HOME}/chassis/)
+#   - overlay-mount (Jax-style #136, chassis lives at ${CHASSIS_HOME}/chassis/chassis/)
+# Either way, this script is at <chassis>/scripts/, so VERSION is at ../VERSION.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_VERSION_FILE="${SCRIPT_DIR}/../VERSION"
 UPSTREAM_RAW_BASE="${CHASSIS_UPDATE_RAW_BASE:-https://raw.githubusercontent.com/scrollinondubs/behalfbot/main}"
 UPSTREAM_VERSION_URL="${UPSTREAM_RAW_BASE}/chassis/VERSION"
 UPSTREAM_CHANGELOG_URL="${UPSTREAM_RAW_BASE}/chassis/CHANGELOG.md"
