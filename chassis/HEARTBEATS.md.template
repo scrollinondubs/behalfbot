@@ -99,6 +99,33 @@ criticality: background
 
 ---
 
+## chassis-update-check (chassis-shipped, default-on)
+
+Weekly check of `chassis/VERSION` against upstream `scrollinondubs/behalfbot`
+main. Silent when up to date or the offered version was already dismissed.
+Fires Claude only when a newer chassis is available, at which point Claude
+posts a single consent notification to the owner's alerts channel.
+
+Application is gated behind the `update chassis` / `update chassis --force`
+Discord trigger (`chassis/skills/chassis-update.md`); this heartbeat NEVER
+applies the update itself.
+
+Opt out via `auto_update.check: false` in `chassis.config.yaml`.
+
+Issue: scrollinondubs/behalfbot#33.
+
+```yaml
+schedule: weekly monday 09:00
+gather: ${CHASSIS_HOME}/chassis/scripts/gather-chassis-update-check.sh
+condition: threshold count > 0
+prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/chassis-update-check-prompt.md
+model: sonnet
+budget: 1
+criticality: background
+```
+
+---
+
 ## Active heartbeats
 
 <!--
