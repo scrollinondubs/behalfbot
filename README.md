@@ -10,7 +10,7 @@ The chassis is the generic engine. Everything that makes it *yours* — name, ch
 
 | Path | For | How |
 |------|-----|-----|
-| **Self-serve** | "I'm comfortable on the terminal and want to read the runbook" | `git clone` this repo, follow [`docs/install-runbook-streamlined.md`](docs/install-runbook-streamlined.md), supply your own `INSTALL_PROFILE.md` + `chassis.config.yaml` | 
+| **Self-serve** | "I'm comfortable on the terminal and want to read the runbook" | `git clone` this repo, follow [`docs/SELF_INSTALL.md`](docs/SELF_INSTALL.md), supply your own `INSTALL_PROFILE.md` + `chassis.config.yaml` | 
 | **Wizard-assisted** *(recommended)* | "I want guided setup without paying for white-glove" | Sign up at **[behalf.bot](https://behalf.bot)** → run the install-wizard interview → it generates your `INSTALL_PROFILE.md` + `chassis.config.yaml` for you. Drop those into the cloned chassis, run `bootstrap.sh`. 30 minutes vs. half a day. |
 | **White-glove (paid)** | "Just make it work for me" | Sign up at [behalf.bot](https://behalf.bot) → book the white-glove install. We drive the install via SSH, ratify your config with you live, and hand off a working agent. Same chassis, faster runway, ongoing support included. |
 
