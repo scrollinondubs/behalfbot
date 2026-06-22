@@ -152,4 +152,5 @@ When chassis core adds a new plugin (e.g. a hypothetical `meal-prep` plugin), cu
 - `chassis/docs/credential-bake.md` — credential pattern (`.env` → `.env.baked` via `bake-env.sh`).
 - `chassis/docs/hydration.md` — install-time bootstrap walkthrough.
 - `chassis/docs/containerization.md` — chassis container architecture.
+- `chassis/docs/disaster-recovery.md` — rebuilding an install from scratch on new hardware using only your install repo + chassis remote + secret store + postgres backup.
 - Issue history: chassis V1 customer-branch pattern explanation lives in chassis git log under `customer/installer-1`, `customer/installer-2`, `customer/installer-3` branch history.

@@ -198,6 +198,8 @@ DRY_RUN=true bash chassis/scheduled-tasks/heartbeat-dispatcher.sh
 
 Once the first dispatcher tick after re-enable lands cleanly in your ops channel, delete the `.bak` backup. The migration script is idempotent - re-running it after a partial restore is safe.
 
+For the catastrophic hardware-loss scenario (Mac mini dies, laptop stolen, cloud VM terminated) rather than an in-place chassis re-anchor, see [`disaster-recovery.md`](disaster-recovery.md). It walks through rebuilding from your install repo + chassis remote + secret store + postgres backup on a fresh machine.
+
 ---
 
 ## Discord channel access + `requireMention` toggle
