@@ -26,7 +26,10 @@ set -uo pipefail
 
 CHASSIS_HOME="${CHASSIS_HOME:?CHASSIS_HOME must be set}"
 CUSTOMER_HOME="${CUSTOMER_HOME:-${HOME}/.behalfbot}"
-LOCAL_VERSION_FILE="${CHASSIS_HOME}/chassis/VERSION"
+# Resolve VERSION relative to this script (works in both vendored-subtree and
+# overlay-mount install layouts; see gather-chassis-update-check.sh header).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_VERSION_FILE="${SCRIPT_DIR}/../VERSION"
 UPSTREAM_REMOTE_URL="${CHASSIS_UPDATE_REMOTE:-https://github.com/scrollinondubs/behalfbot.git}"
 UPSTREAM_REMOTE_NAME="chassis"
 UPSTREAM_BRANCH="main"
