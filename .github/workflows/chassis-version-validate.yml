@@ -1,0 +1,96 @@
+name: Validate chassis/VERSION
+
+# Single source of truth for chassis releases is chassis/VERSION (semver).
+# This workflow enforces two invariants:
+#
+#   1. On PR: chassis/VERSION is valid semver. If the PR modifies it, the new
+#      value is strictly greater than the previous value.
+#   2. On git tag push (vX.Y.Z): the tag matches chassis/VERSION exactly.
+#
+# Issue: scrollinondubs/behalfbot#33 (chassis auto-updater).
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'chassis/VERSION'
+      - '.github/workflows/chassis-version-validate.yml'
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  validate-semver:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR HEAD
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read current VERSION
+        id: current
+        run: |
+          if [[ ! -f chassis/VERSION ]]; then
+            echo "::error::chassis/VERSION not found"
+            exit 1
+          fi
+          VERSION=$(tr -d '[:space:]' < chassis/VERSION)
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::chassis/VERSION is not valid semver: '$VERSION' (expected MAJOR.MINOR.PATCH)"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Current VERSION: $VERSION"
+
+      - name: Verify monotonic bump (if VERSION changed)
+        run: |
+          # Compare to the base branch's VERSION. If unchanged, no-op.
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          git fetch origin "$BASE_SHA" --depth=1 || true
+          BASE_VERSION=$(git show "$BASE_SHA:chassis/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "")
+
+          if [[ -z "$BASE_VERSION" ]]; then
+            echo "Base branch has no chassis/VERSION (first introduction). Nothing to compare."
+            exit 0
+          fi
+
+          NEW_VERSION="${{ steps.current.outputs.version }}"
+          if [[ "$BASE_VERSION" == "$NEW_VERSION" ]]; then
+            echo "VERSION unchanged ($BASE_VERSION). No bump check needed."
+            exit 0
+          fi
+
+          # Compare semver: new must be strictly greater than base.
+          # Python is preinstalled on GH runners and gives reliable tuple comparison.
+          python3 - <<PY
+          base = tuple(int(x) for x in "$BASE_VERSION".split("."))
+          new = tuple(int(x) for x in "$NEW_VERSION".split("."))
+          if new <= base:
+              print(f"::error::chassis/VERSION must be strictly greater. base=$BASE_VERSION new=$NEW_VERSION")
+              raise SystemExit(1)
+          print(f"VERSION bump OK: $BASE_VERSION -> $NEW_VERSION")
+          PY
+
+  validate-tag-matches-version:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches chassis/VERSION
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Tag '$TAG' is not a vX.Y.Z release tag. Skipping VERSION check."
+            exit 0
+          fi
+          EXPECTED="${TAG#v}"
+          ACTUAL=$(tr -d '[:space:]' < chassis/VERSION)
+          if [[ "$EXPECTED" != "$ACTUAL" ]]; then
+            echo "::error::Release tag '$TAG' does not match chassis/VERSION ('$ACTUAL'). Bump VERSION before cutting the tag."
+            exit 1
+          fi
+          echo "Tag $TAG matches chassis/VERSION ($ACTUAL). OK."

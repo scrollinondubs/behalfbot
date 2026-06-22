@@ -185,6 +185,22 @@ install_execution:
   bootstrap_log: bootstrap.sh
   rollback_strategy: git_revert_in_chassis_repo
 
+# Auto-update knobs for the chassis-update-check heartbeat
+# (issue scrollinondubs/behalfbot#33). The heartbeat detects when this install
+# is behind upstream `scrollinondubs/behalfbot` main and posts a single consent
+# notification to the alerts channel. NEVER auto-applies — operator must reply
+# `update chassis` (or `update chassis --force` for BREAKING-flagged versions)
+# in the alerts channel for the apply to run.
+#
+# To disable detection entirely, set `check: false`. The heartbeat will then
+# emit `{"count": 0, "reason": "auto_update_check_disabled"}` and Claude never fires.
+auto_update:
+  check: true                               # Default ON. Set false to disable detection.
+  cadence: weekly                           # Heartbeat fires once per week (HEARTBEATS.md schedule)
+  alerts_channel: alerts                    # Logical channel name. Notification posts to
+                                            #   DISCORD_ALERTS_CHANNEL_ID at runtime,
+                                            #   falling back to DISCORD_PRIMARY_CHANNEL_ID.
+
 success_criteria:
   first_heartbeat:
     surface: discord_channel
