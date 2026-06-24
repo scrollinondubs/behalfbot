@@ -1019,42 +1019,59 @@ ${gathered_data}
             claude_input=$(cat "$full_prompt_path")
         fi
 
-        if ! invoke_claude "$claude_input" "$output_file" "$model" "$budget" "$name" "$cwd"; then
-            log "RETRY $name — claude failed, waiting 20s before retry..."
-            sleep 20
-            if ! invoke_claude "$claude_input" "$output_file" "$model" "$budget" "$name" "$cwd"; then
-                log "FAILED $name — claude failed after retry"
-                set_state "$name" "last_result" "claude_failed_after_retry"
-
-                # Circuit-breaker bookkeeping. Increment the per-heartbeat
-                # claude_fail_streak. If it crosses the threshold, open the
-                # circuit with exponential-backoff cooldown (15-min tick *
-                # 2^streak, capped at 32 ticks = 8h). This means a chronically
-                # failing heartbeat won't keep wasting 40 min of dispatcher
-                # cycle on each tick.
-                local fail_streak
-                fail_streak=$(get_state "$name" "claude_fail_streak")
-                fail_streak=$(( ${fail_streak:-0} + 1 ))
-                set_state "$name" "claude_fail_streak" "$fail_streak"
-
-                local circuit_threshold="${CLAUDE_FAIL_CIRCUIT_THRESHOLD:-2}"
-                if [[ $fail_streak -ge $circuit_threshold ]]; then
-                    local backoff_factor=$(( fail_streak - circuit_threshold + 1 ))
-                    if [[ $backoff_factor -gt 5 ]]; then backoff_factor=5; fi
-                    local backoff_ticks=$(( 1 << (backoff_factor - 1) ))
-                    if [[ $backoff_ticks -gt 32 ]]; then backoff_ticks=32; fi
-                    # Tick interval defaults to 900s (15min) — entrypoint.sh
-                    # sets DISPATCHER_INTERVAL_SECONDS in its shell but doesn't
-                    # export it, so we mirror the default here.
-                    local tick_sec="${DISPATCHER_INTERVAL_SECONDS:-900}"
-                    local backoff_sec=$(( backoff_ticks * tick_sec ))
-                    local open_until=$(( $(date +%s) + backoff_sec ))
-                    set_state "$name" "circuit_open_until" "$open_until"
-                    log "CIRCUIT-OPENED $name — streak=$fail_streak, skipping FIRE for $backoff_ticks ticks (~$((backoff_sec/60))min)"
-                fi
-
-                continue
+        # Retry policy: 3 attempts total (initial + 2 retries) with
+        # exponential backoff (20s, 60s). Bumped from 1 retry on
+        # 2026-06-24 after morning-briefing failed twice in 4s each with
+        # zero tokens consumed — a transient early-init failure
+        # (likely OAuth/MCP load hiccup) that the 1-retry policy didn't
+        # ride through. Same retry succeeded cleanly on the next tick.
+        local invoke_success=false
+        local attempt
+        for attempt in 1 2 3; do
+            if invoke_claude "$claude_input" "$output_file" "$model" "$budget" "$name" "$cwd"; then
+                invoke_success=true
+                break
             fi
+            if [[ $attempt -lt 3 ]]; then
+                # 20s after attempt 1, 60s after attempt 2 → total ~80s before final failure
+                local wait_s=$(( 20 * (3 ** (attempt - 1)) ))
+                log "RETRY $name — claude failed (attempt $attempt/3), waiting ${wait_s}s..."
+                sleep "$wait_s"
+            fi
+        done
+
+        if [[ "$invoke_success" != "true" ]]; then
+            log "FAILED $name — claude failed after 3 attempts"
+            set_state "$name" "last_result" "claude_failed_after_3_attempts"
+
+            # Circuit-breaker bookkeeping. Increment the per-heartbeat
+            # claude_fail_streak. If it crosses the threshold, open the
+            # circuit with exponential-backoff cooldown (15-min tick *
+            # 2^streak, capped at 32 ticks = 8h). This means a chronically
+            # failing heartbeat won't keep wasting 40 min of dispatcher
+            # cycle on each tick.
+            local fail_streak
+            fail_streak=$(get_state "$name" "claude_fail_streak")
+            fail_streak=$(( ${fail_streak:-0} + 1 ))
+            set_state "$name" "claude_fail_streak" "$fail_streak"
+
+            local circuit_threshold="${CLAUDE_FAIL_CIRCUIT_THRESHOLD:-2}"
+            if [[ $fail_streak -ge $circuit_threshold ]]; then
+                local backoff_factor=$(( fail_streak - circuit_threshold + 1 ))
+                if [[ $backoff_factor -gt 5 ]]; then backoff_factor=5; fi
+                local backoff_ticks=$(( 1 << (backoff_factor - 1) ))
+                if [[ $backoff_ticks -gt 32 ]]; then backoff_ticks=32; fi
+                # Tick interval defaults to 900s (15min) — entrypoint.sh
+                # sets DISPATCHER_INTERVAL_SECONDS in its shell but doesn't
+                # export it, so we mirror the default here.
+                local tick_sec="${DISPATCHER_INTERVAL_SECONDS:-900}"
+                local backoff_sec=$(( backoff_ticks * tick_sec ))
+                local open_until=$(( $(date +%s) + backoff_sec ))
+                set_state "$name" "circuit_open_until" "$open_until"
+                log "CIRCUIT-OPENED $name — streak=$fail_streak, skipping FIRE for $backoff_ticks ticks (~$((backoff_sec/60))min)"
+            fi
+
+            continue
         fi
 
         log "SUCCESS $name — output at $output_file"
