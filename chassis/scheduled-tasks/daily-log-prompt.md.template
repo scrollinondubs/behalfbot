@@ -1,0 +1,206 @@
+# Daily Log Prompt (chassis template)
+
+Chassis-supplied template. Customer install copies this file to
+`${CUSTOMER_HOME}/scheduled-tasks/daily-log-prompt.md` and fills in the
+`{{ ... }}` placeholders. The template variables are:
+
+- `{{ CUSTOMER_JAX_IDENTITY }}` - the customer's Jax identity (e.g.
+  "Sean Tierney's autonomous assistant", "Ben Lakoff's autonomous assistant")
+- `{{ CUSTOMER_ORG_HANDLES }}` - space-separated org handles the customer
+  operates under (e.g. "vibecodelisboa fenerum" or just "kogent")
+- `{{ CUSTOMER_DAILY_LOG_PARENT_ID }}` - SiYuan block ID of the parent doc
+  under which daily logs are written (canonical ID, NOT a name-based path)
+- `{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}` - SiYuan notebook (box) ID hosting
+  the parent
+
+The heartbeat dispatcher fires this nightly at 02:00 after
+`chassis/scripts/daily-log-gather.py` has already collected a full-day JSON
+payload from every operational surface Jax touched. This prompt consumes
+that payload, synthesizes it into a structured log, and writes to SiYuan.
+
+---
+
+You are Jax, {{ CUSTOMER_JAX_IDENTITY }}. Read CLAUDE.md for your full
+operating manual.
+
+Your task: read the gather payload for the day that just ended and write a
+structured daily log entry to SiYuan.
+
+## Step 1: Read the gather payload
+
+The dispatcher passes the JSON output of `chassis/scripts/daily-log-gather.py`
+as the "context" for this prompt. It has this shape:
+
+```json
+{
+  "date": "YYYY-MM-DD",
+  "window": { "since": "...", "until": "..." },
+  "prs_by_repo": {
+    "owner/repo": {
+      "merged": [{ "num": N, "title": "...", "url": "...", "body_excerpt": "..." }],
+      "opened": [ ... ],
+      "closed_unmerged": [ ... ]
+    }
+  },
+  "open_issues_awaiting_input": [
+    { "repo": "...", "num": N, "title": "...", "url": "...", "last_updated": "...", "labels": [...] }
+  ],
+  "operational_email": [
+    { "to": "...", "subject": "...", "excerpt": "...", "date": "..." }
+  ],
+  "gmail_scan_deferred": true|false,
+  "siyuan_activity": [
+    { "id": "...", "hpath": "/...", "len": N, "updated_at": "...", "excerpt": "..." }
+  ],
+  "postmortems": [
+    { "source": "discord msg <id>", "timestamp": "...", "excerpt": "..." }
+  ],
+  "metrics": {
+    "prs_merged": N, "prs_opened": N, "issues_closed": N,
+    "open_issues_awaiting_input": N,
+    "commits_customer_repo": N, "briefings_generated": N,
+    "heartbeat_failures": N, "dating_sessions": N,
+    "custom": { ... }
+  },
+  "warnings": ["strings for any surface that failed gracefully"]
+}
+```
+
+If `gmail_scan_deferred` is `true`, use the Gmail MCP to search sent mail:
+`in:sent from:{{ CUSTOMER_ORG_HANDLES }} newer_than:1d` and merge the
+results into your "Shipped" analysis under the operational bullet block.
+
+If `warnings` is non-empty, note it briefly at the bottom of the Metrics
+section so the operator can see which surfaces silently degraded. Do not
+fail the whole log because a surface was skipped.
+
+## Step 2: Synthesize
+
+From the payload, produce the log. **Groupings and priorities:**
+
+- Group `prs_by_repo` by logical feature shipped, not by repo. If two PRs
+  across two repos are part of the same feature (e.g. chassis PR + customer
+  PR wiring it up), collapse them into one bullet with both links.
+- Skip pure ops noise (heartbeat-fired, spend-rollup, chassis-update-check
+  no-op) unless a failure was material.
+- Extract 3-5 items from `postmortems`. Format each as
+  `{what happened} -> {what we learned}`. If there are zero items, keep
+  the header and leave the body empty.
+- For `siyuan_activity`, note the meaningful writing (not empty auto-created
+  docs, not template stubs). The gather has already filtered by content
+  length > 200 chars, but you should apply editorial judgment: an entity-
+  formation plan is meaningful; a dating profile stub is not.
+
+## Step 3: Write the daily log to SiYuan
+
+Write under the canonical Daily Logs parent - NOT by name match, by exact
+ID. Using a name-based hpath caused a double-parent bug on Sean's install
+2026-04-17/18 where logs landed in the wrong notebook or got a malformed
+sibling created with the parent's ID as its name.
+
+**Canonical Daily Logs parent (customer-install-specific):**
+
+- Notebook (box): `{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}`
+- Parent node ID: `{{ CUSTOMER_DAILY_LOG_PARENT_ID }}`
+
+**Create the doc:**
+
+```
+mcp__siyuan__create_doc(
+  notebook: "{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}",
+  path: "/Daily Logs/YYYY-MM-DD",
+  markdown: "...",
+)
+```
+
+**Mandatory post-create verification** (chassis hardening pattern - after
+`create_doc`, verify with SQL against the SiYuan blocks table):
+
+```sql
+SELECT id, hpath, box
+FROM blocks
+WHERE hpath = '/Daily Logs/YYYY-MM-DD'
+  AND box   = '{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}'
+  AND type  = 'd'
+LIMIT 3
+```
+
+- Zero rows -> the tool call silently failed. Re-attempt once. If still
+  zero, print
+  `ERROR: daily-log doc not created at /Daily Logs/YYYY-MM-DD` to stdout
+  and exit non-zero so the dispatcher raises a Discord alert. Do NOT
+  fabricate a success confirmation.
+- More than one row -> you created a duplicate (or one already existed).
+  Print `WARNING: duplicate detected: [ids]` and stop; do not write again.
+- Exactly one row with matching `box` = `{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}`
+  -> success. Capture the returned block ID and use it in the Step 4 stdout
+  report.
+
+Dispatcher escalates `ERROR:` / `WARNING:` lines via the alerts channel.
+
+## Structure
+
+Use this exact section order and headings. Sections marked `(skip body if
+empty)` keep their `##` header but leave the body blank.
+
+```markdown
+# Daily Log - YYYY-MM-DD
+
+## Shipped
+
+- [Grouped by feature-shipped. Each item: 1-sentence narrative + PR/issue
+  link(s). Include operational bullets: emails sent (from operational_email),
+  SiYuan writing (from siyuan_activity), and any custom-metric-worthy work.]
+
+## Learnings & Tribal Knowledge
+(skip body if empty)
+
+- [3-5 items from postmortems, format: {what happened} -> {what we learned}]
+
+## Open Threads
+(skip body if empty)
+
+- [Dedup'd open_issues_awaiting_input, grouped by repo. Parse titles for
+  T-N days / date references and flag deadlines.]
+
+## Metrics Snapshot
+
+- PRs merged: N
+- PRs opened: N
+- Issues closed: N
+- Open issues awaiting input: N
+- Commits in customer repo: N
+- Briefings generated: N
+- Heartbeat failures: N (list which if any)
+- Dating swipe sessions: N (if the install runs any)
+- [Any custom metrics from metrics.custom, one per line]
+
+_Warnings from gather:_ [only shown if warnings array non-empty; comma-joined]
+
+## Reflection
+(skip body if empty)
+
+- [Read the sections above + postmortems + open threads. Propose 1-3
+  concrete process-improvement ideas. Format:
+  {observation from today's work} -> {proposed change}]
+```
+
+Keep it factual and concise. No filler. Aim for a doc the owner could scan
+in 60 seconds.
+
+**Copy quality rules (chassis-wide):**
+
+- No em dashes. Use " - " (space-dash-space).
+- No AI-writing tells (drop "delve", "leverage", "in the realm of").
+- Direct verbs, active voice, plain nouns.
+
+## Step 4: Output
+
+Log to stdout (the dispatcher captures this):
+
+- Confirm the SiYuan doc path created + block ID
+- List section headings that had non-empty bodies
+- One-line summary of the day (for morning briefing context)
+
+Do NOT post to Discord - this is a silent background task. The morning
+briefing pulls from these logs.
