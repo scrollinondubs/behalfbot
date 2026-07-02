@@ -126,6 +126,37 @@ criticality: background
 
 ---
 
+## daily-log (chassis-shipped gather + prompt template, opt-in)
+
+Nightly synthesis of the day's work across every operational surface Jax
+touched (GitHub / Gmail / SiYuan / Discord postmortems). See
+`chassis/docs/heartbeats/daily-log.md` for the full env var contract and
+setup.
+
+**Customer install steps** (one-time):
+
+1. Copy the prompt template into the customer install:
+   `cp ${CHASSIS_HOME}/chassis/scheduled-tasks/daily-log-prompt.md.template ${CUSTOMER_HOME}/scheduled-tasks/daily-log-prompt.md`
+2. Fill in the four `{{ ... }}` placeholders in the copied prompt
+3. Set env vars in `${CUSTOMER_HOME}/.env`:
+   `DAILY_LOG_GH_USER`, `DAILY_LOG_DISCORD_CHANNEL_ID` (recommended),
+   `DAILY_LOG_GMAIL_IDENTITY`, `DAILY_LOG_SIYUAN_URL`,
+   `DAILY_LOG_EXTRA_METRICS_SCRIPT` (optional)
+4. Uncomment the block below
+
+```yaml
+# schedule: daily 02:00
+# gather: ${CHASSIS_HOME}/chassis/scripts/daily-log-gather.py
+# condition: always
+# prompt: ${CUSTOMER_HOME}/scheduled-tasks/daily-log-prompt.md
+# model: sonnet
+# budget: 2
+# criticality: normal
+# output_validator: true
+```
+
+---
+
 ## Active heartbeats
 
 <!--
