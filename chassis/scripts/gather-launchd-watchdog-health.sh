@@ -7,9 +7,16 @@
 #
 # Background: an installer's persistent watchdogs / daemons can silently
 # unload from `launchctl` after a session cycle, reboot, or stale
-# subprocess teardown. There's no native signal — the agent is just gone.
+# subprocess teardown. There's no native signal - the agent is just gone.
 # This gather catches that class of failure by polling
 # `launchctl print gui/$UID/<label>` for each agent in a configured list.
+#
+# Distinguishes "plist deleted" (truly missing, alertable) from "plist
+# present but not loaded" (deliberately unloaded by the operator, soft
+# signal). Any installer that keeps on-demand agents in the unloaded
+# state - dating-context, testing, feature-gated automation - would
+# otherwise burn a `claude -p` run + a Discord ping every dispatcher
+# tick until they either reload or remove the plist.
 #
 # Configuration:
 #   CHASSIS_WATCHDOG_CRITICAL_AGENTS  Comma- or newline-separated list of
@@ -52,20 +59,34 @@ if (( ${#AGENTS[@]} == 0 )); then
 fi
 
 UID_VAL="$(id -u)"
+PLIST_DIR="$HOME/Library/LaunchAgents"
 MISSING=()
+UNLOADED=()
 
 for agent in "${AGENTS[@]}"; do
   if ! launchctl print "gui/${UID_VAL}/${agent}" >/dev/null 2>&1; then
-    MISSING+=("$agent")
+    # Symlinks count as present via -e. Only "plist file gone" counts as
+    # MISSING (alertable). "plist present, agent unloaded" surfaces in the
+    # unloaded[] list as a soft signal that doesn't drive count.
+    if [[ -e "$PLIST_DIR/${agent}.plist" ]]; then
+      UNLOADED+=("$agent")
+    else
+      MISSING+=("$agent")
+    fi
   fi
 done
 
 COUNT=${#MISSING[@]}
 
-if (( COUNT > 0 )); then
-  printf '{"count": %d, "missing": [%s]}\n' \
-    "$COUNT" \
-    "$(printf '"%s",' "${MISSING[@]}" | sed 's/,$//')"
-else
-  printf '{"count": 0, "missing": []}\n'
-fi
+join_labels() {
+  if (( $# == 0 )); then
+    echo ""
+  else
+    printf '"%s",' "$@" | sed 's/,$//'
+  fi
+}
+
+printf '{"count": %d, "missing": [%s], "unloaded": [%s]}\n' \
+  "$COUNT" \
+  "$(join_labels "${MISSING[@]+"${MISSING[@]}"}")" \
+  "$(join_labels "${UNLOADED[@]+"${UNLOADED[@]}"}")"
