@@ -46,6 +46,13 @@
 #                              Space-separated list of subdirs under
 #                              $CHASSIS_HOME/backups/ to bundle today's
 #                              <date>.* file from. Customers can extend.
+#   BACKUP_DATA_EXCLUDES     - default empty. Space-separated list of
+#                              relative paths under $CHASSIS_HOME/data/ to
+#                              exclude from the bundle. Layered on top of
+#                              the canonical excludes (postgres,
+#                              playwright-profile) which cannot be
+#                              overridden - they're duplicates or ephemeral
+#                              runtime state and never useful in a restore.
 #
 # Related:
 #   chassis/scripts/encrypted-s3-upload.sh  - the tar+age+s3 utility
@@ -86,8 +93,37 @@ if [[ -d "${CHASSIS_HOME}/memory" ]]; then
     cp -R "${CHASSIS_HOME}/memory" "${STAGING}/memory"
 fi
 
+# Copy data/ but honor $BACKUP_DATA_EXCLUDES so bulky ephemeral subtrees
+# don't blow up backup size. rsync is nearly always present on macOS + Linux
+# where dispatchers run; falls back to a cp+rm sequence if not.
+#
+# The canonical excludes (postgres, playwright-profile) cover:
+#   - data/postgres  -> raw pg data dir; already backed up structurally via
+#                       sibling-backups/postgres-<date>.dump.gz. Including
+#                       both doubles the postgres footprint per nightly.
+#   - data/playwright-profile -> browser cache/cookies/extension data.
+#                       Ephemeral runtime state.
+#
+# Customer-specific excludes get appended via .env's BACKUP_DATA_EXCLUDES.
+# Format: space-separated relative paths under data/. Bash extglob is off so
+# these are simple string matches, not glob patterns.
 if [[ -d "${CHASSIS_HOME}/data" ]]; then
-    cp -R "${CHASSIS_HOME}/data" "${STAGING}/data"
+    DEFAULT_DATA_EXCLUDES=(postgres playwright-profile)
+    read -r -a EXTRA_DATA_EXCLUDES <<< "${BACKUP_DATA_EXCLUDES:-}"
+    ALL_EXCLUDES=("${DEFAULT_DATA_EXCLUDES[@]}" "${EXTRA_DATA_EXCLUDES[@]}")
+
+    if command -v rsync >/dev/null 2>&1; then
+        rsync_args=(-a)
+        for excl in "${ALL_EXCLUDES[@]}"; do
+            [[ -n "$excl" ]] && rsync_args+=(--exclude="${excl}")
+        done
+        rsync "${rsync_args[@]}" "${CHASSIS_HOME}/data/" "${STAGING}/data/"
+    else
+        cp -R "${CHASSIS_HOME}/data" "${STAGING}/data"
+        for excl in "${ALL_EXCLUDES[@]}"; do
+            [[ -n "$excl" ]] && rm -rf "${STAGING}/data/${excl}"
+        done
+    fi
 fi
 
 mkdir -p "${STAGING}/scheduled-tasks"
