@@ -41,7 +41,7 @@
       "_role": "second-brain backend (option A) — block-based notes, local-first",
       "_enable_when": "chassis.config.yaml.second_brain.backend == 'siyuan'",
       "command": "npx",
-      "args": ["-y", "siyuan-mcp@latest"],
+      "args": ["-y", "siyuan-mcp@1.0.4"],
       "env": {
         "SIYUAN_URL": "<SIYUAN_URL>",
         "SIYUAN_TOKEN": "<SIYUAN_TOKEN>"
