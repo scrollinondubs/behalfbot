@@ -15,9 +15,13 @@ three weeks" case, without paying to keep every nightly forever.
 Two moving parts, and you need **both** or it doesn't work:
 
 1. **Fanout (script side).** With `BACKUP_GFS_RETENTION=true` in `.env`, the
-   uploader server-side-copies each nightly object into extra prefixes on
-   calendar boundaries. Server-side copy means no download, no re-encrypt, no
-   egress cost - the object never leaves S3.
+   uploader also uploads each nightly artifact into extra prefixes on calendar
+   boundaries. It re-uploads the local encrypted file (already on disk from the
+   nightly run) rather than server-side-copying the S3 object, because a
+   server-side S3-to-S3 copy needs `s3:GetObject` on the source and the
+   backup-writer key is `PutObject`-scoped. Re-uploading needs only
+   `PutObject`. Cost is one extra ~250-300 MiB PUT per boundary (three on
+   Jan 1) - trivial, and monthly.
 
 2. **Retention (bucket side).** Lifecycle rules on each prefix tier the copies
    into Glacier Deep Archive and expire them on their own schedule. Lifecycle

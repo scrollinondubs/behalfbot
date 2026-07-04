@@ -28,13 +28,13 @@
 #   BACKUP_NAME       - default "chassis-backup". Embedded in the tarball
 #                       filename + S3 object key.
 #   BACKUP_GFS_RETENTION - default "false". When "true" AND the prefix is the
-#                       default "nightly", server-side-copies each nightly
-#                       object into monthly/, quarterly/, and yearly/ prefixes
-#                       on calendar boundaries (1st of month / quarter / year)
-#                       so a grandfather-father-son retention scheme can be
-#                       enforced by bucket lifecycle rules. OPT-IN: the copies
-#                       accumulate forever unless the companion lifecycle rules
-#                       exist on the bucket. See docs/backup-retention.md.
+#                       default "nightly", also uploads each nightly artifact
+#                       into monthly/, quarterly/, and yearly/ prefixes on
+#                       calendar boundaries (1st of month / quarter / year) so a
+#                       grandfather-father-son retention scheme can be enforced
+#                       by bucket lifecycle rules. OPT-IN: the copies accumulate
+#                       forever unless the companion lifecycle rules exist on
+#                       the bucket. See docs/backup-retention.md.
 #
 # Output (to stdout, single JSON line):
 #   {"count": 0, "issues": [], "s3_key": "...", "size_bytes": N,
@@ -168,29 +168,38 @@ if ! AWS_ACCESS_KEY_ID="$AWS_BACKUP_WRITE_ACCESS_KEY_ID" \
 fi
 
 # --- GFS long-tail retention fanout (opt-in) ---------------------------------
-# On calendar boundaries, server-side-copy the just-uploaded nightly objects
-# (encrypted tarball + manifest) into monthly/, quarterly/, and yearly/
-# prefixes. Bucket lifecycle rules then retain each prefix on its own schedule
-# (grandfather-father-son). Server-side S3 copy => no download, no re-encrypt,
-# no egress. Best-effort: a failed fanout copy is logged to stderr but NEVER
-# fails the nightly, which has already uploaded successfully by this point.
+# On calendar boundaries, upload the just-produced nightly artifacts (the local
+# encrypted tarball + manifest, still on disk in WORK_DIR) into monthly/,
+# quarterly/, and yearly/ prefixes. Bucket lifecycle rules then retain each
+# prefix on its own schedule (grandfather-father-son).
 #
-# Gated on BACKUP_S3_PREFIX == "nightly" so installs that route to a custom
-# prefix are untouched. Requires the companion lifecycle rules on the bucket
-# or the copies accumulate forever - see docs/backup-retention.md.
+# We re-upload the LOCAL files rather than server-side-copy the nightly S3
+# object on purpose: a server-side S3->S3 copy requires s3:GetObject on the
+# source, but the dedicated backup-writer IAM key is PutObject-scoped (it can
+# write backups, not read them) and 403s on the copy's HeadObject. Re-uploading
+# the local file needs only PutObject, which the key already has. Cost is one
+# extra ~250-300 MiB PUT per boundary (three on Jan 1) - trivial, monthly.
+#
+# Best-effort: a failed fanout upload is logged to stderr but NEVER fails the
+# nightly, which has already uploaded successfully by this point. Gated on
+# BACKUP_S3_PREFIX == "nightly" so installs that route to a custom prefix are
+# untouched. Requires the companion lifecycle rules on the bucket or the copies
+# accumulate forever - see docs/backup-retention.md.
 if [[ "${BACKUP_GFS_RETENTION:-false}" == "true" && "${BACKUP_S3_PREFIX}" == "nightly" ]]; then
     gfs_copy_to() {
         # $1 = destination dir under the bucket (no bucket, no trailing slash).
-        # Copies both the encrypted tarball and its manifest into $1/.
-        local dest_dir="$1" src
-        for src in "$S3_KEY" "$S3_MANIFEST_KEY"; do
+        # Uploads both the local encrypted tarball and its manifest into $1/.
+        # Basenames match the nightly object keys ($ENCRYPTED -> the tarball,
+        # $MANIFEST_FILE -> manifest.json).
+        local dest_dir="$1" f
+        for f in "$ENCRYPTED" "$MANIFEST_FILE"; do
             if ! AWS_ACCESS_KEY_ID="$AWS_BACKUP_WRITE_ACCESS_KEY_ID" \
                  AWS_SECRET_ACCESS_KEY="$AWS_BACKUP_WRITE_SECRET_ACCESS_KEY" \
                  AWS_DEFAULT_REGION="$S3_BACKUP_REGION" \
-                 aws s3 cp "s3://${S3_BACKUP_BUCKET}/${src}" \
-                           "s3://${S3_BACKUP_BUCKET}/${dest_dir}/$(basename "$src")" \
+                 aws s3 cp "$f" \
+                           "s3://${S3_BACKUP_BUCKET}/${dest_dir}/$(basename "$f")" \
                            --no-progress >/dev/null 2>&1; then
-                echo "warn: GFS fanout copy ${src} -> ${dest_dir}/ failed" >&2
+                echo "warn: GFS fanout upload $(basename "$f") -> ${dest_dir}/ failed" >&2
             fi
         done
     }
