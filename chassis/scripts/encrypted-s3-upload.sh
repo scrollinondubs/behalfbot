@@ -27,6 +27,14 @@
 #                       dedicated path within the bucket.
 #   BACKUP_NAME       - default "chassis-backup". Embedded in the tarball
 #                       filename + S3 object key.
+#   BACKUP_GFS_RETENTION - default "false". When "true" AND the prefix is the
+#                       default "nightly", server-side-copies each nightly
+#                       object into monthly/, quarterly/, and yearly/ prefixes
+#                       on calendar boundaries (1st of month / quarter / year)
+#                       so a grandfather-father-son retention scheme can be
+#                       enforced by bucket lifecycle rules. OPT-IN: the copies
+#                       accumulate forever unless the companion lifecycle rules
+#                       exist on the bucket. See docs/backup-retention.md.
 #
 # Output (to stdout, single JSON line):
 #   {"count": 0, "issues": [], "s3_key": "...", "size_bytes": N,
@@ -157,6 +165,50 @@ if ! AWS_ACCESS_KEY_ID="$AWS_BACKUP_WRITE_ACCESS_KEY_ID" \
      AWS_DEFAULT_REGION="$S3_BACKUP_REGION" \
      aws s3 cp "$MANIFEST_FILE" "s3://${S3_BACKUP_BUCKET}/${S3_MANIFEST_KEY}" --no-progress >/dev/null 2>&1; then
     fail "s3 cp manifest failed (tarball already uploaded successfully)"
+fi
+
+# --- GFS long-tail retention fanout (opt-in) ---------------------------------
+# On calendar boundaries, server-side-copy the just-uploaded nightly objects
+# (encrypted tarball + manifest) into monthly/, quarterly/, and yearly/
+# prefixes. Bucket lifecycle rules then retain each prefix on its own schedule
+# (grandfather-father-son). Server-side S3 copy => no download, no re-encrypt,
+# no egress. Best-effort: a failed fanout copy is logged to stderr but NEVER
+# fails the nightly, which has already uploaded successfully by this point.
+#
+# Gated on BACKUP_S3_PREFIX == "nightly" so installs that route to a custom
+# prefix are untouched. Requires the companion lifecycle rules on the bucket
+# or the copies accumulate forever - see docs/backup-retention.md.
+if [[ "${BACKUP_GFS_RETENTION:-false}" == "true" && "${BACKUP_S3_PREFIX}" == "nightly" ]]; then
+    gfs_copy_to() {
+        # $1 = destination dir under the bucket (no bucket, no trailing slash).
+        # Copies both the encrypted tarball and its manifest into $1/.
+        local dest_dir="$1" src
+        for src in "$S3_KEY" "$S3_MANIFEST_KEY"; do
+            if ! AWS_ACCESS_KEY_ID="$AWS_BACKUP_WRITE_ACCESS_KEY_ID" \
+                 AWS_SECRET_ACCESS_KEY="$AWS_BACKUP_WRITE_SECRET_ACCESS_KEY" \
+                 AWS_DEFAULT_REGION="$S3_BACKUP_REGION" \
+                 aws s3 cp "s3://${S3_BACKUP_BUCKET}/${src}" \
+                           "s3://${S3_BACKUP_BUCKET}/${dest_dir}/$(basename "$src")" \
+                           --no-progress >/dev/null 2>&1; then
+                echo "warn: GFS fanout copy ${src} -> ${dest_dir}/ failed" >&2
+            fi
+        done
+    }
+
+    GFS_DOM="$(date +%d)"
+    GFS_MONTH="$(date +%m)"
+    GFS_YEAR="$(date +%Y)"
+    if [[ "$GFS_DOM" == "01" ]]; then
+        gfs_copy_to "monthly/${GFS_YEAR}-${GFS_MONTH}"
+        # 10# forces base-10 so 08/09 don't trip the octal parser.
+        if [[ "$GFS_MONTH" =~ ^(01|04|07|10)$ ]]; then
+            GFS_QUARTER=$(( (10#$GFS_MONTH - 1) / 3 + 1 ))
+            gfs_copy_to "quarterly/${GFS_YEAR}-Q${GFS_QUARTER}"
+        fi
+        if [[ "$GFS_MONTH" == "01" ]]; then
+            gfs_copy_to "yearly/${GFS_YEAR}"
+        fi
+    fi
 fi
 
 printf '{"count": 0, "issues": [], "s3_key": "%s", "size_bytes": %s, "sha256": "%s"}\n' \
