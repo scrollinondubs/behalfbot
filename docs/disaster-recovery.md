@@ -198,3 +198,4 @@ Audit your install against this checklist. If any row is "no", fix it before you
 - [`SELF_INSTALL.md`](SELF_INSTALL.md) — full self-install walkthrough (non-destructive re-anchor in § "Migrating an existing install to a re-anchored chassis")
 - [`containerization.md`](containerization.md) — chassis container architecture (what's bind-mounted vs baked)
 - [`credential-bake.md`](credential-bake.md) — `.env` → `.env.baked` mechanics
+- [`backup-retention.md`](backup-retention.md) - GFS long-tail retention for the nightly S3 backup (monthly/quarterly/yearly)
