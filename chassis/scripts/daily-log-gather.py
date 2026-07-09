@@ -324,14 +324,21 @@ def gather_siyuan(url: str, token: str | None, since: datetime, until: datetime,
     activity: list[dict] = []
     since_stamp = since.strftime("%Y%m%d%H%M%S")
     until_stamp = until.strftime("%Y%m%d%H%M%S")
+    # A type='d' row's `content` holds the document TITLE, not its body, so the
+    # old `LENGTH(content) > MIN` filter could never match and this scan always
+    # returned zero rows. Document size lives in the child blocks.
+    doc_len = (
+        "(SELECT COALESCE(SUM(LENGTH(c.content)), 0) FROM blocks c "
+        "WHERE c.root_id = d.id AND c.type != 'd')"
+    )
     sql = (
-        "SELECT id, hpath, LENGTH(content) as len, updated, created "
-        "FROM blocks "
-        "WHERE type='d' "
-        f"AND updated >= '{since_stamp}' "
-        f"AND updated < '{until_stamp}' "
-        f"AND LENGTH(content) > {DEFAULT_SIYUAN_MIN_CONTENT_LEN} "
-        "ORDER BY updated DESC "
+        f"SELECT d.id, d.hpath, {doc_len} as len, d.updated, d.created "
+        "FROM blocks d "
+        "WHERE d.type='d' "
+        f"AND d.updated >= '{since_stamp}' "
+        f"AND d.updated < '{until_stamp}' "
+        f"AND {doc_len} > {DEFAULT_SIYUAN_MIN_CONTENT_LEN} "
+        "ORDER BY d.updated DESC "
         f"LIMIT {DEFAULT_SIYUAN_LIMIT}"
     )
     resp = siyuan_post(url, "/api/query/sql", token, {"stmt": sql}, verbose=verbose)
