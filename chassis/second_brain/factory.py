@@ -98,7 +98,7 @@ def _resolve_env(value: Any) -> Any:
 def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
     """Return the adapter configured in chassis.config.yaml.
 
-    Reads `second_brain.backend` and the matching backend block (siyuan / notion).
+    Reads `second_brain.backend` and the matching backend block (siyuan / notion / obsidian).
     Resolves `${VAR}` env-var references against the chassis .env (assumed loaded
     by the caller — chassis bootstrap does this in its launchd-equivalent unit).
     """
@@ -108,7 +108,7 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
     if not backend:
         raise ValueError(
             "chassis.config.yaml is missing second_brain.backend. "
-            "Set it to one of: siyuan, notion."
+            "Set it to one of: siyuan, notion, obsidian."
         )
     backend_config = sb_config.get(backend) or {}
     if backend == "siyuan":
@@ -130,7 +130,15 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
             natural_keys=backend_config.get("natural_keys") or {},
             active_database=backend_config.get("active_database"),
         )
+    if backend == "obsidian":
+        from chassis.second_brain.obsidian import ObsidianAdapter
+
+        return ObsidianAdapter(
+            vault_path=_resolve_env(backend_config.get("vault_path", "")),
+            vault_name=_resolve_env(backend_config.get("vault_name", "")) or None,
+            read_only=bool(backend_config.get("read_only", False)),
+        )
     raise ValueError(
         f"Unsupported second_brain.backend={backend!r}. "
-        f"V1 supports: siyuan, notion. Obsidian deferred to V2."
+        f"Supported backends: siyuan, notion, obsidian."
     )
