@@ -128,23 +128,45 @@ def parse_literal(token):
     return None
 
 
-def evaluate_enable_when(predicate, config):
-    """Evaluate a simple `<dotted.path> == <literal>` predicate.
+def evaluate_clause(clause, config):
+    """Evaluate one `<dotted.path> == <literal>` or `<dotted.path> != <literal>` clause.
 
-    Returns True if the LHS resolves and equals the literal, False otherwise.
+    Missing-key semantics differ by operator, deliberately:
+      - `==` on a missing path is False (an absent flag never enables).
+      - `!=` on a missing path is True (None != literal) - this is what lets
+        `second_brain.mode != 'adapter'` keep today's servers registered on
+        configs that predate the mode key.
+    """
+    if '!=' in clause and '==' not in clause:
+        lhs, _, rhs = clause.partition('!=')
+        parsed = parse_literal(rhs)
+        if parsed is None:
+            return False
+        _, expected = parsed
+        return resolve_path(config, lhs.strip()) != expected
+    if '==' in clause:
+        lhs, _, rhs = clause.partition('==')
+        parsed = parse_literal(rhs)
+        if parsed is None:
+            return False
+        _, expected = parsed
+        return resolve_path(config, lhs.strip()) == expected
+    return False
+
+
+def evaluate_enable_when(predicate, config):
+    """Evaluate an `_enable_when` predicate against the loaded config.
+
+    Supported grammar: one or more `<dotted.path> == <literal>` /
+    `<dotted.path> != <literal>` clauses joined by `&&` (all must hold).
     Conservatively returns False on any unrecognized predicate shape - we
     prefer dropping an entry over emitting a broken one when the predicate
     cannot be parsed.
     """
-    if '==' not in predicate:
+    clauses = [c.strip() for c in predicate.split('&&')]
+    if not clauses or any(not c for c in clauses):
         return False
-    lhs, _, rhs = predicate.partition('==')
-    actual = resolve_path(config, lhs.strip())
-    parsed = parse_literal(rhs)
-    if parsed is None:
-        return False
-    _, expected = parsed
-    return actual == expected
+    return all(evaluate_clause(clause, config) for clause in clauses)
 
 
 _PLACEHOLDER_PAT = re.compile(r'<([A-Z_][A-Z0-9_]*)>')

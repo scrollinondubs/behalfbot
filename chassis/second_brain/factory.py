@@ -95,6 +95,32 @@ def _resolve_env(value: Any) -> Any:
     return out
 
 
+VALID_MODES = ("direct", "adapter")
+
+
+def get_mode(config_path: Path | None = None) -> str:
+    """Return `second_brain.mode` from chassis.config.yaml.
+
+    Modes:
+      - `direct` (default, and the value assumed when the key is absent so
+        installs that predate the key see zero behavior change): the backend's
+        own MCP server is registered and chassis scripts talk to the backend
+        natively - today's behavior.
+      - `adapter`: the chassis-owned `secondbrain` MCP server is registered
+        INSTEAD of the native backend server, and callers go through
+        `get_adapter()`.
+    """
+    config = _load_config(config_path)
+    sb_config = config.get("second_brain") or {}
+    mode = sb_config.get("mode") or "direct"
+    if mode not in VALID_MODES:
+        raise ValueError(
+            f"Unsupported second_brain.mode={mode!r} in chassis.config.yaml. "
+            f"Supported modes: {', '.join(VALID_MODES)}."
+        )
+    return mode
+
+
 def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
     """Return the adapter configured in chassis.config.yaml.
 

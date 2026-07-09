@@ -110,6 +110,17 @@ surfaces:
 
 second_brain:
   backend: notion                           # notion | siyuan | obsidian
+  mode: direct                              # direct | adapter
+                                            # direct  = register the backend's own MCP server and keep
+                                            #           today's behavior (the default, also assumed when
+                                            #           this key is absent - installs that predate it
+                                            #           see zero change)
+                                            # adapter = register the chassis-owned `secondbrain` MCP
+                                            #           server INSTEAD of the native backend server, so
+                                            #           prompts see one tool namespace on every backend.
+                                            #           Note: obsidian has no native MCP server today,
+                                            #           so obsidian installs only get a second-brain
+                                            #           MCP surface in adapter mode.
   workspace: <installer-notion-workspace>   # Real workspace_id via Vaultwarden
   organization_pattern: para               # Tiago Forte: Projects / Areas / Resources / Archives
   databases:

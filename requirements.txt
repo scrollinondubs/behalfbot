@@ -18,6 +18,8 @@
 #   - tzdata         IANA tz DB on Debian-slim (slim base ships minimal locales)
 #   - pillow         BFL photo ingest + image preprocessing for vision extract
 #   - openai         OpenAI fallback path (TTS, occasional non-Claude calls)
+#   - mcp            official MCP Python SDK - runs the chassis-owned
+#                    `secondbrain` server (chassis/second_brain/mcp_server.py)
 
 pyyaml==6.0.2
 requests==2.32.3
@@ -28,3 +30,4 @@ python-dateutil==2.9.0.post0
 tzdata==2024.2
 pillow==11.0.0
 openai==1.54.5
+mcp==1.28.1

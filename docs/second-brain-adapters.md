@@ -103,7 +103,51 @@ sb.database.update_property(hit, "last_outreach_at", "2026-05-07")
 hits = sb.notes.search("morning briefing", limit=5)
 for h in hits:
     print(h.title, h.deeplink)
+
+# Recent activity - docs created/modified in a time window, newest first
+from datetime import datetime, timedelta
+hits = sb.notes.list_recent(
+    since=datetime.now() - timedelta(days=1),
+    until=datetime.now(),
+    min_content_len=200,
+    limit=50,
+)
 ```
+
+## `list_recent` per-backend divergences
+
+All three backends implement `list_recent(since, until, min_content_len, limit)` - docs created or modified in `[since, until)`, newest first. The implementations are honest but the underlying signals are NOT equivalent. Naive datetimes are interpreted as local time.
+
+| | Timestamp source | Granularity | `min_content_len` measure | Caveats |
+|---|---|---|---|---|
+| SiYuan | `blocks.updated` (kernel-local clock) | second | `SUM(LENGTH(content))` over the doc's child blocks via correlated subquery - the doc row's own `content` column holds only the TITLE (verified against a live kernel: max 81 chars over 283 docs), so it cannot be used for length filtering | cleanest of the three; block timestamps reflect actual edits |
+| Obsidian | filesystem mtime of `*.md` | filesystem-dependent | file size in bytes (frontmatter and markdown syntax count toward it; multi-byte characters count per byte) | NOISIEST: a git pull, iCloud resync, or any sync tool that rewrites files produces false "activity". Treat hits as candidates, not facts |
+| Notion | `last_edited_time` via `/search`, descending scan with client-side windowing (the endpoint has no timestamp filter) | MINUTE - Notion truncates seconds, so edits at a window boundary can fall on either side | reconstructed-markdown length of the first 100 blocks; costs one extra API call per candidate page, so leave at 0 unless needed | only pages shared with the integration are visible; scan is capped at 500 pages per call |
+
+## `second_brain.mode` and the `secondbrain` MCP server
+
+`chassis.config.yaml` carries a `mode` key next to `backend`:
+
+```yaml
+second_brain:
+  backend: siyuan     # siyuan | notion | obsidian
+  mode: direct        # direct | adapter (direct is the default, and what a missing key means)
+```
+
+- **`direct`** (default): today's behavior. The backend's own MCP server (`siyuan` / `notion`) is registered in `.mcp.json`; chassis scripts talk to the backend natively. Installs whose config predates the key see zero change.
+- **`adapter`**: the chassis-owned `secondbrain` MCP server (`chassis/second_brain/mcp_server.py`) is registered INSTEAD, exposing one fixed tool namespace over `get_adapter()`: `create_doc`, `append_to_doc`, `read_doc`, `search`, `list_recent`, `get_deeplink`. The native backend server is deliberately NOT registered - tool availability is the guardrail that keeps prompts backend-neutral. One server over N adapter classes, not one server per backend: MCP tool names are namespaced by server name, so per-backend servers would mean per-backend prompt text, which defeats the abstraction.
+
+Registration is driven by `_enable_when` predicates in `chassis/.mcp.json.template`, evaluated by `chassis/scripts/hydrate-mcp-json.py` (which supports `==`, `!=`, and `&&`; a missing `mode` key satisfies `mode != 'adapter'`, keeping legacy configs on the direct path).
+
+Backend support per mode:
+
+| backend | direct | adapter |
+|---|---|---|
+| siyuan | `siyuan` MCP server (`siyuan-mcp@1.0.4`) | `secondbrain` |
+| notion | `notion` MCP server (`@suekou/mcp-notion-server`) | `secondbrain` |
+| obsidian | NO second-brain MCP surface - no suitable native server exists (community options require the Obsidian desktop app + Local REST API plugin, which headless container installs do not run) | `secondbrain` |
+
+Obsidian installs are therefore adapter-mode-only if they want a second-brain MCP surface at all.
 
 ## Contract
 

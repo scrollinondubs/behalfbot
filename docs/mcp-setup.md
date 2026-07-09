@@ -31,7 +31,7 @@ Once the file lands, restart Claude Code so it re-reads. The manual hydration wa
 |---|---|---|
 | **Always-on** (no auth) | `memory`, `playwright`, `context7` | Every install. Keep. |
 | **Always-on with config** | `github` | Every install touches GitHub. Provision agent-side PAT. |
-| **Pick one** (second-brain) | `siyuan` OR `notion` | Per `chassis.config.yaml.second_brain.backend`. Delete the other. |
+| **Pick one** (second-brain) | `siyuan` OR `notion` OR `secondbrain` | Per `chassis.config.yaml.second_brain.backend` + `second_brain.mode`. Mode `direct` (default): the backend's native server. Mode `adapter`: the chassis-owned `secondbrain` server INSTEAD, and the native server is not registered. Obsidian has no native server - obsidian installs need `mode: adapter` for any second-brain MCP surface. |
 | **Optional, opt-in** | `brave-search`, `tavily`, `turso`, `amplitude`, `n8n`, `loom`, `remarkable`, `oura`, `frame0` | Per `chassis.config.yaml.modules.*` flags. Delete entries you don't activate. |
 
 ---
@@ -71,7 +71,11 @@ Setup:
 
 Sanity check: `gh auth status` returns the agent-side identity (NOT your personal account).
 
-### siyuan OR notion (pick one)
+### secondbrain (adapter mode)
+
+If `chassis.config.yaml.second_brain.mode` is `adapter`, the hydrator registers the chassis-owned `secondbrain` server (`chassis/second_brain/mcp_server.py`) and OMITS the native backend server below. It needs no extra auth of its own - it reads the backend credentials from `chassis.config.yaml` / `.env` via the second-brain adapter factory. Tools: `create_doc`, `append_to_doc`, `read_doc`, `search`, `list_recent`, `get_deeplink` - identical on every backend. See docs/second-brain-adapters.md.
+
+### siyuan OR notion (pick one, direct mode)
 
 #### siyuan
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from typing import Any
 
 from chassis.second_brain.base import (
@@ -45,6 +46,27 @@ from chassis.second_brain.base import (
 
 NOTION_API_VERSION = "2022-06-28"
 NOTION_API_ROOT = "https://api.notion.com/v1"
+
+# list_recent scans the /search endpoint newest-first until it walks past the
+# window. Cap the scan so a huge workspace cannot turn one call into an
+# unbounded crawl - 500 pages (5 API calls) covers any sane daily window.
+_LIST_RECENT_SCAN_CAP = 500
+
+
+def _to_utc(value: datetime) -> datetime:
+    """Normalize to aware-UTC. Naive datetimes are interpreted as local time
+    (that is `datetime.astimezone`'s behavior for naive input)."""
+    return value.astimezone(timezone.utc)
+
+
+def _parse_notion_ts(raw: str | None) -> datetime | None:
+    """Parse Notion's ISO-8601 timestamps (e.g. `2026-07-09T10:00:00.000Z`)."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 class NotionError(RuntimeError):
@@ -198,6 +220,71 @@ class NotionNotes(NotesAdapter):
                     raw=page,
                 )
             )
+        return hits
+
+    def list_recent(
+        self,
+        since: datetime,
+        until: datetime,
+        min_content_len: int = 0,
+        limit: int = 50,
+    ) -> list[SearchHit]:
+        """Pages with `last_edited_time` in [since, until), newest first.
+
+        Honest divergences from the SiYuan implementation:
+          - Notion's /search endpoint has NO timestamp filter, only a sort.
+            This scans newest-first and windows client-side, stopping as soon
+            as results predate `since` (or after `_LIST_RECENT_SCAN_CAP`
+            pages, whichever comes first).
+          - `last_edited_time` has MINUTE granularity - Notion truncates
+            seconds. Edits within the same minute as a window boundary can
+            fall on either side of it.
+          - Only pages shared with the integration are visible at all.
+          - `min_content_len` costs one extra API call per candidate page
+            (Notion does not expose content length on search results); the
+            length measured is the reconstructed-markdown length of the first
+            100 blocks.
+        """
+        since_utc = _to_utc(since)
+        until_utc = _to_utc(until)
+        hits: list[SearchHit] = []
+        cursor: str | None = None
+        scanned = 0
+        while scanned < _LIST_RECENT_SCAN_CAP:
+            payload: dict[str, Any] = {
+                "page_size": 100,
+                "sort": {"direction": "descending", "timestamp": "last_edited_time"},
+                "filter": {"value": "page", "property": "object"},
+            }
+            if cursor:
+                payload["start_cursor"] = cursor
+            result = _request(self._token, "POST", "/search", payload)
+            for page in result.get("results", []):
+                scanned += 1
+                edited = _parse_notion_ts(page.get("last_edited_time"))
+                if edited is None or edited >= until_utc:
+                    continue
+                if edited < since_utc:
+                    return hits  # sorted descending - everything after is older
+                if min_content_len > 0:
+                    body = self.read_doc(page.get("id", ""))
+                    if len(body) < min_content_len:
+                        continue
+                page_id = page.get("id", "")
+                hits.append(
+                    SearchHit(
+                        id=page_id,
+                        title=_extract_page_title(page),
+                        snippet="",
+                        deeplink=f"https://www.notion.so/{page_id.replace('-', '')}",
+                        raw=page,
+                    )
+                )
+                if len(hits) >= limit:
+                    return hits
+            if not result.get("has_more"):
+                break
+            cursor = result.get("next_cursor")
         return hits
 
 

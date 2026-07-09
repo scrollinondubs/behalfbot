@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from datetime import datetime
 from typing import Any
 
 from chassis.second_brain.base import (
@@ -35,6 +36,17 @@ from chassis.second_brain.base import (
 
 class SiYuanError(RuntimeError):
     """Raised when SiYuan API returns a non-zero `code`."""
+
+
+def _siyuan_stamp(value: datetime) -> str:
+    """Format a datetime as SiYuan's `YYYYMMDDHHMMSS` block-timestamp string.
+
+    Aware datetimes are converted to this process's local timezone (SiYuan
+    stores kernel-local wall-clock time); naive datetimes pass through as-is.
+    """
+    if value.tzinfo is not None:
+        value = value.astimezone()
+    return value.strftime("%Y%m%d%H%M%S")
 
 
 class SiYuanNotes(NotesAdapter):
@@ -122,6 +134,57 @@ class SiYuanNotes(NotesAdapter):
             SearchHit(
                 id=row.get("id", ""),
                 title=row.get("hpath", "").rsplit("/", 1)[-1] or "(untitled)",
+                snippet=(row.get("content") or "")[:200],
+                deeplink=self.get_deeplink(row.get("id", "")),
+                raw=row,
+            )
+            for row in rows
+        ]
+
+    def list_recent(
+        self,
+        since: datetime,
+        until: datetime,
+        min_content_len: int = 0,
+        limit: int = 50,
+    ) -> list[SearchHit]:
+        """Docs updated in [since, until), newest first, via SQL on the block table.
+
+        Timestamps: SiYuan's `blocks.updated` column stores the KERNEL's local
+        clock as a `YYYYMMDDHHMMSS` string. Naive datetimes are passed through
+        as-is (assumed to be in the kernel's timezone); aware datetimes are
+        converted to this process's local time first, which matches the kernel
+        only when both run on the same host - the chassis default.
+
+        Body length: the doc row's own `content` column holds the TITLE, not
+        the body (verified against a live kernel - max LENGTH(content) over
+        283 type='d' rows was 81). `min_content_len` therefore filters on
+        SUM(LENGTH(content)) over the doc's child blocks via a correlated
+        subquery.
+        """
+        since_stamp = _siyuan_stamp(since)
+        until_stamp = _siyuan_stamp(until)
+        body_len_sql = (
+            "(SELECT COALESCE(SUM(LENGTH(b2.content)), 0) FROM blocks b2 "
+            "WHERE b2.root_id = blocks.id AND b2.type != 'd')"
+        )
+        sql = (
+            f"SELECT id, hpath, content, updated, created, {body_len_sql} AS body_len "
+            "FROM blocks "
+            "WHERE type = 'd' "
+            f"AND updated >= '{since_stamp}' "
+            f"AND updated < '{until_stamp}' "
+            f"AND {body_len_sql} >= {int(min_content_len)} "
+            "ORDER BY updated DESC "
+            f"LIMIT {int(limit)}"
+        )
+        result = self._post("/api/query/sql", {"stmt": sql})
+        rows = result if isinstance(result, list) else []
+        return [
+            SearchHit(
+                id=row.get("id", ""),
+                title=(row.get("hpath") or "").rsplit("/", 1)[-1]
+                or (row.get("content") or "(untitled)"),
                 snippet=(row.get("content") or "")[:200],
                 deeplink=self.get_deeplink(row.get("id", "")),
                 raw=row,
