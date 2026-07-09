@@ -13,7 +13,7 @@ A second brain has both prose and structured semantics. We split them into two c
 | `notes` | Briefings, content stubs, daily logs, Pacman proposals, free-form prose | Page/block APIs |
 | `database` | LP CRM rows, deal pipelines, contacts, tasks, scheduling | Database / property APIs |
 
-Notion implements both natively. SiYuan implements `notes` natively and raises `NotImplementedError` on `database`. Obsidian (V2) will likely fake `database` via structured frontmatter index files.
+Notion implements both natively. SiYuan and Obsidian implement `notes` natively and raise `NotImplementedError` on `database`. Faking `database` via structured frontmatter index files in Obsidian is a possible follow-up.
 
 ## V1 backends
 
@@ -21,7 +21,7 @@ Notion implements both natively. SiYuan implements `notes` natively and raises `
 |---|---|---|
 | `siyuan` | ✅ V1 (notes only; `database` raises `NotImplementedError`) | Sean's primary; HTTP kernel API + SQL search |
 | `notion` | ✅ V1 (both surfaces) | V1 installer #1 primary; Notion REST API |
-| `obsidian` | ❌ V2 | Marc's Protocol Labs leaning; deferred |
+| `obsidian` | ✅ V1 (notes only; `database` raises `NotImplementedError`) | Direct file IO on the vault directory; read-only vaults first-class ([#55](https://github.com/scrollinondubs/behalfbot/issues/55)) |
 
 ## Configuration
 
@@ -55,6 +55,21 @@ second_brain:
       startup_pipeline: deal_name
     active_database: lp_crm                             # default for upsert/query
 ```
+
+### Obsidian
+
+```yaml
+second_brain:
+  backend: obsidian
+  obsidian:
+    vault_path: /home/hugues/second-brain   # absolute path to the vault root
+    vault_name: second-brain                 # for obsidian:// deeplinks; defaults to the directory name
+    read_only: true                          # pull-only vault clone (e.g. read-only deploy key)
+```
+
+Doc ids are vault-relative paths (`Briefings/2026-07-09.md`; the `.md` suffix is optional on input). `create_doc` treats `parent` as a vault-relative directory and empty `parent` as the vault root. No Obsidian process or plugin is required - the adapter reads and writes the vault files directly.
+
+Read-only vaults are first-class: with `read_only: true`, or when the filesystem itself denies writes (pull-only git clone through a read-only deploy key), `create_doc` / `append_to_doc` raise `ObsidianReadOnlyError` naming the cause. Config states intent, the filesystem states truth - a write is refused if either side blocks it, and the error says which. Writes that do proceed are atomic (temp file + rename), doc ids that resolve outside the vault root are rejected, and `create_doc` refuses to overwrite an existing note.
 
 `${VAR}` references resolve against `os.environ` at import time; chassis bootstrap loads `.env` before any plugin imports the adapter.
 
@@ -110,10 +125,10 @@ The `SearchHit` dataclass is the canonical return shape for both `notes.search` 
 
 ## Migration to V2
 
-When Obsidian + multi-backend writes land:
+Obsidian landed in V1 via [#55](https://github.com/scrollinondubs/behalfbot/issues/55) (`chassis/second_brain/obsidian.py`, direct file IO, `obsidian` branch in `factory.get_adapter`). Still V2:
 
-1. Add `chassis/second_brain/obsidian.py` implementing `NotesAdapter` over the Local REST API plugin or direct file IO.
-2. Extend `factory.get_adapter` with the `obsidian` branch.
-3. Decide migration tool placement — likely `chassis/scripts/sb-migrate.py` running source→destination via the adapter interfaces.
+1. Multi-backend writes / migration tooling - likely `chassis/scripts/sb-migrate.py` running source→destination via the adapter interfaces.
+2. Obsidian `database` surface faked via structured frontmatter index files, if an installer needs it.
+3. Obsidian Local REST API plugin integration (live-app features like block-level linking), if direct file IO proves insufficient.
 
-Until then, the adapters above cover the V1 installer set (SiYuan / Notion).
+Until then, the adapters above cover the V1 installer set (SiYuan / Notion / Obsidian).
