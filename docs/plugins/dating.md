@@ -107,7 +107,7 @@ Future state: if/when the chassis runtime grows native "host-resident plugin" su
 
 ### Trade-off: dating swipes run as user LaunchAgents (not LaunchDaemons)
 
-Most chassis-shipped host plists were promoted to **LaunchDaemons** in chassis#14 so they survive an unattended Mac reboot (no GUI login required to boot the job). Dating-swipe plists are the exception — they stay as user LaunchAgents in `~/Library/LaunchAgents/` because:
+chassis#14 promoted most host plists to **LaunchDaemons** so they would survive an unattended Mac reboot. That was reverted on 2026-07-11: a LaunchDaemon runs in launchd's Background session and cannot reach the login keychain, which killed Vaultwarden on every macOS install for five weeks. Chassis host plists are gui-domain **LaunchAgents** again. Dating-swipe plists were always LaunchAgents, for their own reasons:
 
 - The Android emulator window is an Aqua-session resource — qemu/AndroidStudio needs `WindowServer` to render the AVD. Without a logged-in GUI session, the emulator binary won't start.
 - Playwright Chromium on macOS likewise needs an Aqua session even in `headless: true` mode (Chromium's launcher path on darwin assumes a `WindowServer` connection during init).

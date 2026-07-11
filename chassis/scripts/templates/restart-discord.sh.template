@@ -4,9 +4,9 @@
 export PATH="/opt/homebrew/bin:$PATH"
 
 # Wait up to 90s for Docker daemon to be available (Colima VM boot on cold
-# start). Without this guard, a system-domain LaunchDaemon that races Colima
-# at reboot spawns tmux + claude before docker.sock exists; MCP plugins that
-# docker-exec the chassis container fail-loop until Colima catches up.
+# start). Without this guard, a job that races Colima at login spawns tmux +
+# claude before docker.sock exists; MCP plugins that docker-exec the chassis
+# container fail-loop until Colima catches up.
 # 30 iterations x 3s = 90s ceiling. First successful docker-info breaks early,
 # so a 15s Colima boot only waits 15s. Linux installs where docker is always
 # up (or N/A) succeed on first iteration. See chassis#16.
@@ -19,7 +19,9 @@ done
 #
 # Kills and restarts the ${TMUX_SESSION_NAME} tmux session with a fresh
 # Claude Code process. Invoked daily by the discord-restart LaunchAgent and
-# on-demand by the discord-watchdog LaunchAgent.
+# on-demand by the discord-watchdog LaunchAgent. BOTH must be gui-domain
+# LaunchAgents - see docs/launchd-domains.md and the launchd-session guard
+# below for why.
 #
 # Generated from chassis/scripts/templates/restart-discord.sh.template by
 # chassis/scripts/bootstrap-customer-scripts.sh. Do NOT edit the rendered copy
@@ -38,19 +40,92 @@ set -euo pipefail
 
 LOG_DIR="${CUSTOMER_HOME}/logs/scheduled"
 LOG_FILE="$LOG_DIR/discord-restart.log"
-mkdir -p "$LOG_DIR"
+STATE_DIR="${CUSTOMER_HOME}/scheduled-tasks"
+# Provenance record for the tmux server this script created: "<server-pid> Aqua".
+# See the launchd-session guard below.
+SERVER_STATE_FILE="$STATE_DIR/tmux-server-session.state"
+mkdir -p "$LOG_DIR" "$STATE_DIR"
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+log() { echo "[$(timestamp)] $*" >> "$LOG_FILE"; }
 
-echo "[$(timestamp)] Discord session restart starting for ${BOT_NAME}..." >> "$LOG_FILE"
+# Which launchd session are WE running in? "Aqua" for a gui/<uid> LaunchAgent
+# (login keychain reachable), "Background" for a system LaunchDaemon (login
+# keychain NOT reachable - security(1) returns error 36). On Linux there is no
+# launchctl and no login keychain, so the whole guard degrades to a no-op.
+launchd_session() {
+    if command -v launchctl >/dev/null 2>&1; then
+        launchctl managername 2>/dev/null || echo "unknown"
+    else
+        echo "n/a"
+    fi
+}
 
-# Kill existing session if present
+# PID of the running tmux server, empty when no server is up.
+tmux_server_pid() {
+    tmux display-message -p '#{pid}' 2>/dev/null || true
+}
+
+log "Discord session restart starting for ${BOT_NAME}..."
+
+SESSION_MGR="$(launchd_session)"
+SERVER_PID="$(tmux_server_pid)"
+log "launchd session: ${SESSION_MGR}; tmux server pid: ${SERVER_PID:-none}"
+
+# ---------------------------------------------------------------------------
+# Launchd-session guard (the chassis#14 regression fix).
+#
+# tmux runs ONE server per user socket (/tmp/tmux-<uid>/default). Whichever job
+# creates that server fixes the launchd session for EVERY session on it, and
+# every process those sessions spawn - including `claude`. A server created from
+# a Background session (i.e. by a LaunchDaemon) is keychain-blind forever, and
+# `tmux kill-session` does not fix it: the SERVER has to die.
+#
+# So: when we are running under Aqua (the correct domain) and the live server is
+# not one we recorded as Aqua-born, kill the server outright and let this run
+# rebuild it. The provenance file makes this a one-shot per server lifetime, not
+# a nightly nuke - a matching record means the server is already ours and only
+# our own session gets killed, exactly as before.
+#
+# When we are NOT under Aqua (someone re-installed this as a LaunchDaemon, or
+# ran the script by hand from a non-GUI ssh session) we deliberately do NOT
+# touch the server. A Background-domain run must never tear down an Aqua-born
+# server: that would let a stray daemon fight the agent and re-poison the
+# server on every tick. We log loudly and carry on with a plain kill-session.
+# ---------------------------------------------------------------------------
+if [[ -n "$SERVER_PID" ]]; then
+    case "$SESSION_MGR" in
+        Aqua)
+            recorded="$(cat "$SERVER_STATE_FILE" 2>/dev/null || true)"
+            if [[ "$recorded" != "${SERVER_PID} Aqua" ]]; then
+                log "tmux server ${SERVER_PID} has no Aqua provenance record - killing the SERVER so it is rebuilt in the Aqua session (login keychain)."
+                log "  other tmux sessions on this server will be torn down; their own watchdogs bring them back on an Aqua-born server."
+                tmux kill-server 2>/dev/null || true
+                sleep 2
+                SERVER_PID=""
+                rm -f "$SERVER_STATE_FILE"
+            fi
+            ;;
+        n/a)
+            : # Linux: no launchd, no login keychain, nothing to guard against.
+            ;;
+        *)
+            log "WARN: running in launchd session '${SESSION_MGR}', not Aqua."
+            log "  This job must be a gui-domain LaunchAgent (~/Library/LaunchAgents/,"
+            log "  launchctl bootstrap gui/\$(id -u)). In a Background session the claude"
+            log "  process we spawn cannot reach the login keychain and Vaultwarden dies."
+            log "  See docs/launchd-domains.md. Not touching the tmux server from here."
+            ;;
+    esac
+fi
+
+# Kill existing session if present (no-op when the server was just killed).
 if tmux has-session -t "${TMUX_SESSION_NAME}" 2>/dev/null; then
-    echo "[$(timestamp)] Killing existing ${TMUX_SESSION_NAME} session" >> "$LOG_FILE"
+    log "Killing existing ${TMUX_SESSION_NAME} session"
     tmux kill-session -t "${TMUX_SESSION_NAME}"
     sleep 2
 else
-    echo "[$(timestamp)] No existing ${TMUX_SESSION_NAME} session found" >> "$LOG_FILE"
+    log "No existing ${TMUX_SESSION_NAME} session found"
 fi
 
 # Re-seed Claude Code's folder-trust state for CUSTOMER_HOME before launch.
@@ -65,9 +140,9 @@ fi
 # the full post-mortem.
 if [[ -x "${CHASSIS_HOME}/chassis/scripts/preseed-claude-trust.sh" ]]; then
     bash "${CHASSIS_HOME}/chassis/scripts/preseed-claude-trust.sh" "${CUSTOMER_HOME}" >> "$LOG_FILE" 2>&1 || \
-        echo "[$(timestamp)] WARN: preseed-claude-trust.sh failed; claude may park on trust prompt" >> "$LOG_FILE"
+        log "WARN: preseed-claude-trust.sh failed; claude may park on trust prompt"
 else
-    echo "[$(timestamp)] WARN: preseed-claude-trust.sh not found at ${CHASSIS_HOME}/chassis/scripts/; skipping trust pre-seed" >> "$LOG_FILE"
+    log "WARN: preseed-claude-trust.sh not found at ${CHASSIS_HOME}/chassis/scripts/; skipping trust pre-seed"
 fi
 
 # Start new session.
@@ -82,15 +157,28 @@ fi
 # and invalidates peer claude processes still holding the old one. The OAuth
 # bridge sync handles freshness via lazy-refresh-on-use plus bidirectional
 # file<->keychain propagation (chassis/scripts/sync-claude-oauth-bridge.sh,
-# 30 min StartInterval).
+# 30 min StartInterval) - which itself reads the login keychain, and is the
+# other half of why this job has to run under Aqua.
 tmux new-session -s "${TMUX_SESSION_NAME}" -d \
     "cd '${CUSTOMER_HOME}' && claude --channels '${CLAUDE_CHANNELS}' --dangerously-skip-permissions"
 
 sleep 2
 
 if tmux has-session -t "${TMUX_SESSION_NAME}" 2>/dev/null; then
-    echo "[$(timestamp)] ${TMUX_SESSION_NAME} session restarted successfully" >> "$LOG_FILE"
+    log "${TMUX_SESSION_NAME} session restarted successfully"
 else
-    echo "[$(timestamp)] ERROR: Failed to start ${TMUX_SESSION_NAME} session" >> "$LOG_FILE"
+    log "ERROR: Failed to start ${TMUX_SESSION_NAME} session"
     exit 1
+fi
+
+# Record provenance of the server this session is living on, so later runs can
+# tell an Aqua-born server (leave it alone, kill only the session) from a
+# poisoned one (kill the server). Only meaningful under Aqua; a Background run
+# must never claim provenance it does not have.
+if [[ "$SESSION_MGR" == "Aqua" ]]; then
+    new_server_pid="$(tmux_server_pid)"
+    if [[ -n "$new_server_pid" ]]; then
+        printf '%s Aqua\n' "$new_server_pid" > "$SERVER_STATE_FILE"
+        log "recorded tmux server ${new_server_pid} as Aqua-born"
+    fi
 fi

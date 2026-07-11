@@ -127,13 +127,15 @@ If a bug doesn't match one of these three, you might be in fresh territory — b
 
 ---
 
-## 12. LaunchDaemons survive reboots; LaunchAgents don't
+## 12. A LaunchDaemon cannot reach the login keychain - and that beats reboot survival
 
-**Anti-pattern (macOS only):** putting reboot-critical infrastructure in `~/Library/LaunchAgents/`. The default `LimitLoadToSessionType=Aqua` binding means the service is loaded but inactive when nobody's logged into a GUI session. Auto-reboots silently disable everything.
+**Anti-pattern (macOS only):** promoting a job to `/Library/LaunchDaemons/` because it needs to survive an unattended reboot, without following what the job actually spawns. A LaunchDaemon runs in launchd's **Background** session even with `UserName` set. A Background session cannot unlock the user's login keychain, so `security find-generic-password` returns error 36 and every Vaultwarden-sourced credential dies - silently. This doc used to say the opposite ("infrastructure goes in daemons") and that rule cost a five-week outage on the reference install (2026-06-03 to 2026-07-11): the Discord restart/watchdog jobs were promoted on the false premise that they "only docker exec the container", when in fact they spawn a host tmux session running `claude`.
 
-**Do this instead:** anything reboot-critical (heartbeat dispatcher, watchdogs, Discord pairing, dashboard) goes in `/Library/LaunchDaemons/` with `UserName=<installer>` to drop privileges. LaunchAgents are fine for things that need the keychain or are user-facing GUI. Infrastructure goes in daemons.
+**Do this instead:** if the job, or **anything it spawns**, touches the login keychain or runs a Claude process, it is a gui-domain **LaunchAgent**. LaunchDaemons are only for genuinely headless, keychain-free jobs. Reboot survival for agents comes from **enabling auto-login** on the install Mac, not from the daemon domain - on macOS you cannot have both login-keychain access and pre-login startup, because the login keychain is unlocked by the login. Related trap: tmux runs one server per user socket, so a single Background-domain job spawning any tmux session poisons the server for every session on it.
 
-**Lesson:** 26. (Linux installers: equivalent is `systemctl enable --now` for system-scope units vs `--user` units. Same lesson — don't put reboot-critical things in user scope.)
+Full decision rule, migration steps, and the honest tradeoff: `docs/launchd-domains.md`.
+
+**Lesson:** 26 (as corrected). (Linux installers: no keychain equivalent, so the original system-scope-vs-user-scope advice still holds there.)
 
 ---
 

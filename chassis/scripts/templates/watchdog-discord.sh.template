@@ -18,7 +18,10 @@ done
 #
 # Monitors the ${TMUX_SESSION_NAME} tmux session for auth failures and
 # restarts it via the sibling restart script when needed. Runs every 30
-# minutes via the discord-watchdog LaunchAgent.
+# minutes via the discord-watchdog LaunchAgent, which MUST be a gui-domain
+# LaunchAgent (see docs/launchd-domains.md): this script's restart child
+# spawns the tmux session that hosts `claude`, and anything launchd starts in
+# the Background session cannot reach the user's login keychain.
 #
 # Generated from chassis/scripts/templates/watchdog-discord.sh.template by
 # chassis/scripts/bootstrap-customer-scripts.sh. Do NOT edit the rendered copy.
@@ -33,31 +36,72 @@ set -euo pipefail
 LOG_DIR="${CUSTOMER_HOME}/logs/scheduled"
 LOG_FILE="$LOG_DIR/watchdog.log"
 RESTART_SCRIPT="${CUSTOMER_HOME}/scripts/restart-${BOT_NAME}-discord.sh"
+# Written by the restart script: "<server-pid> Aqua" for a tmux server it
+# created while running in the Aqua (gui) launchd session.
+SERVER_STATE_FILE="${CUSTOMER_HOME}/scheduled-tasks/tmux-server-session.state"
 mkdir -p "$LOG_DIR"
 
 timestamp() { date '+%Y-%m-%d %H:%M:%S'; }
+log() { echo "[$(timestamp)] $*" >> "$LOG_FILE"; }
+
+launchd_session() {
+    if command -v launchctl >/dev/null 2>&1; then
+        launchctl managername 2>/dev/null || echo "unknown"
+    else
+        echo "n/a"
+    fi
+}
+
+tmux_server_pid() {
+    tmux display-message -p '#{pid}' 2>/dev/null || true
+}
 
 # Defensive: refuse to run if the restart script is missing rather than
 # silently retry every 30 min with exit 127 (the Toby case study, #6).
 if [[ ! -x "$RESTART_SCRIPT" ]]; then
-    echo "[$(timestamp)] FATAL: restart script missing at $RESTART_SCRIPT" >> "$LOG_FILE"
-    echo "[$(timestamp)]   This watchdog cannot recover the session without it." >> "$LOG_FILE"
-    echo "[$(timestamp)]   Re-render via: bash \$CHASSIS_HOME/chassis/scripts/bootstrap-customer-scripts.sh" >> "$LOG_FILE"
+    log "FATAL: restart script missing at $RESTART_SCRIPT"
+    log "  This watchdog cannot recover the session without it."
+    log "  Re-render via: bash \$CHASSIS_HOME/chassis/scripts/bootstrap-customer-scripts.sh"
     exit 2
 fi
 
 # Check if session exists
 if ! tmux has-session -t "${TMUX_SESSION_NAME}" 2>/dev/null; then
-    echo "[$(timestamp)] Session missing - restarting" >> "$LOG_FILE"
+    log "Session missing - restarting"
     bash "$RESTART_SCRIPT"
     exit 0
+fi
+
+# Poisoned-tmux-server detection (the chassis#14 regression).
+#
+# A session can look perfectly healthy while sitting on a tmux server that was
+# created from a Background launchd session (an old LaunchDaemon). Every claude
+# process on that server is keychain-blind, so Vaultwarden-sourced credentials
+# fail while the pane shows nothing wrong. The reference install ran five weeks
+# in exactly this state. The restart script owns the recovery (it kills the
+# SERVER, not just the session); the watchdog only has to notice and delegate.
+#
+# Only act when WE are under Aqua. A Background-domain run of this watchdog must
+# not trigger a server teardown - it would just recreate the poisoned server and
+# fight the real agent every 30 minutes.
+SESSION_MGR="$(launchd_session)"
+if [[ "$SESSION_MGR" == "Aqua" ]]; then
+    SERVER_PID="$(tmux_server_pid)"
+    RECORDED="$(cat "$SERVER_STATE_FILE" 2>/dev/null || true)"
+    if [[ -n "$SERVER_PID" && "$RECORDED" != "${SERVER_PID} Aqua" ]]; then
+        log "tmux server ${SERVER_PID} has no Aqua provenance record - session is alive but keychain-blind; delegating to restart (which rebuilds the server)"
+        bash "$RESTART_SCRIPT"
+        exit 0
+    fi
+elif [[ "$SESSION_MGR" != "n/a" ]]; then
+    log "WARN: watchdog running in launchd session '${SESSION_MGR}', not Aqua - it must be a gui-domain LaunchAgent (see docs/launchd-domains.md)"
 fi
 
 # Capture recent pane output for state inspection.
 PANE_OUTPUT=$(tmux capture-pane -t "${TMUX_SESSION_NAME}" -p -S -50 2>/dev/null)
 
 if echo "$PANE_OUTPUT" | grep -qiE "Not logged in|Please run /login|authentication.*failed|token.*expired"; then
-    echo "[$(timestamp)] Auth failure detected - restarting" >> "$LOG_FILE"
+    log "Auth failure detected - restarting"
     bash "$RESTART_SCRIPT"
     exit 0
 fi
@@ -77,7 +121,7 @@ fi
 # tighter regex matched neither alternative on the real prompt and was
 # only saved by the generic-menu fallback below (chassis#23 review by Toby).
 if echo "$PANE_OUTPUT" | grep -qiE "Quick safety check|trust this folder|Is this a project you"; then
-    echo "[$(timestamp)] Folder-trust prompt detected - restarting (restart will re-seed trust via preseed-claude-trust.sh)" >> "$LOG_FILE"
+    log "Folder-trust prompt detected - restarting (restart will re-seed trust via preseed-claude-trust.sh)"
     bash "$RESTART_SCRIPT"
     exit 0
 fi
@@ -88,9 +132,9 @@ fi
 # arrow at the start of a line followed by a numbered option, which Claude's
 # prompts produce and steady-state log output does not.
 if echo "$PANE_OUTPUT" | grep -qE '^[[:space:]]*[>❯][[:space:]]+[0-9]+\.'; then
-    echo "[$(timestamp)] Interactive prompt detected (unknown menu) - restarting" >> "$LOG_FILE"
+    log "Interactive prompt detected (unknown menu) - restarting"
     bash "$RESTART_SCRIPT"
     exit 0
 fi
 
-echo "[$(timestamp)] Session healthy" >> "$LOG_FILE"
+log "Session healthy"

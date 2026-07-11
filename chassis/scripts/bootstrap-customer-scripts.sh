@@ -3,13 +3,20 @@
 # plists from chassis-shipped templates into $CUSTOMER_HOME, then (optionally)
 # install them into the right launchd domain.
 #
-# Per chassis#14, chassis-shipped host plists split into two domains:
-#   - LaunchDaemon (/Library/LaunchDaemons/, system-level)  - survives
-#     unattended reboot, no GUI/Aqua session needed. Requires sudo to install.
-#     Default for jobs that only docker-exec / hit network / run headless.
-#   - LaunchAgent  (~/Library/LaunchAgents/, user-level)    - needs an Aqua
-#     session, dies silently across an unattended reboot. Use only for jobs
-#     that genuinely touch the display (Android emulator, Playwright Chromium).
+# chassis-shipped host plists split into two launchd domains:
+#   - LaunchAgent  (~/Library/LaunchAgents/, user-level, gui/<uid>) - runs in
+#     the Aqua session, so the user's login keychain is reachable. Loads at GUI
+#     login, so an unattended reboot with auto-login off does not recover it.
+#     REQUIRED for anything that touches the login keychain or spawns a Claude
+#     process (or a tmux server hosting one) - see docs/launchd-domains.md.
+#   - LaunchDaemon (/Library/LaunchDaemons/, system-level) - loads at boot, no
+#     login needed, but runs in launchd's Background session where the login
+#     keychain is unreachable even with UserName set. Only for genuinely
+#     headless, keychain-free jobs. Requires sudo to install.
+#
+# chassis#14 got this backwards for discord-restart / discord-watchdog and broke
+# every macOS install's keychain access from 2026-06-03 to 2026-07-11. Both are
+# LaunchAgents again. Do not promote them back.
 #
 # Invoked by:
 #   - bootstrap.sh (first install) - scaffolds the script set
@@ -45,9 +52,9 @@
 #                an explicit follow-up activation step, see --activate-plists.)
 #   --activate-plists
 #                after rendering, actually install the plists into the right
-#                launchd domain (LaunchDaemons or LaunchAgents) and bootstrap
-#                them. This will prompt for sudo for daemon-domain plists.
-#                Implies --plists. No-op on non-macOS hosts.
+#                launchd domain (LaunchAgents or LaunchDaemons) and bootstrap
+#                them. Agent-domain plists need no sudo; daemon-domain plists
+#                prompt for it. Implies --plists. No-op on non-macOS hosts.
 
 set -euo pipefail
 
@@ -216,6 +223,8 @@ install_plist() {
                 echo "  [dry-run] sudo launchctl bootstrap system $dst"
                 return 0
             fi
+            echo "  Installing daemon $label into /Library/LaunchDaemons/ (needs sudo)."
+            sudo -v
             sudo cp "$src" "$dst"
             sudo chown root:wheel "$dst"
             sudo chmod 644 "$dst"
@@ -233,40 +242,75 @@ install_plist() {
 }
 
 # DOMAIN MAP for chassis-shipped host plists. Update this list when adding
-# new chassis-side plists. See docs section "LaunchDaemon vs LaunchAgent -
-# which to use" for the decision rule.
+# new chassis-side plists. See docs/launchd-domains.md ("LaunchDaemon vs
+# LaunchAgent - which to use") for the decision rule.
 #
 # Format: "<plist-basename> <agent|daemon>". Plists not listed here are
 # rendered but not auto-installed; the operator activates them manually.
+#
+# discord-restart / discord-watchdog are AGENTS: they spawn a host tmux session
+# running `claude`, which needs the user's login keychain. A daemon runs in the
+# Background session and cannot reach it. chassis#14 got this wrong; do not
+# promote them back.
 CHASSIS_PLIST_DOMAINS=(
-    "com.behalfbot.${BOT_NAME}-discord-restart.plist daemon"
-    "com.behalfbot.${BOT_NAME}-discord-watchdog.plist daemon"
+    "com.behalfbot.${BOT_NAME}-discord-restart.plist agent"
+    "com.behalfbot.${BOT_NAME}-discord-watchdog.plist agent"
     # heartbeat-dispatcher.plist deliberately NOT listed - deprecated per #14.
 )
 
-if [[ "$ACTIVATE_PLISTS" == "true" ]]; then
-    if [[ "$(uname -s)" != "Darwin" ]]; then
-        echo "  --activate-plists requested but host is not macOS; skipping."
-    else
-        # Pre-flight sudo prompt so the operator isn't surprised mid-loop.
-        daemon_count=0
-        for entry in "${CHASSIS_PLIST_DOMAINS[@]}"; do
-            # shellcheck disable=SC2086
-            set -- $entry
-            [[ "${2:-}" == "daemon" ]] && daemon_count=$((daemon_count + 1))
-        done
-        if [[ "$daemon_count" -gt 0 && "$DRY_RUN" != "true" ]]; then
-            echo ""
-            echo "About to install $daemon_count LaunchDaemon(s) into /Library/LaunchDaemons/."
-            echo "This requires sudo. You may be prompted for your password now."
-            # Touch sudo once up front so the rest of the loop runs without
-            # additional prompts (within sudo's default timestamp window).
-            sudo -v || {
-                echo "  sudo refused; skipping daemon installation." >&2
-                ACTIVATE_PLISTS=false
-            }
+# Stale-daemon check. An install from the #14 era has these same labels sitting
+# in /Library/LaunchDaemons/. A leftover daemon keeps firing the restart script
+# from the Background session and re-poisons the shared tmux server, fighting
+# the agent we are about to install. Removing it needs sudo, so this script
+# refuses to proceed rather than sudo behind the operator's back.
+if [[ "$ACTIVATE_PLISTS" == "true" && "$(uname -s)" == "Darwin" ]]; then
+    stale_daemons=()
+    for entry in "${CHASSIS_PLIST_DOMAINS[@]}"; do
+        # shellcheck disable=SC2086
+        set -- $entry
+        if [[ -f "/Library/LaunchDaemons/$1" ]]; then
+            stale_daemons+=("$1")
         fi
+    done
+    if [[ ${#stale_daemons[@]} -gt 0 ]]; then
+        echo "" >&2
+        echo "  ERROR: stale LaunchDaemon(s) from a pre-fix install are still present:" >&2
+        for d in "${stale_daemons[@]}"; do
+            echo "    /Library/LaunchDaemons/$d" >&2
+        done
+        echo "" >&2
+        echo "  They run the tmux-spawning restart script in launchd's Background" >&2
+        echo "  session, where the login keychain is unreachable (security error 36)," >&2
+        echo "  and they will fight the gui LaunchAgents for the shared tmux server." >&2
+        echo "  Remove them first (needs sudo), then re-run:" >&2
+        echo "" >&2
+        for d in "${stale_daemons[@]}"; do
+            echo "    sudo launchctl bootout system/${d%.plist}" >&2
+            echo "    sudo rm -f /Library/LaunchDaemons/$d" >&2
+        done
+        echo "" >&2
+        echo "  Or run bootstrap.sh, which offers to do it for you." >&2
+        echo "  Background: docs/launchd-domains.md" >&2
+        exit 3
     fi
+fi
+
+if [[ "$ACTIVATE_PLISTS" == "true" && "$(uname -s)" != "Darwin" ]]; then
+    echo "  --activate-plists requested but host is not macOS; skipping."
+fi
+
+# Activating the restart agent fires it immediately (RunAtLoad) and, on a box
+# whose tmux server was born in the Background session, its first act is
+# `tmux kill-server`. Running this script from inside tmux would kill the shell
+# it is running in, mid-render.
+if [[ "$ACTIVATE_PLISTS" == "true" && "$(uname -s)" == "Darwin" && "$DRY_RUN" != "true" \
+      && -n "${TMUX:-}" && "${BOOTSTRAP_ALLOW_TMUX:-0}" != "1" ]]; then
+    echo "" >&2
+    echo "  ERROR: --activate-plists was run from inside tmux." >&2
+    echo "  The discord-restart agent rebuilds the tmux server on activation," >&2
+    echo "  which would kill this shell. Re-run outside tmux, or set" >&2
+    echo "  BOOTSTRAP_ALLOW_TMUX=1 if this session is expendable." >&2
+    exit 4
 fi
 
 if [[ "$ACTIVATE_PLISTS" == "true" && "$(uname -s)" == "Darwin" ]]; then
@@ -289,20 +333,19 @@ if [[ "$DRY_RUN" != "true" ]]; then
         if [[ "$ACTIVATE_PLISTS" != "true" ]]; then
             echo ""
             echo "Next: activate the plists into the right launchd domain."
-            echo "      (chassis#14: discord-restart + discord-watchdog are now"
-            echo "       LaunchDaemons so they survive unattended reboots.)"
+            echo "      discord-restart + discord-watchdog are gui-domain LaunchAgents:"
+            echo "      they spawn the tmux session that hosts claude, which needs the"
+            echo "      login keychain. LaunchDaemons cannot reach it (docs/launchd-domains.md)."
             echo ""
-            echo "      Easiest: re-run this script with --activate-plists, which"
-            echo "      handles the sudo-cp-bootstrap dance for daemons and the"
-            echo "      symlink-bootstrap dance for agents."
+            echo "      Easiest: re-run this script with --activate-plists (no sudo needed)."
             echo ""
-            echo "      Or manually, for each daemon:"
-            echo "        sudo cp $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-restart.plist  /Library/LaunchDaemons/"
-            echo "        sudo cp $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-watchdog.plist /Library/LaunchDaemons/"
-            echo "        sudo chown root:wheel /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-{restart,watchdog}.plist"
-            echo "        sudo chmod 644       /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-{restart,watchdog}.plist"
-            echo "        sudo launchctl bootstrap system /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-restart.plist"
-            echo "        sudo launchctl bootstrap system /Library/LaunchDaemons/com.behalfbot.${BOT_NAME}-discord-watchdog.plist"
+            echo "      Or manually, for each agent:"
+            echo "        ln -sf $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-restart.plist  ~/Library/LaunchAgents/"
+            echo "        ln -sf $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-watchdog.plist ~/Library/LaunchAgents/"
+            echo "        launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.behalfbot.${BOT_NAME}-discord-restart.plist"
+            echo "        launchctl bootstrap gui/\$(id -u) ~/Library/LaunchAgents/com.behalfbot.${BOT_NAME}-discord-watchdog.plist"
+            echo ""
+            echo "      Run it outside tmux: activation rebuilds the tmux server."
         fi
     fi
 fi

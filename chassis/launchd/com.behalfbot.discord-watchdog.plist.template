@@ -7,39 +7,59 @@
   Generated from chassis/launchd/com.behalfbot.discord-watchdog.plist.template
   by chassis/scripts/bootstrap-customer-scripts.sh.
 
-  DOMAIN: LaunchDaemon (system-level, /Library/LaunchDaemons/).
-  Promoted from user LaunchAgent in #14 so it survives unattended reboots
-  on installer Macs that don't auto-login. This job only `docker exec`s
-  the chassis container - no GUI/Aqua session needed. See chassis docs:
-  "LaunchDaemon vs LaunchAgent - which to use" for the decision rule.
+  DOMAIN: LaunchAgent (user-level, ~/Library/LaunchAgents/), bootstrapped into
+  gui/<uid>. This MUST NOT be a LaunchDaemon. See docs/launchd-domains.md.
+
+  WHY (correcting chassis#14):
+  #14 promoted this job to a LaunchDaemon on the claim that it "only docker
+  execs the chassis container - no GUI/Aqua session needed". That claim was
+  false for this job too: the watchdog invokes the restart script, which spawns
+  a HOST tmux session running `claude`. Anything launchd starts in the
+  Background session (which is where a LaunchDaemon runs, UserName or not)
+  cannot reach the user's login keychain - `security find-generic-password`
+  returns error 36 - so bw-unlock.sh and every Vaultwarden-sourced credential
+  fail underneath the Claude process.
+
+  Pairing rule: this agent and com.behalfbot.${BOT_NAME}-discord-restart share
+  one tmux server (/tmp/tmux-<uid>/default - tmux runs ONE server per user
+  socket). Whichever job creates the server fixes the launchd session for every
+  session on it, so BOTH jobs must live in gui/<uid>. Converting only one of
+  them fixes nothing. The restart script kills the SERVER, not just the session,
+  when it finds a server that was not born under Aqua - a plain kill-session
+  leaves a poisoned server poisoned forever (the reference install survived five
+  weeks of daily restarts in exactly that state).
+
+  Outage: 2026-06-03 (the #14 daemon sweep) to 2026-07-11 on the reference
+  install. Every macOS install shipped since #14 is affected.
+
+  TRADEOFF (do not "fix" this back to a daemon):
+  a gui LaunchAgent only loads after GUI login, so it does not recover on an
+  unattended reboot of a Mac with auto-login off - that was #14's real
+  motivation. On macOS you cannot have both login-keychain access and pre-login
+  startup: the login keychain is unlocked BY the user login. Use a LaunchAgent
+  and enable auto-login on the install Mac.
 
   Template variables - same set as the sibling restart plist (see comment
   block in com.behalfbot.discord-restart.plist.template).
 
   Cadence: every 30 minutes (StartInterval 1800). Restarts only fire when
-  the watchdog actually detects a dead session or an auth-failure pattern
-  in the tmux pane buffer - the wakeup itself is cheap, the bot stays up.
+  the watchdog actually detects a dead session, an auth-failure pattern in the
+  tmux pane buffer, or a tmux server born in the wrong launchd session - the
+  wakeup itself is cheap, the bot stays up.
 
-  Daemon-specific notes:
-    - UserName/GroupName pin execution to the installer's user, NOT root.
-      Without these, the daemon runs as root and breaks file-perm assumptions
-      in the watchdog script (writes logs under ${CUSTOMER_HOME}, talks to
-      the user's Docker socket).
-    - All paths must be absolute - no `~` / `$HOME` expansion shortcuts.
+  No UserName/GroupName keys: a LaunchAgent already runs as the logged-in user.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>com.behalfbot.${BOT_NAME}-discord-watchdog</string>
-    <key>UserName</key>
-    <string>${USER}</string>
-    <key>GroupName</key>
-    <string>staff</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
         <string>${CUSTOMER_HOME}/scripts/watchdog-${BOT_NAME}-discord.sh</string>
     </array>
+    <key>RunAtLoad</key>
+    <true/>
     <key>StartInterval</key>
     <integer>1800</integer>
     <key>WorkingDirectory</key>
