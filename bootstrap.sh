@@ -597,6 +597,89 @@ install_os_deps() {
 # 11. Set up launchd / systemd unit
 # ============================================================
 
+# migrate_stale_launchdaemons <label>...
+#
+# Installs made between chassis#14 (2026-06-03) and the gui-agent fix shipped
+# these jobs as LaunchDaemons in /Library/LaunchDaemons/. A leftover daemon does
+# not just sit there harmlessly: it runs the same restart script on the same
+# schedule, from launchd's Background session, and recreates a Background-born
+# tmux server. tmux runs one server per user socket, so that single daemon
+# re-poisons the server for every session on it and fights the new agent
+# forever. Both cannot coexist - the daemon has to go.
+#
+# Removing it needs sudo, which this installer refuses to take behind your back.
+# Interactive runs get the exact commands plus a y/N prompt (sudo itself asks
+# for the password). Non-interactive runs fail loudly with the commands to run.
+# Override the prompt with BOOTSTRAP_ASSUME_YES=1.
+migrate_stale_launchdaemons() {
+    local labels=("$@")
+    local stale=()
+
+    local label
+    for label in "${labels[@]}"; do
+        if [[ -f "/Library/LaunchDaemons/${label}.plist" ]]; then
+            stale+=("$label")
+        fi
+    done
+
+    if [[ ${#stale[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    log ""
+    log "  MIGRATION: found ${#stale[@]} stale LaunchDaemon(s) from a pre-fix install:"
+    for label in "${stale[@]}"; do
+        log "    /Library/LaunchDaemons/${label}.plist"
+    done
+    log "  These run the tmux-spawning restart script in launchd's Background"
+    log "  session, where the login keychain is unreachable (security error 36)."
+    log "  They must be removed before the gui LaunchAgents can take over, or"
+    log "  they will keep recreating a keychain-blind tmux server. See"
+    log "  docs/launchd-domains.md."
+    log ""
+    log "  Commands (require sudo):"
+    for label in "${stale[@]}"; do
+        log "    sudo launchctl bootout system/${label}"
+        log "    sudo rm -f /Library/LaunchDaemons/${label}.plist"
+    done
+    log ""
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run the commands above, then install the gui agents"
+        return 0
+    fi
+
+    if [[ "${BOOTSTRAP_ASSUME_YES:-0}" != "1" ]]; then
+        if [[ ! -t 0 ]]; then
+            log "  ERROR: stale LaunchDaemons present and this is a non-interactive run."
+            log "         Run the commands above (or re-run with BOOTSTRAP_ASSUME_YES=1),"
+            log "         then re-run bootstrap.sh. Refusing to leave a daemon and an"
+            log "         agent fighting over the same tmux server."
+            return 1
+        fi
+        local reply=""
+        read -r -p "  Run them now with sudo? [y/N] " reply
+        if [[ ! "$reply" =~ ^[Yy]$ ]]; then
+            log "  ERROR: declined. The stale daemons must be removed before the agents"
+            log "         can work. Run the commands above, then re-run bootstrap.sh."
+            return 1
+        fi
+    fi
+
+    for label in "${stale[@]}"; do
+        log "  Booting out + removing daemon: $label"
+        sudo launchctl bootout "system/${label}" >/dev/null 2>&1 || true
+        sudo rm -f "/Library/LaunchDaemons/${label}.plist"
+        if [[ -f "/Library/LaunchDaemons/${label}.plist" ]]; then
+            log "    ERROR: could not remove /Library/LaunchDaemons/${label}.plist"
+            return 1
+        fi
+        log "    ✓ removed $label from the system domain"
+    done
+
+    return 0
+}
+
 setup_dispatcher_unit() {
     step "12/14" "Set up dispatcher launchd / systemd unit"
 
@@ -604,55 +687,81 @@ setup_dispatcher_unit() {
     os="$(uname -s)"
 
     if [[ "$os" == "Darwin" ]]; then
+        # Activating the restart agent fires it immediately (RunAtLoad), and its
+        # first act on an unmigrated box is `tmux kill-server` - the only way to
+        # rebuild a Background-born tmux server under Aqua. If this installer is
+        # itself running inside tmux, that kill takes the bootstrap down with it.
+        if [[ -n "${TMUX:-}" && "$DRY_RUN" != "true" && "${BOOTSTRAP_ALLOW_TMUX:-0}" != "1" ]]; then
+            log "  ERROR: bootstrap.sh is running inside tmux."
+            log "         Activating the discord-restart agent rebuilds the tmux server"
+            log "         (kill-server), which would kill this shell mid-install."
+            log "         Re-run outside tmux, or set BOOTSTRAP_ALLOW_TMUX=1 if you"
+            log "         know this session is expendable."
+            return 1
+        fi
         # On macOS the chassis ships discord-restart + discord-watchdog as
-        # LaunchDaemons (promoted from LaunchAgents in chassis#14). They're
-        # rendered into $CUSTOMER_HOME/launchd/ during step 8 by
-        # bootstrap-customer-scripts.sh. This step copies them into
-        # /Library/LaunchDaemons/ and bootstraps the system domain.
+        # gui-domain LaunchAgents in ~/Library/LaunchAgents/. They're rendered
+        # into $CUSTOMER_HOME/launchd/ during step 8 by
+        # bootstrap-customer-scripts.sh; this step symlinks them into
+        # ~/Library/LaunchAgents/ and bootstraps gui/$(id -u). No sudo.
+        #
+        # They must NOT be LaunchDaemons. chassis#14 promoted them on the false
+        # premise that they "only docker exec the chassis container" - in fact
+        # they spawn a host tmux session running `claude`, and a LaunchDaemon
+        # runs in launchd's Background session, which cannot reach the user's
+        # login keychain. That broke every Vaultwarden-sourced credential on
+        # every macOS install from 2026-06-03 to 2026-07-11. Decision rule and
+        # the auto-login tradeoff: docs/launchd-domains.md.
         #
         # heartbeat-dispatcher is DEPRECATED in containerized installs
         # (docker-compose handles cadence) so we skip it by default. Set
         # BOOTSTRAP_DISPATCHER_LEGACY_PLIST=1 to opt in for bare-metal layouts.
 
-        local daemons=(
+        local agents=(
             "com.behalfbot.${BOT_NAME:-bot}-discord-restart"
             "com.behalfbot.${BOT_NAME:-bot}-discord-watchdog"
         )
         if [[ "${BOOTSTRAP_DISPATCHER_LEGACY_PLIST:-0}" == "1" ]]; then
-            daemons+=("com.behalfbot.heartbeat-dispatcher")
+            agents+=("com.behalfbot.heartbeat-dispatcher")
         fi
 
-        local need_sudo=0
-        for label in "${daemons[@]}"; do
+        migrate_stale_launchdaemons "${agents[@]}" || return 1
+
+        local uid la_dir installed=0
+        uid="$(id -u)"
+        la_dir="$HOME/Library/LaunchAgents"
+
+        for label in "${agents[@]}"; do
             local src="$CUSTOMER_HOME/launchd/${label}.plist"
-            local dst="/Library/LaunchDaemons/${label}.plist"
+            local dst="$la_dir/${label}.plist"
             if [[ ! -f "$src" ]]; then
                 log "  WARN: $src not rendered - skip $label (step 8 may have failed)"
                 continue
             fi
             if [[ "$DRY_RUN" == "true" ]]; then
-                log "  [dry-run] would: sudo cp $src $dst"
-                log "  [dry-run] would: sudo launchctl bootout system/$label (if loaded)"
-                log "  [dry-run] would: sudo launchctl bootstrap system $dst"
+                log "  [dry-run] would: ln -sf $src $dst"
+                log "  [dry-run] would: launchctl bootout gui/$uid/$label (if loaded)"
+                log "  [dry-run] would: launchctl bootstrap gui/$uid $dst"
                 continue
             fi
-            need_sudo=1
-            log "  Installing LaunchDaemon: $label"
-            sudo cp "$src" "$dst"
-            sudo chown root:wheel "$dst"
-            sudo chmod 644 "$dst"
+            installed=1
+            log "  Installing LaunchAgent: $label"
+            mkdir -p "$la_dir"
+            ln -sf "$src" "$dst"
             # Bootout first so re-runs replace cleanly; ignore stderr when not loaded.
-            sudo launchctl bootout "system/$label" >/dev/null 2>&1 || true
-            if sudo launchctl bootstrap system "$dst"; then
-                log "    ✓ $label loaded into system domain"
+            launchctl bootout "gui/$uid/$label" >/dev/null 2>&1 || true
+            if launchctl bootstrap "gui/$uid" "$dst"; then
+                log "    ✓ $label loaded into gui/$uid"
             else
                 log "    ERROR: bootstrap failed for $label (see launchctl output above)"
+                log "    If you are on ssh with no GUI login, gui/$uid does not exist."
+                log "    Log into the Mac's desktop (or enable auto-login) and re-run."
                 return 1
             fi
         done
 
-        if [[ "$need_sudo" == "0" && "$DRY_RUN" != "true" ]]; then
-            log "  no daemons to install (nothing rendered in $CUSTOMER_HOME/launchd/)"
+        if [[ "$installed" == "0" && "$DRY_RUN" != "true" ]]; then
+            log "  no agents to install (nothing rendered in $CUSTOMER_HOME/launchd/)"
         fi
         return 0
     fi
