@@ -97,6 +97,38 @@ GitHub Actions workflow at `.github/workflows/docker-publish.yml`:
 - Registry: `ghcr.io/scrollinondubs/behalfbot`.
 - Cache: GitHub Actions cache (`type=gha`, mode=max). First build ~10 min cold; subsequent ~2-3 min with cache hits.
 
+## Driving the stack on a live install - always `chassis/scripts/compose.sh`
+
+Once an install is bootstrapped and baked, **never run bare `docker compose` against it.** Use the wrapper:
+
+```bash
+bash chassis/scripts/compose.sh up -d --force-recreate chassis
+bash chassis/scripts/compose.sh logs -f chassis
+bash chassis/scripts/compose.sh ps
+bash chassis/scripts/compose.sh config     # dry-run: print the fully resolved stack
+```
+
+It resolves the compose files, `--env-file`, project name and `CUSTOMER_HOME` for you, and refuses to run when any of them are wrong. Each guard is there because of a real outage, not a hypothetical:
+
+| Guard | What bare `docker compose` does instead |
+|---|---|
+| `--env-file=.env.baked` | Reads `.env`, whose Vaultwarden hydration block does not resolve at compose time. The container silently comes up with secrets missing and subsystems fall back to defaults. Burned 2026-05-30: container came up without `OLLAMA_HOST`, the morning briefing quietly degraded, and only a human noticing caught it. |
+| Compose file lives in the **chassis repo** | The vendored `chassis/` subtree was dropped in behalfbot#136 - `chassis/` under an install is now an empty bind-mount point. Scripts still looking for `$CUSTOMER_HOME/chassis/docker-compose.yml` just error out. On the reference install that went unnoticed for six weeks, because the container had been running since 2026-06-02 and was only ever restarted, never recreated. It was **not reproducible via the documented path** - had it died, it would not have come back. |
+| Pinned `-p` project name | Without `-p`, compose derives the project from the working directory. From the wrong directory, `up --force-recreate` stands up a **second** set of containers next to the live ones instead of replacing them. |
+| Exported `CUSTOMER_HOME` | Compose interpolates it into the volume paths, but `bake-env.sh` deliberately strips it from `.env.baked` (it is a host path; inside the container it is authoritatively `/app/customer`). So `--env-file` cannot supply it. Without the export, even `docker compose config` dies with `required variable CUSTOMER_HOME is missing a value`. |
+| `.env` newer than `.env.baked` | Means someone edited `.env` and never re-baked. Coming up in that state runs values nobody set. The wrapper refuses; re-run `bake-env.sh` first. |
+
+Everything is derived, so the wrapper normally needs no configuration. Override when you need to:
+
+- `CHASSIS_REPO` - the chassis clone holding `docker-compose.yml`. If set it is **authoritative** (a missing compose file there is a hard error, never a silent fallback to another repo). If unset it is derived from the script's own location, then `CHASSIS_HOME`, then `$HOME/behalfbot`.
+- `CUSTOMER_HOME` - per-install state root, resolved by `chassis/scripts/_env.sh`.
+- `COMPOSE_PROJECT_NAME` - defaults to `behalfbot`, matching the `name:` field in `docker-compose.yml`. Confirm what a running install actually uses with `docker inspect <container> --format '{{index .Config.Labels "com.docker.compose.project"}}'`.
+- `CHASSIS_COMPOSE_OVERRIDE` - path to the per-install override. Defaults to `$CUSTOMER_HOME/chassis-compose.override.yml`. Set it to the empty string to run the bare chassis stack with no override - chassis development and smoke tests only, never a real install.
+
+Installs that still carry the pre-#136 vendored subtree keep working: the wrapper falls back to `$CUSTOMER_HOME/chassis/docker-compose.yml`.
+
+> **Writing an override:** compose resolves relative paths inside a compose file against the **project directory**, which is the directory of the first `-f` file - the chassis repo, not `$CUSTOMER_HOME`. An override saying `env_file: [.env.baked]` therefore looks for it next to `docker-compose.yml` in the chassis repo and dies with `env file ... not found`. Always use absolute or interpolated paths: `env_file: [{path: ${HOME}/.behalfbot/.env.baked, required: true}]`.
+
 ## installer-2 install runbook (TLDR)
 
 1. SSH into installer-2's box. Install Docker + Compose plugin (one-liner from get.docker.com).
