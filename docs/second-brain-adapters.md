@@ -160,6 +160,32 @@ This is **not a write failure** - the write persists correctly and `read_doc` on
 
 Callers that write-then-read-back must tolerate the lag: keep the id `create_doc` returned rather than searching for the doc by title, or poll. Obsidian (direct filesystem IO) and Notion (API-backed) have no equivalent lag - a write is visible to the next read. This divergence is SiYuan-only, and it is the one place where the adapters' shared interface hides genuinely different semantics.
 
+### SiYuan `search()`: LIKE wildcards pass through, and cannot be escaped
+
+`SiYuanNotes.search(query)` interpolates `query` into a SQL `LIKE '%...%'` pattern. **`%` and `_` in a query stay live as LIKE wildcards.** A search for `50%` also matches `50 percent`; `a_b` also matches `axb`.
+
+This is a known tradeoff, not an oversight. **SiYuan's `/api/query/sql` does not accept an `ESCAPE` clause**, so the wildcards cannot be neutralized. Measured against a live kernel:
+
+| Statement | Result |
+|---|---|
+| `... content LIKE '%Vibecode%'` | `code 0`, 397 rows |
+| `... content LIKE '%Vibecode%' ESCAPE '\'` | `code 0`, `data: null` - **zero rows** |
+| same with `ESCAPE '!'` or `ESCAPE '#'` | `code 0`, `data: null` - **zero rows** |
+
+Any escape character makes the kernel refuse the query. An earlier revision of the adapter added `ESCAPE '\'` to tame the wildcards and thereby broke `search()` outright: every query returned no hits, against a kernel holding hundreds of matches. Do not re-add it.
+
+Wildcard pass-through is safe. The single-quote doubling in `_escape()` is the injection defense - a query can never break out of the string literal it sits in - and results are `LIMIT`-capped. The only cost is that a query containing a wildcard matches more broadly than the caller may have intended.
+
+### SiYuan `data: null` means the query was REFUSED, not "no matches"
+
+Related, and the reason the above was silent for so long. SiYuan answers a SQL statement it will not run with a **success-shaped null**:
+
+```json
+{"code": 0, "msg": "", "data": null}
+```
+
+A genuinely empty result set comes back as `[]`. The adapter's `_query_sql()` therefore raises `SiYuanError` (naming the offending statement) on a null payload rather than coercing it to an empty list. Treating null as "no rows" is what turned a rejected query into a plausible-looking "nothing found". Only the `/api/query/sql` path is hardened this way - other endpoints (`appendBlock`) return null legitimately.
+
 ## `second_brain.mode` and the `secondbrain` MCP server
 
 `chassis.config.yaml` carries a `mode` key next to `backend`:

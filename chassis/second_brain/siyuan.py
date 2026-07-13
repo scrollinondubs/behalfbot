@@ -42,12 +42,7 @@ from chassis.second_brain.base import (
 
 
 class SiYuanError(RuntimeError):
-    """Raised when SiYuan API returns a non-zero `code`."""
-
-
-# Backslash is not special inside a sqlite string literal, so it is a safe
-# LIKE escape character and needs no doubling in the emitted SQL.
-LIKE_ESCAPE_CHAR = "\\"
+    """Raised when SiYuan API returns a non-zero `code`, or refuses a SQL query."""
 
 
 def _siyuan_stamp(value: datetime) -> str:
@@ -95,6 +90,34 @@ class SiYuanNotes(NotesAdapter):
             raise SiYuanError(f"SiYuan {path} returned code={data.get('code')}: {data.get('msg')!r}")
         return data.get("data")
 
+    def _query_sql(self, stmt: str) -> list[dict[str, Any]]:
+        """Run a SQL statement against /api/query/sql. Raise on a refused query.
+
+        SiYuan answers a query it will not run with `{"code": 0, "msg": "",
+        "data": null}` - success-shaped, but null. The old `result if
+        isinstance(result, list) else []` at each call site turned that into an
+        empty result set, so an unsupported statement looked exactly like "no
+        matches". That is how an ESCAPE clause SiYuan does not accept made
+        search() silently return zero hits against a kernel holding 397.
+
+        A genuinely empty result comes back as `[]`, not null (verified against
+        a live kernel), so treating null as an error is safe. Only the SQL path
+        is hardened - other endpoints return null legitimately (appendBlock).
+        """
+        result = self._post("/api/query/sql", {"stmt": stmt})
+        if result is None:
+            raise SiYuanError(
+                "SiYuan refused the SQL query (code=0 but data=null - it answers a "
+                "statement it will not run this way, and an empty result set would "
+                f"have been []). Statement: {stmt[:300]!r}"
+            )
+        if not isinstance(result, list):
+            raise SiYuanError(
+                f"SiYuan /api/query/sql returned {type(result).__name__}, expected a "
+                f"list of rows. Statement: {stmt[:300]!r}"
+            )
+        return result
+
     def create_doc(self, parent: str, title: str, body: str) -> str:
         # `parent` is interpreted as the SiYuan hpath (e.g. "/Briefings"). If it
         # looks like a block id, we resolve to its hpath via SQL.
@@ -135,13 +158,29 @@ class SiYuanNotes(NotesAdapter):
         self.append_to_doc(from_id, f"(({to_id} '{anchor}'))")
 
     def search(self, query: str, limit: int = 10) -> list[SearchHit]:
+        """Substring search over block content, newest first.
+
+        WILDCARDS PASS THROUGH. `%` and `_` in `query` are live LIKE wildcards:
+        a search for `50%` also matches `50 percent`, and `a_b` matches `axb`.
+        This is a deliberate, known tradeoff, not an oversight.
+
+        SiYuan's SQL endpoint does NOT accept an `ESCAPE` clause - verified
+        against a live kernel, where `LIKE '%Vibecode%' ESCAPE '\\'` returns
+        `data: null` (zero rows) for any escape character, while the same query
+        without it returns 397 rows. So the wildcards cannot be escaped, and the
+        query is passed as-is.
+
+        This is safe: the single-quote escaping in `_escape` is what prevents
+        injection (the query can never break out of the string literal), and the
+        result set is LIMIT-capped. The only cost is that a query containing a
+        wildcard matches more broadly than the caller may have intended.
+        """
         sql = (
             "SELECT id, content, hpath FROM blocks "
-            f"WHERE content LIKE '%{self._escape_like(query)}%' ESCAPE '{LIKE_ESCAPE_CHAR}' "
+            f"WHERE content LIKE '%{self._escape(query)}%' "
             f"ORDER BY updated DESC LIMIT {int(limit)}"
         )
-        result = self._post("/api/query/sql", {"stmt": sql})
-        rows = result if isinstance(result, list) else []
+        rows = self._query_sql(sql)
         return [
             SearchHit(
                 id=row.get("id", ""),
@@ -190,8 +229,7 @@ class SiYuanNotes(NotesAdapter):
             "ORDER BY updated DESC "
             f"LIMIT {int(limit)}"
         )
-        result = self._post("/api/query/sql", {"stmt": sql})
-        rows = result if isinstance(result, list) else []
+        rows = self._query_sql(sql)
         return [
             SearchHit(
                 id=row.get("id", ""),
@@ -206,34 +244,21 @@ class SiYuanNotes(NotesAdapter):
 
     def _block_to_hpath(self, block_id: str) -> str:
         sql = f"SELECT hpath FROM blocks WHERE id = '{self._escape(block_id)}' LIMIT 1"
-        result = self._post("/api/query/sql", {"stmt": sql})
-        rows = result if isinstance(result, list) else []
+        rows = self._query_sql(sql)
         return rows[0].get("hpath", "/") if rows else "/"
 
     def _block_title(self, block_id: str) -> str:
         sql = f"SELECT content FROM blocks WHERE id = '{self._escape(block_id)}' LIMIT 1"
-        result = self._post("/api/query/sql", {"stmt": sql})
-        rows = result if isinstance(result, list) else []
+        rows = self._query_sql(sql)
         return rows[0].get("content", "") if rows else ""
 
     @staticmethod
     def _escape(value: str) -> str:
-        # SiYuan SQL is sqlite. Escape for a single-quoted string literal.
+        # SiYuan SQL is sqlite. Escape for a single-quoted string literal. This
+        # is the whole injection defense and it is sufficient: a value can never
+        # terminate the literal it sits in. LIKE wildcards inside `value` stay
+        # live - see search() for why they cannot be escaped on this backend.
         return value.replace("'", "''")
-
-    @classmethod
-    def _escape_like(cls, value: str) -> str:
-        # For values interpolated into a LIKE pattern. search() is exposed as an
-        # MCP tool by second_brain/mcp_server.py, so `query` is arbitrary
-        # model-supplied or user-supplied text - not the chassis-internal-only
-        # surface this adapter originally had. A bare quote-escape leaves the
-        # LIKE wildcards live: '%' and '_' in a query would silently widen the
-        # match. Escape the escape char first, then the wildcards, then quote
-        # for the literal. Callers MUST pair this with an ESCAPE clause.
-        escaped = value.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR * 2)
-        for wildcard in ("%", "_"):
-            escaped = escaped.replace(wildcard, LIKE_ESCAPE_CHAR + wildcard)
-        return cls._escape(escaped)
 
 
 class SiYuanAdapter(SecondBrainAdapter):
