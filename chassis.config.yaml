@@ -110,12 +110,70 @@ surfaces:
 
 second_brain:
   backend: notion                           # notion | siyuan | obsidian
+  mode: direct                              # direct | adapter
+                                            # direct  = register the backend's own MCP server and keep
+                                            #           today's behavior (the default, also assumed when
+                                            #           this key is absent - installs that predate it
+                                            #           see zero change)
+                                            # adapter = register the chassis-owned `secondbrain` MCP
+                                            #           server INSTEAD of the native backend server, so
+                                            #           prompts see one tool namespace on every backend.
+                                            #           Note: obsidian has no native MCP server today,
+                                            #           so obsidian installs only get a second-brain
+                                            #           MCP surface in adapter mode.
   workspace: <installer-notion-workspace>   # Real workspace_id via Vaultwarden
   organization_pattern: para               # Tiago Forte: Projects / Areas / Resources / Archives
   databases:
     primary_crm: TBD_at_install             # Notion database id
-    notes_root: TBD_at_install              # Page id for free-form prose writes
+    notes_root: TBD_at_install              # Page id for free-form prose writes. Doubles as the
+                                            # default write target for the adapter (SiYuan
+                                            # notebook_id / Notion notes_root) unless the
+                                            # per-backend block below overrides it.
   scaffold_para_if_missing: true            # If their Notion isn't PARA-shaped, scaffold it
+
+  # ---------------------------------------------------------------------------
+  # Per-backend blocks - OPTIONAL OVERRIDES ONLY. Leave them commented out.
+  #
+  # CREDENTIALS COME FROM .env, NOT FROM HERE. Adapter mode (`mode: adapter`)
+  # and direct mode read the SAME vars, so a secret is never duplicated:
+  #
+  #   siyuan   -> SIYUAN_URL, SIYUAN_TOKEN, SIYUAN_DEEPLINK_BASE
+  #   notion   -> NOTION_API_TOKEN
+  #   obsidian -> no credential; vault_path below is required (it is a path,
+  #               not a secret)
+  #
+  # Uncomment a key only to override the default. NEVER put a real token in
+  # this file - it is committed. Use a ${VAR} reference if you must name one.
+  # ---------------------------------------------------------------------------
+
+  # siyuan:
+  #   base_url: http://127.0.0.1:6806         # Default. From inside the chassis container the
+  #                                           # kernel is on the HOST: use
+  #                                           # http://host.docker.internal:6806
+  #   token: ${SIYUAN_TOKEN}                  # Default: env SIYUAN_TOKEN. Empty = hard error.
+  #   notebook_id: 20231101120000-abc123      # Default: second_brain.databases.notes_root
+  #   deeplink_template: siyuan://blocks/     # Default: env SIYUAN_DEEPLINK_BASE, else this.
+  #                                           # A block id is appended verbatim, so keep the
+  #                                           # trailing separator. `siyuan://blocks/` opens the
+  #                                           # DESKTOP APP and does NOT work on a phone. For
+  #                                           # mobile-clickable links use the web UI shape:
+  #                                           # https://<siyuan-host>:6806/stage/build/desktop/?id=
+  #                                           # Prefer setting SIYUAN_DEEPLINK_BASE in .env - the
+  #                                           # host changes, and .env is not committed.
+
+  # notion:
+  #   token: ${NOTION_API_TOKEN}              # Default: env NOTION_API_TOKEN
+  #   notes_root: 1234abcd-...                # Default: second_brain.databases.notes_root
+  #   databases:                              # Named databases for the structured surface
+  #     lp_crm: aaaa1111-...
+  #   natural_keys:                           # Uniqueness key per database, for upserts
+  #     lp_crm: email
+  #   active_database: lp_crm                 # Default database for upsert/query
+
+  # obsidian:
+  #   vault_path: /home/<installer>/second-brain   # REQUIRED for the obsidian backend
+  #   vault_name: second-brain                     # For obsidian:// deeplinks; defaults to dir name
+  #   read_only: false                             # true for a pull-only vault clone
 
 modules:
   admin: true                               # Rescheduling, travel, event research, email drafting

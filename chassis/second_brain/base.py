@@ -18,6 +18,7 @@ Per-backend caveats live in each implementation module's docstring.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -59,8 +60,9 @@ class NotesAdapter(Protocol):
         """Return a URL that, when clicked, opens the doc in the user's app/device.
 
         Per-backend conventions:
-          - SiYuan: typically `<deeplink_template>{id}` where the template is set
-            in chassis.config.yaml (e.g. `https://s.grid7.com/?id=`)
+          - SiYuan: `<deeplink_template>{id}`, where the template comes from
+            SIYUAN_DEEPLINK_BASE in .env (or a chassis.config.yaml override).
+            The per-install host is never hardcoded - see siyuan.py.
           - Notion: `https://www.notion.so/<workspace>/<page-id-without-hyphens>`
           - Obsidian: `obsidian://open?vault=<vault>&file=<path>`
         """
@@ -77,6 +79,39 @@ class NotesAdapter(Protocol):
 
     def search(self, query: str, limit: int = 10) -> list[SearchHit]:
         """Full-text search prose. Returns hits ordered by relevance."""
+        ...
+
+    def list_recent(
+        self,
+        since: datetime,
+        until: datetime,
+        min_content_len: int = 0,
+        limit: int = 50,
+    ) -> list[SearchHit]:
+        """Docs created or modified in [since, until), newest first.
+
+        Naive datetimes are interpreted as local time; aware datetimes are
+        converted per backend. `min_content_len` filters out docs whose body is
+        shorter than the threshold, using the closest measure each backend can
+        offer honestly - the three are NOT byte-identical:
+
+          - SiYuan: block `updated` timestamps (kernel-local clock, second
+            granularity). Body length = SUM(LENGTH(content)) over the doc's
+            child blocks - the doc row's own `content` column holds only the
+            title, so it cannot be used for length filtering.
+          - Obsidian: filesystem mtime scan of `*.md`. mtime is noisier than
+            SiYuan's block timestamps - a git pull, iCloud resync, or any
+            sync tool that touches files produces false "activity". Body
+            length is approximated by file size in bytes (frontmatter and
+            markdown syntax count toward it).
+          - Notion: `last_edited_time` via the search API (minute granularity,
+            descending scan with client-side windowing - the search endpoint
+            has no timestamp filter). Only pages shared with the integration
+            are visible. `min_content_len` > 0 costs one extra API call per
+            candidate page.
+
+        See docs/second-brain-adapters.md for the full divergence table.
+        """
         ...
 
 

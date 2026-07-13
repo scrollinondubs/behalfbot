@@ -34,12 +34,12 @@
     },
 
     "_second-brain-pick-one": {
-      "_role": "Choose ONE based on chassis.config.yaml.second_brain.backend. Comment out / delete the unused entry."
+      "_role": "Second-brain surface is picked by chassis.config.yaml: second_brain.mode == 'adapter' registers ONLY the chassis-owned `secondbrain` server; mode 'direct' (the default, and what a missing mode key means) registers the backend's native server per second_brain.backend. Obsidian has no native MCP server - obsidian installs get a second-brain MCP surface only in adapter mode."
     },
 
     "siyuan": {
-      "_role": "second-brain backend (option A) — block-based notes, local-first",
-      "_enable_when": "chassis.config.yaml.second_brain.backend == 'siyuan'",
+      "_role": "second-brain backend (direct mode, option A) - block-based notes, local-first",
+      "_enable_when": "chassis.config.yaml.second_brain.backend == 'siyuan' && chassis.config.yaml.second_brain.mode != 'adapter'",
       "command": "npx",
       "args": ["-y", "siyuan-mcp@1.0.4"],
       "env": {
@@ -49,12 +49,27 @@
     },
 
     "notion": {
-      "_role": "second-brain backend (option B) — page+block model, cloud",
-      "_enable_when": "chassis.config.yaml.second_brain.backend == 'notion'",
+      "_role": "second-brain backend (direct mode, option B) - page+block model, cloud",
+      "_enable_when": "chassis.config.yaml.second_brain.backend == 'notion' && chassis.config.yaml.second_brain.mode != 'adapter'",
       "_install_note": "MCP package: @suekou/mcp-notion-server (popular community option). Verify before installing.",
       "command": "npx",
       "args": ["-y", "@suekou/mcp-notion-server"],
       "env": {
+        "NOTION_API_TOKEN": "<NOTION_INTEGRATION_TOKEN>"
+      }
+    },
+
+    "secondbrain": {
+      "_role": "second-brain surface (adapter mode) - ONE chassis-owned server over the chassis/second_brain adapter factory; identical tool names on every backend (create_doc, append_to_doc, read_doc, search, list_recent, get_deeplink)",
+      "_enable_when": "chassis.config.yaml.second_brain.mode == 'adapter'",
+      "_install_note": "In adapter mode the native backend server (siyuan/notion) is deliberately NOT registered - tool availability is the guardrail that keeps prompts backend-neutral. CHASSIS_ROOT is baked into the container image (/app/chassis); host-side layouts should point args at their vendored chassis tree, e.g. $CUSTOMER_HOME/chassis/chassis/second_brain/mcp_server.py.",
+      "_env_note": "Same credential vars the native servers use, so adapter mode and direct mode read ONE source (.env) and no installer duplicates secrets into chassis.config.yaml. The factory reads whichever pair matches second_brain.backend and ignores the rest, so the vars for backends you do not run are expected to stay unset. Obsidian needs none - its vault_path is a config value, not a credential.",
+      "command": "python3",
+      "args": ["${CHASSIS_ROOT:-/app/chassis}/second_brain/mcp_server.py"],
+      "env": {
+        "SIYUAN_URL": "<SIYUAN_URL>",
+        "SIYUAN_TOKEN": "<SIYUAN_TOKEN>",
+        "SIYUAN_DEEPLINK_BASE": "<SIYUAN_DEEPLINK_BASE>",
         "NOTION_API_TOKEN": "<NOTION_INTEGRATION_TOKEN>"
       }
     },

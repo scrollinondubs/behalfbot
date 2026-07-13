@@ -25,7 +25,7 @@ from chassis.second_brain.base import (
     SearchHit,
     SecondBrainAdapter,
 )
-from chassis.second_brain.factory import get_adapter
+from chassis.second_brain.factory import get_adapter, get_mode
 
 __all__ = [
     "DatabaseAdapter",
@@ -33,4 +33,5 @@ __all__ = [
     "SearchHit",
     "SecondBrainAdapter",
     "get_adapter",
+    "get_mode",
 ]

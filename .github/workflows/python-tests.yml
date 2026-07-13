@@ -1,0 +1,41 @@
+name: Python tests
+
+# First pytest workflow in the repo (added with the second-brain Stage 1 PR -
+# before this, no CI ran the Python suites at all). Scoped to the paths the
+# suite actually covers so unrelated PRs don't pay for it.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'chassis/second_brain/**'
+      - 'chassis/scripts/hydrate-mcp-json.py'
+      - 'chassis/.mcp.json.template'
+      - 'chassis.config.yaml'
+      - 'requirements.txt'
+      - '.github/workflows/python-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'chassis/second_brain/**'
+      - 'chassis/scripts/hydrate-mcp-json.py'
+      - 'chassis/.mcp.json.template'
+      - 'chassis.config.yaml'
+      - 'requirements.txt'
+      - '.github/workflows/python-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Install only what the suite needs, not the full chassis image deps
+      # (psycopg/pillow/boto3 are runtime-only and slow the job for nothing).
+      # mcp is pinned to the same version as requirements.txt so the e2e
+      # server test exercises what the image ships.
+      - run: pip install pytest pyyaml mcp==1.28.1
+      - run: python3 -m pytest chassis/second_brain/tests/ -v

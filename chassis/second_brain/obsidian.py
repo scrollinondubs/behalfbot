@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -243,6 +244,61 @@ class ObsidianNotes(NotesAdapter):
             )
         hits.sort(key=lambda hit: hit.score, reverse=True)
         return hits[: int(limit)]
+
+    def list_recent(
+        self,
+        since: datetime,
+        until: datetime,
+        min_content_len: int = 0,
+        limit: int = 50,
+    ) -> list[SearchHit]:
+        """Notes with filesystem mtime in [since, until), newest first.
+
+        Honest divergence from SiYuan's block timestamps: mtime says a FILE
+        changed, not that a HUMAN edited it. A git pull, iCloud resync, or any
+        sync tool that rewrites files produces false "activity" here. Callers
+        that narrate recent activity (e.g. daily-log prompts) should treat
+        these hits as candidates, not facts.
+
+        `min_content_len` is approximated by file size in bytes - frontmatter
+        and markdown syntax count toward it, and multi-byte characters count
+        per byte, not per character. Naive datetimes are interpreted as local
+        time (`datetime.timestamp()` semantics), matching st_mtime's epoch.
+        """
+        since_ts = since.timestamp()
+        until_ts = until.timestamp()
+        candidates: list[tuple[float, int, Path]] = []
+        for path in self._vault.rglob("*.md"):
+            rel_parts = path.relative_to(self._vault).parts
+            if any(part in _SKIP_DIRS for part in rel_parts):
+                continue
+            try:
+                stat_result = path.stat()
+            except OSError:
+                continue
+            if not since_ts <= stat_result.st_mtime < until_ts:
+                continue
+            if stat_result.st_size < min_content_len:
+                continue
+            candidates.append((stat_result.st_mtime, stat_result.st_size, path))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        hits: list[SearchHit] = []
+        for mtime, size, path in candidates[: int(limit)]:
+            try:
+                snippet = path.read_text(encoding="utf-8")[:_SNIPPET_LEN].strip()
+            except (OSError, UnicodeDecodeError):
+                snippet = ""
+            rel = self._rel_id(path)
+            hits.append(
+                SearchHit(
+                    id=rel,
+                    title=path.stem,
+                    snippet=snippet,
+                    deeplink=self.get_deeplink(rel),
+                    raw={"path": str(path), "mtime": mtime, "size_bytes": size},
+                )
+            )
+        return hits
 
 
 class ObsidianAdapter(SecondBrainAdapter):

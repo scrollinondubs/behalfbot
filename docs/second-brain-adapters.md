@@ -25,18 +25,60 @@ Notion implements both natively. SiYuan and Obsidian implement `notes` natively 
 
 ## Configuration
 
-Pick the backend in `chassis.config.yaml`:
+Pick the backend in `chassis.config.yaml`.
+
+### Credential resolution order
+
+**Credentials live in `.env`, not in `chassis.config.yaml`.** Adapter mode and direct mode read the same vars from the same place, so a secret is never duplicated and flipping `mode` cannot strand one of them. `chassis.config.yaml` is committed; a token must never be pasted into it.
+
+| Backend | Env var (source of truth) | YAML override (optional) | Fallback |
+|---|---|---|---|
+| siyuan | `SIYUAN_TOKEN` | `second_brain.siyuan.token` | none - **empty token raises `ValueError` at startup** |
+| siyuan | `SIYUAN_URL` | `second_brain.siyuan.base_url` | `http://127.0.0.1:6806` |
+| siyuan | - | `second_brain.siyuan.notebook_id` | `second_brain.databases.notes_root`; empty raises `ValueError` |
+| siyuan | `SIYUAN_DEEPLINK_BASE` | `second_brain.siyuan.deeplink_template` | `siyuan://blocks/` - **desktop-app URI, does not open on a phone** (see below) |
+| notion | `NOTION_API_TOKEN` | `second_brain.notion.token` | none |
+| notion | - | `second_brain.notion.notes_root` | `second_brain.databases.notes_root` |
+| obsidian | - (no credential) | `second_brain.obsidian.vault_path` | none - required |
+
+Resolution is: **YAML key if set, else env var, else the documented default.** A YAML value of `${SIYUAN_TOKEN}` that expands to nothing counts as unset and falls through rather than shadowing the env var.
+
+The SiYuan adapter refuses to construct with an empty token or an empty `notebook_id`. Both used to be silently tolerated, which produced an adapter that answered every call with `Auth failed [session]`. Failing loudly at server startup is deliberate - `mcp_server.main()` resolves the adapter eagerly so a broken config shows up in `claude mcp list` and the server log, not mid-task.
+
+> **Container gotcha:** from inside the chassis container, `127.0.0.1` is the container itself. A SiYuan kernel running on the host is reachable at `http://host.docker.internal:6806`. Set `SIYUAN_URL` accordingly.
+
+### SiYuan deeplinks: the default does not open on a phone
+
+`get_deeplink(doc_id)` returns `deeplink_template + doc_id` - the template is a prefix a block id is appended to verbatim, so it must keep its trailing separator (`/` or `=`).
+
+Resolution is three-level, same shape as the credentials:
+
+1. `second_brain.siyuan.deeplink_template` in `chassis.config.yaml` (explicit per-install override)
+2. env `SIYUAN_DEEPLINK_BASE`
+3. the chassis default, `siyuan://blocks/`
+
+**The default is a desktop-app URI. It does NOT open on mobile.** `siyuan://blocks/<id>` hands off to the SiYuan desktop application; tapping it on an iPhone does nothing. Any install that wants links a human can actually tap from a phone (briefings, Pacman proposals, anything delivered over Discord or email) must set `SIYUAN_DEEPLINK_BASE` to its SiYuan **web UI** prefix:
+
+```
+SIYUAN_DEEPLINK_BASE=https://<your-siyuan-host>:6806/stage/build/desktop/?id=
+```
+
+Substitute a hostname that is actually reachable from the phone - public DNS, a Tailnet address, or a reverse proxy. **The chassis ships no hostname**: it is per-install, and in practice it moves (a public host today, a Tailnet address while DNS is broken, back again later). That is exactly why it is a parameter and not a constant. Set it in `.env`, in one place, and nothing in the code or the committed config has to change when it moves.
 
 ### SiYuan
+
+Every key below is an optional override. With `SIYUAN_URL` / `SIYUAN_TOKEN` in `.env` and `second_brain.databases.notes_root` set, the block can be omitted entirely.
 
 ```yaml
 second_brain:
   backend: siyuan
   siyuan:
-    base_url: http://127.0.0.1:6806             # local kernel
-    token: ${SIYUAN_TOKEN}                       # from .env (or VW)
-    notebook_id: 20231101120000-abc123            # default notebook for create_doc
-    deeplink_template: https://s.grid7.com/?id=  # for iPhone-clickable links
+    base_url: http://127.0.0.1:6806              # default; env SIYUAN_URL wins over this default
+    token: ${SIYUAN_TOKEN}                        # default: env SIYUAN_TOKEN
+    notebook_id: 20231101120000-abc123            # default: second_brain.databases.notes_root
+    deeplink_template: siyuan://blocks/           # default; point at a reverse proxy
+                                                  # (https://siyuan.example.com/?id=) for
+                                                  # phone-clickable links
 ```
 
 ### Notion
@@ -103,7 +145,89 @@ sb.database.update_property(hit, "last_outreach_at", "2026-05-07")
 hits = sb.notes.search("morning briefing", limit=5)
 for h in hits:
     print(h.title, h.deeplink)
+
+# Recent activity - docs created/modified in a time window, newest first
+from datetime import datetime, timedelta
+hits = sb.notes.list_recent(
+    since=datetime.now() - timedelta(days=1),
+    until=datetime.now(),
+    min_content_len=200,
+    limit=50,
+)
 ```
+
+## `list_recent` per-backend divergences
+
+All three backends implement `list_recent(since, until, min_content_len, limit)` - docs created or modified in `[since, until)`, newest first. The implementations are honest but the underlying signals are NOT equivalent. Naive datetimes are interpreted as local time.
+
+| | Timestamp source | Granularity | `min_content_len` measure | Caveats |
+|---|---|---|---|---|
+| SiYuan | `blocks.updated` (kernel-local clock) | second | `SUM(LENGTH(content))` over the doc's child blocks via correlated subquery - the doc row's own `content` column holds only the TITLE (verified against a live kernel: max 81 chars over 283 docs), so it cannot be used for length filtering | cleanest of the three; block timestamps reflect actual edits |
+| Obsidian | filesystem mtime of `*.md` | filesystem-dependent | file size in bytes (frontmatter and markdown syntax count toward it; multi-byte characters count per byte) | NOISIEST: a git pull, iCloud resync, or any sync tool that rewrites files produces false "activity". Treat hits as candidates, not facts |
+| Notion | `last_edited_time` via `/search`, descending scan with client-side windowing (the endpoint has no timestamp filter) | MINUTE - Notion truncates seconds, so edits at a window boundary can fall on either side | reconstructed-markdown length of the first 100 blocks; costs one extra API call per candidate page, so leave at 0 unless needed | only pages shared with the integration are visible; scan is capped at 500 pages per call |
+
+### SiYuan's SQL index is eventually consistent
+
+`search()` and `list_recent()` read SiYuan's SQL index (`SELECT ... FROM blocks`), which the kernel populates **asynchronously** after a write commits.
+
+Verified against a live kernel: immediately after `appendBlock` returned success, the new block was absent from the `blocks` table for several seconds, then appeared once the kernel flushed its transaction.
+
+This is **not a write failure** - the write persists correctly and `read_doc` on the returned id reflects it right away. Only the index lags. The consequence:
+
+> A caller that writes with `create_doc` / `append_to_doc` and then immediately reads back via `search()` or `list_recent()` will NOT see the doc it just wrote.
+
+Callers that write-then-read-back must tolerate the lag: keep the id `create_doc` returned rather than searching for the doc by title, or poll. Obsidian (direct filesystem IO) and Notion (API-backed) have no equivalent lag - a write is visible to the next read. This divergence is SiYuan-only, and it is the one place where the adapters' shared interface hides genuinely different semantics.
+
+### SiYuan `search()`: LIKE wildcards pass through, and cannot be escaped
+
+`SiYuanNotes.search(query)` interpolates `query` into a SQL `LIKE '%...%'` pattern. **`%` and `_` in a query stay live as LIKE wildcards.** A search for `50%` also matches `50 percent`; `a_b` also matches `axb`.
+
+This is a known tradeoff, not an oversight. **SiYuan's `/api/query/sql` does not accept an `ESCAPE` clause**, so the wildcards cannot be neutralized. Measured against a live kernel:
+
+| Statement | Result |
+|---|---|
+| `... content LIKE '%Vibecode%'` | `code 0`, 397 rows |
+| `... content LIKE '%Vibecode%' ESCAPE '\'` | `code 0`, `data: null` - **zero rows** |
+| same with `ESCAPE '!'` or `ESCAPE '#'` | `code 0`, `data: null` - **zero rows** |
+
+Any escape character makes the kernel refuse the query. An earlier revision of the adapter added `ESCAPE '\'` to tame the wildcards and thereby broke `search()` outright: every query returned no hits, against a kernel holding hundreds of matches. Do not re-add it.
+
+Wildcard pass-through is safe. The single-quote doubling in `_escape()` is the injection defense - a query can never break out of the string literal it sits in - and results are `LIMIT`-capped. The only cost is that a query containing a wildcard matches more broadly than the caller may have intended.
+
+### SiYuan `data: null` means the query was REFUSED, not "no matches"
+
+Related, and the reason the above was silent for so long. SiYuan answers a SQL statement it will not run with a **success-shaped null**:
+
+```json
+{"code": 0, "msg": "", "data": null}
+```
+
+A genuinely empty result set comes back as `[]`. The adapter's `_query_sql()` therefore raises `SiYuanError` (naming the offending statement) on a null payload rather than coercing it to an empty list. Treating null as "no rows" is what turned a rejected query into a plausible-looking "nothing found". Only the `/api/query/sql` path is hardened this way - other endpoints (`appendBlock`) return null legitimately.
+
+## `second_brain.mode` and the `secondbrain` MCP server
+
+`chassis.config.yaml` carries a `mode` key next to `backend`:
+
+```yaml
+second_brain:
+  backend: siyuan     # siyuan | notion | obsidian
+  mode: direct        # direct | adapter (direct is the default, and what a missing key means)
+```
+
+- **`direct`** (default): today's behavior. The backend's own MCP server (`siyuan` / `notion`) is registered in `.mcp.json`; chassis scripts talk to the backend natively. Installs whose config predates the key see zero change.
+- **`adapter`**: the chassis-owned `secondbrain` MCP server (`chassis/second_brain/mcp_server.py`) is registered INSTEAD, exposing one fixed tool namespace over `get_adapter()`: `create_doc`, `append_to_doc`, `read_doc`, `search`, `list_recent`, `get_deeplink`. The native backend server is deliberately NOT registered - tool availability is the guardrail that keeps prompts backend-neutral. One server over N adapter classes, not one server per backend: MCP tool names are namespaced by server name, so per-backend servers would mean per-backend prompt text, which defeats the abstraction.
+
+Registration is driven by `_enable_when` predicates in `chassis/.mcp.json.template`, evaluated by `chassis/scripts/hydrate-mcp-json.py` (which supports `==`, `!=`, and `&&`; a missing `mode` key satisfies `mode != 'adapter'`, keeping legacy configs on the direct path).
+
+Backend support per mode:
+
+| backend | direct | adapter |
+|---|---|---|
+| siyuan | `siyuan` MCP server (`siyuan-mcp@1.0.4`) | `secondbrain` |
+| notion | `notion` MCP server (`@suekou/mcp-notion-server`) | `secondbrain` |
+| obsidian | NO second-brain MCP surface - no suitable native server exists (community options require the Obsidian desktop app + Local REST API plugin, which headless container installs do not run) | `secondbrain` |
+
+Obsidian installs are therefore adapter-mode-only if they want a second-brain MCP surface at all.
 
 ## Contract
 
