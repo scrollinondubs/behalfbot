@@ -253,7 +253,13 @@ hydrate_env() {
     log "  - Manual: prompt installer to paste each credential"
     log ""
     log "Required credentials (per docs/installer-homework.md):"
-    log "  GITHUB_PAT, GOOGLE_OAUTH_*, DISCORD_BOT_TOKEN, OPENAI_API_KEY"
+    log "  GITHUB_PAT, DISCORD_BOT_TOKEN, OPENAI_API_KEY"
+    log "  + if modules.google.gmail / .calendar are on (headless installs need this,"
+    log "    Claude's hosted Google connectors never complete over SSH):"
+    log "    GMAIL_OAUTH_PATH, GMAIL_CREDENTIALS_PATH, GOOGLE_OAUTH_CREDENTIALS,"
+    log "    GOOGLE_CALENDAR_MCP_TOKEN_PATH - paths to the OAuth client + consented"
+    log "    tokens staged under \$CUSTOMER_HOME/secrets/google/."
+    log "    Consent needs a browser: docs/installer-homework.md section 4."
     log "  + per-plugin: NOTION_API_TOKEN (if siyuan/notion=notion),"
     log "    BRAVE_API_KEY (if research enabled), STRAVA_*, OURA_TOKEN (if BFL),"
     log "    TURSO_* (if turso), etc."
@@ -270,6 +276,14 @@ hydrate_env() {
 # GITHUB_PAT=<from password manager>
 # OPENAI_API_KEY=<from password manager>
 # DISCORD_BOT_TOKEN=<from password manager>
+
+# === GOOGLE (only if modules.google.gmail / .calendar are true) ===
+# Paths, not secrets. The secrets are the files they point at - chmod 600.
+# Consent needs a browser: see docs/installer-homework.md section 4.
+# GMAIL_OAUTH_PATH=/app/customer/secrets/google/gcp-oauth.keys.json
+# GMAIL_CREDENTIALS_PATH=/app/customer/secrets/google/gmail-token.json
+# GOOGLE_OAUTH_CREDENTIALS=/app/customer/secrets/google/gcp-oauth.keys.json
+# GOOGLE_CALENDAR_MCP_TOKEN_PATH=/app/customer/secrets/google/calendar-token.json
 
 # === PER-PLUGIN (only the ones enabled in chassis.config.yaml) ===
 # NOTION_API_TOKEN=...

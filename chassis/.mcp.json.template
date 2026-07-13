@@ -74,6 +74,46 @@
       }
     },
 
+    "_google-headless": {
+      "_role": "Gmail + Google Calendar for HEADLESS installs. Claude's hosted Google connectors need a browser and a human, so they never complete over SSH - a Linux/VPS install has no other path to Google. These two servers hold OAuth credentials on disk and run unattended. A desktop install that already has the hosted connectors working can leave both flags false. Setup + the one-time consent procedure: docs/installer-homework.md.",
+      "_credential_note": "Both servers share ONE Google Cloud OAuth client of type 'Desktop app' (gcp-oauth.keys.json). A service account is NOT an option for Gmail: reading a user's mailbox with one needs domain-wide delegation, which needs a Workspace admin and is impossible on a personal Gmail account. Calendar could use a service account; it deliberately does not, so the installer creates one client and follows one procedure."
+    },
+
+    "gmail": {
+      "_role": "optional - Gmail over an on-disk OAuth token. Unattended, no desktop, no hosted connector. Full API surface including attachment download, which the hosted connector does not expose (#39, #40).",
+      "_enable_when": "chassis.config.yaml.modules.google.gmail == true",
+      "_install_note": "npm @gongrzhe/server-gmail-autoauth-mcp. The server Ben's Debian install has been running in production; the only Gmail MCP we have headless evidence for. GMAIL_OAUTH_PATH is the OAuth CLIENT (gcp-oauth.keys.json, same file the calendar server reads); GMAIL_CREDENTIALS_PATH is the TOKEN this install consented to. The token is a live credential - it belongs under a gitignored secrets/ dir, 0600.",
+      "_scope_note": "Gmail scopes are fixed by the server and include send. The chassis policy that email is drafted and never auto-sent is a prompt-layer rule (trust_line.email: read_and_draft), not an OAuth-layer one. Do not read this entry as a technical guarantee that nothing can send.",
+      "command": "npx",
+      "args": ["-y", "@gongrzhe/server-gmail-autoauth-mcp"],
+      "env": {
+        "GMAIL_OAUTH_PATH": "<GMAIL_OAUTH_PATH>",
+        "GMAIL_CREDENTIALS_PATH": "<GMAIL_CREDENTIALS_PATH>"
+      }
+    },
+
+    "google-calendar": {
+      "_role": "optional - Google Calendar over an on-disk OAuth token. Ben's install has never had Calendar at all; this is the first time the chassis ships one.",
+      "_enable_when": "chassis.config.yaml.modules.google.calendar == true",
+      "_install_note": "npm @cocal/google-calendar-mcp (nspady/google-calendar-mcp). GOOGLE_OAUTH_CREDENTIALS is the same gcp-oauth.keys.json the gmail entry reads; GOOGLE_CALENDAR_MCP_TOKEN_PATH is this install's calendar token. Each server keeps its own token, so the installer consents once per server against the one shared client.",
+      "_trust_line_note": "ENABLED_TOOLS inline is the READ-ONLY toolset - the floor every install lands on. _override_when widens it to read-write ONLY when chassis.config.yaml sets trust_line.calendar: read_write. This is TOOL-GATING, not scope-gating: the server requests Google's read-write calendar scope either way, so the token on disk can always technically write. Removing the write tools removes the agent's means, not the token's power. If you need scope-level read-only, issue the token against a narrower scope by hand.",
+      "command": "npx",
+      "args": ["-y", "@cocal/google-calendar-mcp"],
+      "env": {
+        "GOOGLE_OAUTH_CREDENTIALS": "<GOOGLE_OAUTH_CREDENTIALS>",
+        "GOOGLE_CALENDAR_MCP_TOKEN_PATH": "<GOOGLE_CALENDAR_MCP_TOKEN_PATH>",
+        "ENABLED_TOOLS": "list-calendars,list-events,search-events,get-event,get-freebusy,get-current-time,list-colors"
+      },
+      "_override_when": [
+        {
+          "predicate": "chassis.config.yaml.trust_line.calendar == 'read_write'",
+          "set": {
+            "env.ENABLED_TOOLS": "list-calendars,list-events,search-events,get-event,get-freebusy,get-current-time,list-colors,create-event,update-event,delete-event,respond-to-event"
+          }
+        }
+      ]
+    },
+
     "_optional-feature-gated": {
       "_role": "Below: opt-in per chassis.config.yaml flags. Delete entries you don't enable."
     },

@@ -11,6 +11,8 @@ Algorithm:
    - Skip entries whose key starts with '_' (template-only dividers).
    - If entry has `_enable_when`, evaluate the predicate against the config;
      drop the entry if false.
+   - If entry has `_override_when`, apply each clause whose predicate holds,
+     rewriting individual keys inside the kept entry (see apply_overrides).
    - Strip all keys starting with '_' from the kept entry.
    - Substitute <PLACEHOLDER> tokens in string values from .env (or env vars).
      Tokens whose substitution value is missing are LEFT IN PLACE - bootstrap
@@ -169,6 +171,58 @@ def evaluate_enable_when(predicate, config):
     return all(evaluate_clause(clause, config) for clause in clauses)
 
 
+def apply_overrides(entry, config):
+    """Apply an entry's `_override_when` clauses against the config.
+
+    `_enable_when` decides whether a server is registered at all. It cannot
+    vary a value *inside* a registered server, which is what a capability tier
+    needs: one `google-calendar` server whose exposed toolset widens when the
+    installer raises `trust_line.calendar` to `read_write`. Splitting that into
+    two differently-named servers would change the MCP tool prefix and break
+    every prompt written against the read-only one, so the value moves instead
+    of the server.
+
+    Shape:
+
+        "_override_when": [
+          {
+            "predicate": "chassis.config.yaml.trust_line.calendar == 'read_write'",
+            "set": {"env.ENABLED_TOOLS": "list-events,create-event,..."}
+          }
+        ]
+
+    `set` keys are dotted paths *within the entry*. Clauses apply in order, so
+    a later clause wins over an earlier one. A clause whose predicate is false,
+    unparsable, or whose config path is missing is skipped - the entry keeps
+    the value it declares inline, which is why the template's inline value must
+    always be the safe floor (read-only), never the privileged tier.
+    """
+    clauses = entry.get('_override_when')
+    if not isinstance(clauses, list):
+        return entry
+    out = json.loads(json.dumps(entry))  # deep copy - never mutate the template
+    for clause in clauses:
+        if not isinstance(clause, dict):
+            continue
+        predicate = clause.get('predicate')
+        assignments = clause.get('set')
+        if not isinstance(predicate, str) or not isinstance(assignments, dict):
+            continue
+        if not evaluate_enable_when(predicate, config):
+            continue
+        for dotted, value in assignments.items():
+            segments = dotted.split('.')
+            cur = out
+            for segment in segments[:-1]:
+                nxt = cur.get(segment)
+                if not isinstance(nxt, dict):
+                    nxt = {}
+                    cur[segment] = nxt
+                cur = nxt
+            cur[segments[-1]] = value
+    return out
+
+
 _PLACEHOLDER_PAT = re.compile(r'<([A-Z_][A-Z0-9_]*)>')
 
 
@@ -211,7 +265,8 @@ def hydrate(config, template, env):
         if predicate is not None:
             if not evaluate_enable_when(predicate, config):
                 continue
-        stripped = strip_meta_keys(entry)
+        overridden = apply_overrides(entry, config)
+        stripped = strip_meta_keys(overridden)
         substituted = substitute_placeholders(stripped, env, unresolved)
         out[name] = substituted
     return {'mcpServers': out}, unresolved
