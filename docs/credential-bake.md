@@ -157,11 +157,12 @@ CHASSIS_HOME=/path/to/install bash chassis/scripts/bake-env.sh
 ls -la $CHASSIS_HOME/.env.baked
 git -C $CHASSIS_HOME check-ignore .env.baked
 
-# 3. Recreate the container so it re-reads the env
-docker compose --env-file=.env.baked \
-  -f chassis/docker-compose.yml \
-  -f chassis-compose.override.yml \
-  up -d --force-recreate chassis
+# 3. Recreate the container so it re-reads the env.
+#    Always via the wrapper - it pins --env-file, the project name, CUSTOMER_HOME and
+#    the compose-file locations. Bare `docker compose` gets at least one of them wrong.
+#    (The old `-f chassis/docker-compose.yml` form is dead: that subtree was dropped in
+#    behalfbot#136 and the compose file now lives in the chassis repo.)
+bash chassis/scripts/compose.sh up -d --force-recreate chassis
 
 # 4. Verify a critical secret is visible inside the container
 docker exec behalfbot sh -c \
