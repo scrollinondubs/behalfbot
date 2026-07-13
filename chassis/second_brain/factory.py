@@ -178,8 +178,16 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
             backend_config.get("notebook_id"),
             databases.get("notes_root"),
         )
+        # The deeplink prefix a block id gets appended to. Customer-specific and
+        # it MOVES - it was a public https host, became a Tailnet address when
+        # DNS broke, and will move back. So it is a parameter, set in one place.
+        # The chassis default `siyuan://blocks/` is a desktop-app URI that does
+        # NOT open on a phone; installs that want clickable links set
+        # SIYUAN_DEEPLINK_BASE in .env.
         deeplink_template = _first_set(
-            backend_config.get("deeplink_template"), "siyuan://blocks/"
+            backend_config.get("deeplink_template"),
+            os.environ.get("SIYUAN_DEEPLINK_BASE"),
+            "siyuan://blocks/",
         )
         if not token:
             raise ValueError(

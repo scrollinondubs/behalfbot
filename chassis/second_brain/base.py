@@ -60,8 +60,9 @@ class NotesAdapter(Protocol):
         """Return a URL that, when clicked, opens the doc in the user's app/device.
 
         Per-backend conventions:
-          - SiYuan: typically `<deeplink_template>{id}` where the template is set
-            in chassis.config.yaml (e.g. `https://s.grid7.com/?id=`)
+          - SiYuan: `<deeplink_template>{id}`, where the template comes from
+            SIYUAN_DEEPLINK_BASE in .env (or a chassis.config.yaml override).
+            The per-install host is never hardcoded - see siyuan.py.
           - Notion: `https://www.notion.so/<workspace>/<page-id-without-hyphens>`
           - Obsidian: `obsidian://open?vault=<vault>&file=<path>`
         """

@@ -137,7 +137,7 @@ second_brain:
   # CREDENTIALS COME FROM .env, NOT FROM HERE. Adapter mode (`mode: adapter`)
   # and direct mode read the SAME vars, so a secret is never duplicated:
   #
-  #   siyuan   -> SIYUAN_URL, SIYUAN_TOKEN
+  #   siyuan   -> SIYUAN_URL, SIYUAN_TOKEN, SIYUAN_DEEPLINK_BASE
   #   notion   -> NOTION_API_TOKEN
   #   obsidian -> no credential; vault_path below is required (it is a path,
   #               not a secret)
@@ -152,9 +152,14 @@ second_brain:
   #                                           # http://host.docker.internal:6806
   #   token: ${SIYUAN_TOKEN}                  # Default: env SIYUAN_TOKEN. Empty = hard error.
   #   notebook_id: 20231101120000-abc123      # Default: second_brain.databases.notes_root
-  #   deeplink_template: siyuan://blocks/     # Default. Point at a reverse proxy
-  #                                           # (https://siyuan.example.com/?id=) for links
-  #                                           # that open on a phone.
+  #   deeplink_template: siyuan://blocks/     # Default: env SIYUAN_DEEPLINK_BASE, else this.
+  #                                           # A block id is appended verbatim, so keep the
+  #                                           # trailing separator. `siyuan://blocks/` opens the
+  #                                           # DESKTOP APP and does NOT work on a phone. For
+  #                                           # mobile-clickable links use the web UI shape:
+  #                                           # https://<siyuan-host>:6806/stage/build/desktop/?id=
+  #                                           # Prefer setting SIYUAN_DEEPLINK_BASE in .env - the
+  #                                           # host changes, and .env is not committed.
 
   # notion:
   #   token: ${NOTION_API_TOKEN}              # Default: env NOTION_API_TOKEN

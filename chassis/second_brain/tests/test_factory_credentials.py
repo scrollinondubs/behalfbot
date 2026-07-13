@@ -39,6 +39,9 @@ SHIPPED_CONFIG = REPO_ROOT / "chassis.config.yaml"
 FAKE_URL = "http://host.docker.internal:6806"
 FAKE_TOKEN = "test-token-not-a-real-secret"
 FAKE_ENV = {"SIYUAN_URL": FAKE_URL, "SIYUAN_TOKEN": FAKE_TOKEN}
+# Fake host. The real deeplink host is customer-specific, it moves, and it never
+# belongs in this repo - that is the whole reason it is a parameter.
+FAKE_DEEPLINK_BASE = "https://siyuan.invalid:6806/stage/build/desktop/?id="
 
 
 def _shipped_as_siyuan(raw: str, siyuan_block: str = "") -> str:
@@ -138,6 +141,41 @@ class SiYuanCredentialResolutionTest(unittest.TestCase):
         self.assertEqual(notes._base_url, "http://kernel.internal:6806")
         self.assertEqual(notes._notebook_id, "20231101120000-abc123")
         self.assertEqual(notes._deeplink_template, "https://s.example.com/?id=")
+
+    def test_deeplink_falls_back_to_the_desktop_uri_default(self) -> None:
+        # Neither YAML nor env: the chassis default. Note this URI does NOT open
+        # on a phone - that is why the env var below exists.
+        with mock.patch.dict("os.environ", FAKE_ENV, clear=True):
+            adapter = get_adapter(self.config_path)
+        self.assertEqual(adapter.notes._deeplink_template, "siyuan://blocks/")
+        self.assertEqual(
+            adapter.notes.get_deeplink("20231101120000-abc123"),
+            "siyuan://blocks/20231101120000-abc123",
+        )
+
+    def test_deeplink_comes_from_env_when_yaml_is_absent(self) -> None:
+        # The real-use path: an install sets SIYUAN_DEEPLINK_BASE in .env to its
+        # web-UI prefix so links are clickable on a phone. Fake host on purpose -
+        # the real one is customer-specific and never lives in this repo.
+        env = dict(FAKE_ENV, SIYUAN_DEEPLINK_BASE=FAKE_DEEPLINK_BASE)
+        with mock.patch.dict("os.environ", env, clear=True):
+            adapter = get_adapter(self.config_path)
+        self.assertEqual(adapter.notes._deeplink_template, FAKE_DEEPLINK_BASE)
+        # The id is appended verbatim, so the prefix keeps its trailing separator.
+        self.assertEqual(
+            adapter.notes.get_deeplink("20231101120000-abc123"),
+            FAKE_DEEPLINK_BASE + "20231101120000-abc123",
+        )
+
+    def test_deeplink_yaml_overrides_env(self) -> None:
+        override = "\n  siyuan:\n    deeplink_template: https://yaml.invalid/?id="
+        path = self._write(
+            "siyuan-deeplink.yaml", _shipped_as_siyuan(self.shipped_raw, override)
+        )
+        env = dict(FAKE_ENV, SIYUAN_DEEPLINK_BASE=FAKE_DEEPLINK_BASE)
+        with mock.patch.dict("os.environ", env, clear=True):
+            adapter = get_adapter(path)
+        self.assertEqual(adapter.notes._deeplink_template, "https://yaml.invalid/?id=")
 
     def test_env_ref_in_yaml_that_expands_to_nothing_falls_through(self) -> None:
         # A config shipping `token: ${SIYUAN_TOKEN}` must not shadow the env

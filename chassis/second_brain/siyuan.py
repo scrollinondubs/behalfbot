@@ -2,7 +2,8 @@
 
 Ports the call patterns Sean's V1 <v1-reference-install> instance uses (briefing-siyuan-crosslink.py,
 generate-dossier.py, pacman-queue-add.py). Every operation hits the local SiYuan
-kernel, typically reverse-proxied through `s.grid7.com` for iPhone deeplinks.
+kernel, typically reverse-proxied through a per-install host for phone-clickable
+deeplinks (see SIYUAN_DEEPLINK_BASE below - the host is never hardcoded here).
 
 Database surface is NOT implemented — SiYuan has SQL search but no native
 property/database semantics that match Notion's. Use NotesAdapter only.
@@ -20,9 +21,14 @@ Every key below is an OPTIONAL override in chassis.config.yaml:
         base_url: http://127.0.0.1:6806        # default; env SIYUAN_URL wins over this default
         token: ${SIYUAN_TOKEN}                  # default: env SIYUAN_TOKEN
         notebook_id: 20231101120000-abc123      # default: second_brain.databases.notes_root
-        deeplink_template: siyuan://blocks/     # default; set to a reverse-proxy URL
-                                                # (e.g. https://siyuan.example.com/?id=)
-                                                # for phone-clickable links
+        deeplink_template: siyuan://blocks/     # default: env SIYUAN_DEEPLINK_BASE, else this
+
+`deeplink_template` is a PREFIX - a block id is appended verbatim, so it keeps its
+trailing separator. The `siyuan://blocks/` default opens the SiYuan DESKTOP APP and
+does NOT open on a phone. Installs that need mobile-clickable links set
+SIYUAN_DEEPLINK_BASE in .env to their web-UI prefix
+(https://<siyuan-host>:6806/stage/build/desktop/?id=). The host is per-install and
+it moves, so it lives in .env, never in code.
 """
 
 from __future__ import annotations

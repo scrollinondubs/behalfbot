@@ -36,7 +36,7 @@ Pick the backend in `chassis.config.yaml`.
 | siyuan | `SIYUAN_TOKEN` | `second_brain.siyuan.token` | none - **empty token raises `ValueError` at startup** |
 | siyuan | `SIYUAN_URL` | `second_brain.siyuan.base_url` | `http://127.0.0.1:6806` |
 | siyuan | - | `second_brain.siyuan.notebook_id` | `second_brain.databases.notes_root`; empty raises `ValueError` |
-| siyuan | - | `second_brain.siyuan.deeplink_template` | `siyuan://blocks/` |
+| siyuan | `SIYUAN_DEEPLINK_BASE` | `second_brain.siyuan.deeplink_template` | `siyuan://blocks/` - **desktop-app URI, does not open on a phone** (see below) |
 | notion | `NOTION_API_TOKEN` | `second_brain.notion.token` | none |
 | notion | - | `second_brain.notion.notes_root` | `second_brain.databases.notes_root` |
 | obsidian | - (no credential) | `second_brain.obsidian.vault_path` | none - required |
@@ -46,6 +46,24 @@ Resolution is: **YAML key if set, else env var, else the documented default.** A
 The SiYuan adapter refuses to construct with an empty token or an empty `notebook_id`. Both used to be silently tolerated, which produced an adapter that answered every call with `Auth failed [session]`. Failing loudly at server startup is deliberate - `mcp_server.main()` resolves the adapter eagerly so a broken config shows up in `claude mcp list` and the server log, not mid-task.
 
 > **Container gotcha:** from inside the chassis container, `127.0.0.1` is the container itself. A SiYuan kernel running on the host is reachable at `http://host.docker.internal:6806`. Set `SIYUAN_URL` accordingly.
+
+### SiYuan deeplinks: the default does not open on a phone
+
+`get_deeplink(doc_id)` returns `deeplink_template + doc_id` - the template is a prefix a block id is appended to verbatim, so it must keep its trailing separator (`/` or `=`).
+
+Resolution is three-level, same shape as the credentials:
+
+1. `second_brain.siyuan.deeplink_template` in `chassis.config.yaml` (explicit per-install override)
+2. env `SIYUAN_DEEPLINK_BASE`
+3. the chassis default, `siyuan://blocks/`
+
+**The default is a desktop-app URI. It does NOT open on mobile.** `siyuan://blocks/<id>` hands off to the SiYuan desktop application; tapping it on an iPhone does nothing. Any install that wants links a human can actually tap from a phone (briefings, Pacman proposals, anything delivered over Discord or email) must set `SIYUAN_DEEPLINK_BASE` to its SiYuan **web UI** prefix:
+
+```
+SIYUAN_DEEPLINK_BASE=https://<your-siyuan-host>:6806/stage/build/desktop/?id=
+```
+
+Substitute a hostname that is actually reachable from the phone - public DNS, a Tailnet address, or a reverse proxy. **The chassis ships no hostname**: it is per-install, and in practice it moves (a public host today, a Tailnet address while DNS is broken, back again later). That is exactly why it is a parameter and not a constant. Set it in `.env`, in one place, and nothing in the code or the committed config has to change when it moves.
 
 ### SiYuan
 

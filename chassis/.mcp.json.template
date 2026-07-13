@@ -69,6 +69,7 @@
       "env": {
         "SIYUAN_URL": "<SIYUAN_URL>",
         "SIYUAN_TOKEN": "<SIYUAN_TOKEN>",
+        "SIYUAN_DEEPLINK_BASE": "<SIYUAN_DEEPLINK_BASE>",
         "NOTION_API_TOKEN": "<NOTION_INTEGRATION_TOKEN>"
       }
     },
