@@ -32,7 +32,7 @@ Once the file lands, restart Claude Code so it re-reads. The manual hydration wa
 | **Always-on** (no auth) | `memory`, `playwright`, `context7` | Every install. Keep. |
 | **Always-on with config** | `github` | Every install touches GitHub. Provision agent-side PAT. |
 | **Pick one** (second-brain) | `siyuan` OR `notion` OR `secondbrain` | Per `chassis.config.yaml.second_brain.backend` + `second_brain.mode`. Mode `direct` (default): the backend's native server. Mode `adapter`: the chassis-owned `secondbrain` server INSTEAD, and the native server is not registered. Obsidian has no native server - obsidian installs need `mode: adapter` for any second-brain MCP surface. |
-| **Google** (headless installs) | `gmail`, `google-calendar` | Per `chassis.config.yaml.modules.google.*`. Both default off. The only path to Google on a box you reach over SSH - Claude's hosted connectors need a browser and never complete remotely. |
+| **Google** (headless installs) | `gmail`, `google-calendar`, `google-sheets` | Per `chassis.config.yaml.modules.google.*`. All default off. The only path to Google on a box you reach over SSH - Claude's hosted connectors need a browser and never complete remotely. |
 | **Optional, opt-in** | `brave-search`, `tavily`, `turso`, `amplitude`, `n8n`, `loom`, `remarkable`, `oura`, `frame0` | Per `chassis.config.yaml.modules.*` flags. Delete entries you don't activate. |
 
 ---
@@ -99,16 +99,17 @@ If you're running Notion (cloud, page+block model):
 
 ---
 
-## Google MCPs (gmail, google-calendar)
+## Google MCPs (gmail, google-calendar, google-sheets)
 
-Off by default. Turn them on with `modules.google.gmail` / `modules.google.calendar`
-in `chassis.config.yaml`.
+Off by default. Turn them on with `modules.google.gmail` / `modules.google.calendar` /
+`modules.google.sheets` in `chassis.config.yaml`.
 
 **Who needs them:** every headless install. Claude's hosted Google connectors need a
 browser and a human at the keyboard, so they do not complete over SSH - on a Linux box
 or VPS there is no other way to reach Google. A desktop install that already has the
-hosted connectors working can leave both flags false, unless it wants Gmail attachment
-downloads, which the hosted connector does not expose (#39, #40).
+hosted connectors working can leave all three flags false, unless it wants Gmail
+attachment downloads (#39, #40) or Sheets cell writes (#63), neither of which the
+hosted connectors expose. Reading a spreadsheet as a Drive file is not writing a cell.
 
 **Packages:**
 
@@ -116,8 +117,9 @@ downloads, which the hosted connector does not expose (#39, #40).
 |---|---|---|
 | `gmail` | [`@gongrzhe/server-gmail-autoauth-mcp`](https://github.com/gongrzhe/server-gmail-autoauth-mcp) | The server the first headless install has been running in production. Exposes `download_attachment`. |
 | `google-calendar` | [`@cocal/google-calendar-mcp`](https://github.com/nspady/google-calendar-mcp) | Supports `ENABLED_TOOLS` filtering, which is how `trust_line.calendar` is enforced. |
+| `google-sheets` | [`@shivaduke28/google-sheets-mcp`](https://github.com/shivaduke28/google-mcp) | Reads the same `GOOGLE_OAUTH_CREDENTIALS` client as Calendar. Enforces a per-spreadsheet write allowlist server-side. Tools: `list-spreadsheets`, `get-spreadsheet`, `get-values`, `update-values`, `append-values`, `create-from-template`. |
 
-**Credentials:** both read ONE OAuth client of type *Desktop app*
+**Credentials:** all three read ONE OAuth client of type *Desktop app*
 (`gcp-oauth.keys.json`), and each keeps its own consented token. A service account is
 not an option: reading a mailbox with one needs domain-wide delegation, which needs a
 Workspace admin and cannot be granted on a personal Gmail account.
@@ -127,11 +129,28 @@ flow on your laptop and copy the token files up. Full procedure, plus the Google
 Console setup and the 7-day test-mode token expiry that bites everyone:
 [`docs/installer-homework.md`](installer-homework.md) section 4.
 
+**Scope is not access.** A Sheets token can only reach spreadsheets that have been
+**shared with the agent's Google account** - Editor, if it is to write. This is the
+single most common reason a correctly-configured Sheets server still cannot open a
+sheet, and it is independent of scope: neither one substitutes for the other.
+[`installer-homework.md`](installer-homework.md) section 4g.
+
 **Calendar write access** is gated on `trust_line.calendar`. `read_only` (the default)
 registers the server with read tools only; `read_write` adds `create-event`,
 `update-event`, `delete-event`, `respond-to-event`. This is tool-gating, not
 scope-gating - the token holds a read-write scope either way. Gmail has no equivalent
 filter and is all-or-nothing, send included.
+
+**Sheets write access** is gated on `trust_line.sheets`, by a different and stronger
+mechanism. The server has no tool filter, so its write tools are always advertised;
+it instead **refuses the write at call time** unless the target spreadsheet is listed
+`readwrite` in the `GOOGLE_MCP_CONFIG` allowlist. `read_only` (the default) leaves that
+file unset, so every write is denied by the server. `read_write` points at an allowlist
+naming the writable spreadsheets by id - there is deliberately no blanket write tier.
+Caveat, stated rather than hidden: `create-from-template` checks only read access, so
+on the read floor it can still copy a readable sheet into a new file. It cannot alter
+an existing one. The Sheets server also requests a full `drive` scope alongside
+`spreadsheets`, which is broader than the module name suggests.
 
 ---
 

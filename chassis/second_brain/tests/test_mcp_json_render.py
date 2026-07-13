@@ -132,6 +132,7 @@ class GoogleMcpRenderTest(unittest.TestCase):
             servers = _render_config(config)
             self.assertNotIn("gmail", servers)
             self.assertNotIn("google-calendar", servers)
+            self.assertNotIn("google-sheets", servers)
 
     def test_existing_install_server_set_is_unchanged(self) -> None:
         # The exact server set a pre-#57 config rendered. If adding a Google
@@ -201,6 +202,90 @@ class GoogleMcpRenderTest(unittest.TestCase):
         self.assertEqual(shipped["trust_line"]["calendar"], "read_only")
         self.assertIs(shipped["modules"]["google"]["gmail"], False)
         self.assertIs(shipped["modules"]["google"]["calendar"], False)
+
+
+class GoogleSheetsMcpRenderTest(unittest.TestCase):
+    """Google Sheets MCP server (issue #63).
+
+    Same shape as the Gmail/Calendar tests above, with one difference worth
+    stating: `trust_line.sheets` does not gate a TOOL LIST, because
+    @shivaduke28/google-sheets-mcp has no tool filter. It gates whether the
+    server is handed a write allowlist at all. With no allowlist the server
+    refuses every write itself, so the absence of GOOGLE_MCP_CONFIG *is* the
+    read-only floor - which is why these tests assert on that key's presence
+    rather than on a set of tool names.
+    """
+
+    def test_sheets_absent_unless_flag_set(self) -> None:
+        # Gmail/Calendar on must not drag Sheets in with them.
+        servers = _render_config(
+            {"modules": {"google": {"gmail": True, "calendar": True}}}
+        )
+        self.assertNotIn("google-sheets", servers)
+
+    def test_sheets_registers_when_flag_set(self) -> None:
+        servers = _render_config({"modules": {"google": {"sheets": True}}})
+        entry = servers["google-sheets"]
+        self.assertEqual(entry["command"], "npx")
+        self.assertIn("@shivaduke28/google-sheets-mcp", entry["args"])
+        self.assertFalse([k for k in entry if k.startswith("_")])
+        # Enabling Sheets must not drag Gmail or Calendar in with it.
+        self.assertNotIn("gmail", servers)
+        self.assertNotIn("google-calendar", servers)
+
+    def test_sheets_reuses_the_shared_oauth_client(self) -> None:
+        # The whole point of #63: one OAuth client, not a second credential
+        # mechanism. The Sheets server must read the SAME placeholder the
+        # calendar entry reads.
+        sheets = _render_config({"modules": {"google": {"sheets": True}}})[
+            "google-sheets"
+        ]
+        calendar = _render_config({"modules": {"google": {"calendar": True}}})[
+            "google-calendar"
+        ]
+        self.assertEqual(
+            sheets["env"]["GOOGLE_OAUTH_CREDENTIALS"],
+            calendar["env"]["GOOGLE_OAUTH_CREDENTIALS"],
+        )
+
+    def test_sheets_defaults_to_read_floor_when_trust_line_absent(self) -> None:
+        # No trust_line at all: no allowlist, so the server denies every write.
+        entry = _render_config({"modules": {"google": {"sheets": True}}})[
+            "google-sheets"
+        ]
+        self.assertNotIn("GOOGLE_MCP_CONFIG", entry["env"])
+        self.assertEqual(
+            set(entry["env"]), {"GOOGLE_OAUTH_CREDENTIALS", "GOOGLE_OAUTH_TOKENS"}
+        )
+
+    def test_sheets_read_only_trust_line_withholds_the_allowlist(self) -> None:
+        entry = _render_config(
+            {
+                "modules": {"google": {"sheets": True}},
+                "trust_line": {"sheets": "read_only"},
+            }
+        )["google-sheets"]
+        self.assertNotIn("GOOGLE_MCP_CONFIG", entry["env"])
+
+    def test_sheets_read_write_trust_line_grants_the_allowlist(self) -> None:
+        entry = _render_config(
+            {
+                "modules": {"google": {"sheets": True}},
+                "trust_line": {"sheets": "read_write"},
+            }
+        )["google-sheets"]
+        self.assertEqual(entry["env"]["GOOGLE_MCP_CONFIG"], "<GOOGLE_SHEETS_ALLOWLIST>")
+        # Widened, not swapped - the credentials must survive the override.
+        self.assertIn("GOOGLE_OAUTH_CREDENTIALS", entry["env"])
+        self.assertIn("GOOGLE_OAUTH_TOKENS", entry["env"])
+
+    def test_shipped_config_defaults_sheets_off_and_read_only(self) -> None:
+        import yaml  # noqa: PLC0415 - test-only dependency
+
+        with open(REPO_ROOT / "chassis.config.yaml") as f:
+            shipped = yaml.safe_load(f)
+        self.assertIs(shipped["modules"]["google"]["sheets"], False)
+        self.assertEqual(shipped["trust_line"]["sheets"], "read_only")
 
 
 class OverrideWhenTest(unittest.TestCase):

@@ -213,12 +213,15 @@ modules:
     telegram_trigger_user_id: null          # Optional - telegram user_id whose 👀 fires Mode B
                                             # (queue-from-telegram-reaction). Leave null to disable Mode B.
     telegram_admin_chat_ids: null           # Optional - comma-separated chat_ids where Mode B is active
-  google:                                   # Gmail + Calendar over on-disk OAuth, for HEADLESS installs
+  google:                                   # Gmail + Calendar + Sheets over on-disk OAuth, for HEADLESS installs
     gmail: false                            # Claude's hosted Google connectors need a browser and a human,
     calendar: false                         # so they never complete over SSH. A Linux/VPS install has no
-                                            # other path to Google; a desktop install that already has the
-                                            # connectors working can leave both false.
-                                            # Both flags default false, so an install that never sets them
+    sheets: false                           # other path to Google; a desktop install that already has the
+                                            # connectors working can leave all three false.
+                                            # sheets is the CELL-level surface: Drive read access lets an
+                                            # agent open a spreadsheet as a file, which is not the same as
+                                            # writing a row, and writing rows is what people ask for (#63).
+                                            # All flags default false, so an install that never sets them
                                             # renders .mcp.json exactly as it did before these keys existed.
                                             # Pre-flight (OAuth client, scopes, headless consent):
                                             #   docs/installer-homework.md
@@ -234,6 +237,13 @@ trust_line:
                                             # add create/update/delete/respond. Read-only is the default because
                                             # a mistake an agent can make on its own is one you find out about
                                             # from someone else's calendar.
+  sheets: read_only                         # LOAD-BEARING when modules.google.sheets is on. read_only leaves
+                                            # the allowlist file unset, and the SERVER then refuses every
+                                            # update-values / append-values call - the refusal is server-side,
+                                            # not a tool we hid from the agent. read_write points the server at
+                                            # an allowlist naming the spreadsheets it may write, by id: there
+                                            # is no blanket write tier, on purpose. See docs/installer-homework.md
+                                            # section 4g for the one gap (create-from-template can still copy).
   github: collaborator                      # Agent-side account separate from installer-personal
   google_drive: read_primary_write_on_ask
   notion: read_write
