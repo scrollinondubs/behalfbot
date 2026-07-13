@@ -95,6 +95,27 @@ def _resolve_env(value: Any) -> Any:
     return out
 
 
+def _first_set(*candidates: Any) -> str:
+    """First candidate that resolves to a non-empty string, '' when none do.
+
+    Each candidate is passed through `_resolve_env` first, so a config value of
+    `${SIYUAN_TOKEN}` that expands to nothing falls through to the next
+    candidate instead of shadowing it.
+    """
+    for candidate in candidates:
+        # A key present but blank (`notes_root:`) parses as None under PyYAML and
+        # as an empty dict under the fallback parser in _parse_yaml_minimal. Both
+        # mean "unset" - never let str({}) == '{}' through as a real value.
+        if candidate is None or isinstance(candidate, (dict, list)):
+            continue
+        value = _resolve_env(candidate)
+        if not isinstance(value, str):
+            value = str(value)
+        if value.strip():
+            return value
+    return ""
+
+
 VALID_MODES = ("direct", "adapter")
 
 
@@ -140,18 +161,60 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
     if backend == "siyuan":
         from chassis.second_brain.siyuan import SiYuanAdapter
 
+        # Credentials come from the SAME source direct mode uses: SIYUAN_URL /
+        # SIYUAN_TOKEN in .env, passed to the server process by .mcp.json. The
+        # `second_brain.siyuan` YAML block is an optional override. Before this,
+        # adapter mode read ONLY that block - which ships in no template and
+        # exists in no install - so it built an adapter with an empty token and
+        # every call came back "Auth failed [session]".
+        databases = sb_config.get("databases") or {}
+        base_url = _first_set(
+            backend_config.get("base_url"),
+            os.environ.get("SIYUAN_URL"),
+            "http://127.0.0.1:6806",
+        )
+        token = _first_set(backend_config.get("token"), os.environ.get("SIYUAN_TOKEN"))
+        notebook_id = _first_set(
+            backend_config.get("notebook_id"),
+            databases.get("notes_root"),
+        )
+        deeplink_template = _first_set(
+            backend_config.get("deeplink_template"), "siyuan://blocks/"
+        )
+        if not token:
+            raise ValueError(
+                "SiYuan adapter has no API token. Set SIYUAN_TOKEN in the chassis .env "
+                "(the same var direct mode uses), or second_brain.siyuan.token in "
+                "chassis.config.yaml to override it. The kernel rejects an empty token "
+                "with 'Auth failed [session]' on every call."
+            )
+        if not notebook_id:
+            raise ValueError(
+                "SiYuan adapter has no notebook_id. Set second_brain.databases.notes_root "
+                "in chassis.config.yaml (the default write target), or "
+                "second_brain.siyuan.notebook_id to override it. Without it, create_doc "
+                "has nowhere to write."
+            )
         return SiYuanAdapter(
-            base_url=_resolve_env(backend_config.get("base_url", "http://127.0.0.1:6806")),
-            token=_resolve_env(backend_config.get("token", "")),
-            notebook_id=_resolve_env(backend_config.get("notebook_id", "")),
-            deeplink_template=_resolve_env(backend_config.get("deeplink_template", "siyuan://blocks/")),
+            base_url=base_url,
+            token=token,
+            notebook_id=notebook_id,
+            deeplink_template=deeplink_template,
         )
     if backend == "notion":
         from chassis.second_brain.notion import NotionAdapter
 
+        # Same credential source as the native notion MCP server (.env), same
+        # notes_root fallback as siyuan. Notion adapter mode is not validated as
+        # hard as siyuan yet - see docs/second-brain-adapters.md.
+        databases = sb_config.get("databases") or {}
         return NotionAdapter(
-            token=_resolve_env(backend_config.get("token", "")),
-            notes_root=_resolve_env(backend_config.get("notes_root", "")),
+            token=_first_set(
+                backend_config.get("token"), os.environ.get("NOTION_API_TOKEN")
+            ),
+            notes_root=_first_set(
+                backend_config.get("notes_root"), databases.get("notes_root")
+            ),
             databases={k: _resolve_env(v) for k, v in (backend_config.get("databases") or {}).items()},
             natural_keys=backend_config.get("natural_keys") or {},
             active_database=backend_config.get("active_database"),

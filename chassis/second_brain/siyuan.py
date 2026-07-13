@@ -7,15 +7,22 @@ kernel, typically reverse-proxied through `s.grid7.com` for iPhone deeplinks.
 Database surface is NOT implemented — SiYuan has SQL search but no native
 property/database semantics that match Notion's. Use NotesAdapter only.
 
-Config (chassis.config.yaml):
+Credentials come from the chassis .env - SIYUAN_URL and SIYUAN_TOKEN, the same
+two vars direct mode passes to the native siyuan MCP server. The factory reads
+them; nothing has to be duplicated into YAML. `notebook_id` defaults to
+`second_brain.databases.notes_root`, the canonical write target.
+
+Every key below is an OPTIONAL override in chassis.config.yaml:
 
     second_brain:
       backend: siyuan
       siyuan:
-        base_url: http://127.0.0.1:6806     # local kernel
-        token: ${SIYUAN_TOKEN}               # from .env
-        notebook_id: 20231101120000-abc123    # default notebook for create_doc
-        deeplink_template: https://s.grid7.com/?id=
+        base_url: http://127.0.0.1:6806        # default; env SIYUAN_URL wins over this default
+        token: ${SIYUAN_TOKEN}                  # default: env SIYUAN_TOKEN
+        notebook_id: 20231101120000-abc123      # default: second_brain.databases.notes_root
+        deeplink_template: siyuan://blocks/     # default; set to a reverse-proxy URL
+                                                # (e.g. https://siyuan.example.com/?id=)
+                                                # for phone-clickable links
 """
 
 from __future__ import annotations
@@ -36,6 +43,11 @@ from chassis.second_brain.base import (
 
 class SiYuanError(RuntimeError):
     """Raised when SiYuan API returns a non-zero `code`."""
+
+
+# Backslash is not special inside a sqlite string literal, so it is a safe
+# LIKE escape character and needs no doubling in the emitted SQL.
+LIKE_ESCAPE_CHAR = "\\"
 
 
 def _siyuan_stamp(value: datetime) -> str:
@@ -125,7 +137,7 @@ class SiYuanNotes(NotesAdapter):
     def search(self, query: str, limit: int = 10) -> list[SearchHit]:
         sql = (
             "SELECT id, content, hpath FROM blocks "
-            f"WHERE content LIKE '%{self._escape(query)}%' "
+            f"WHERE content LIKE '%{self._escape_like(query)}%' ESCAPE '{LIKE_ESCAPE_CHAR}' "
             f"ORDER BY updated DESC LIMIT {int(limit)}"
         )
         result = self._post("/api/query/sql", {"stmt": sql})
@@ -206,10 +218,22 @@ class SiYuanNotes(NotesAdapter):
 
     @staticmethod
     def _escape(value: str) -> str:
-        # SiYuan SQL is sqlite — naive single-quote escape is sufficient given the
-        # adapter only takes input from chassis-internal callers (no user-supplied
-        # SQL). Tighten if this surface widens.
+        # SiYuan SQL is sqlite. Escape for a single-quoted string literal.
         return value.replace("'", "''")
+
+    @classmethod
+    def _escape_like(cls, value: str) -> str:
+        # For values interpolated into a LIKE pattern. search() is exposed as an
+        # MCP tool by second_brain/mcp_server.py, so `query` is arbitrary
+        # model-supplied or user-supplied text - not the chassis-internal-only
+        # surface this adapter originally had. A bare quote-escape leaves the
+        # LIKE wildcards live: '%' and '_' in a query would silently widen the
+        # match. Escape the escape char first, then the wildcards, then quote
+        # for the literal. Callers MUST pair this with an ESCAPE clause.
+        escaped = value.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR * 2)
+        for wildcard in ("%", "_"):
+            escaped = escaped.replace(wildcard, LIKE_ESCAPE_CHAR + wildcard)
+        return cls._escape(escaped)
 
 
 class SiYuanAdapter(SecondBrainAdapter):
