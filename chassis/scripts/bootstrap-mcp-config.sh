@@ -98,6 +98,55 @@ if [[ ! -f "$TEMPLATE" ]]; then
     exit 2
 fi
 
+# ---------------------------------------------------------------------------
+# Delegate to hydrate-mcp-json.py when we can.
+#
+# The sed+jq path below cannot evaluate `_enable_when`: it strips the key and
+# registers the server anyway. That was survivable while the gated servers were
+# things like brave-search, where the worst case is a server nobody calls. It
+# stopped being survivable with the Google entries (#57), which would otherwise
+# get registered on every install that recovers through this script - including
+# installs that never enabled Google and have no OAuth token on disk.
+#
+# hydrate-mcp-json.py is the renderer bootstrap.sh already uses and the one the
+# test suite covers. Use it here too, so both paths honor one grammar. The sed
+# path stays as the fallback for the case it was written for: a broken install
+# where chassis.config.yaml is missing and .mcp.json must be reconstructed.
+# ---------------------------------------------------------------------------
+HYDRATOR="$SCRIPT_DIR/hydrate-mcp-json.py"
+CONFIG="$CUSTOMER_HOME/chassis.config.yaml"
+
+if [[ -f "$HYDRATOR" && -f "$CONFIG" ]] && command -v python3 >/dev/null 2>&1 \
+   && python3 -c 'import yaml' 2>/dev/null; then
+    hydrator_args=(--config "$CONFIG" --template "$TEMPLATE")
+    [[ -f "$ENV_FILE" ]] && hydrator_args+=(--env "$ENV_FILE")
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        python3 "$HYDRATOR" "${hydrator_args[@]}" --output "$TARGET" --dry-run
+        exit 0
+    fi
+
+    if [[ -f "$TARGET" && $FORCE -eq 0 ]]; then
+        echo "skip: $TARGET already exists; pass --force to overwrite" >&2
+        exit 0
+    fi
+
+    rc=0
+    ( umask 077; python3 "$HYDRATOR" "${hydrator_args[@]}" --output "$TARGET" ) || rc=$?
+    # Exit 2 means the file was written with <PLACEHOLDER> tokens still in it.
+    # Loud, not fatal - same contract bootstrap.sh applies.
+    if [[ $rc -eq 0 || $rc -eq 2 ]]; then
+        chmod 600 "$TARGET" 2>/dev/null || true
+        exit "$rc"
+    fi
+    echo "ERROR: hydrate-mcp-json.py exited $rc" >&2
+    exit "$rc"
+fi
+
+echo "WARN: falling back to the sed+jq renderer (no chassis.config.yaml, or no" >&2
+echo "      python3+PyYAML). It cannot evaluate _enable_when, so feature-gated" >&2
+echo "      servers are registered unconditionally. Review $TARGET before use." >&2
+
 if [[ -f "$TARGET" && $FORCE -eq 0 && $DRY_RUN -eq 0 ]]; then
     echo "skip: $TARGET already exists; pass --force to overwrite" >&2
     exit 0
@@ -147,11 +196,18 @@ done
 # template so the file is self-documenting). Only substitute the exact tokens.
 OUTPUT=$(printf '%s' "$OUTPUT" | sed -e "s|\${CHASSIS_HOME}|$CHASSIS_HOME|g" -e "s|\${CUSTOMER_HOME}|$CUSTOMER_HOME|g")
 
-# Drop the `_README` key from the top-level object and any `_role` / `_enable_when`
-# / `_install_note` keys from servers. They're documentation, not config — jq
-# treats them as noise.
+# Strip template-only metadata: the top-level `_README`, every `_*` key inside a
+# server entry, and the `_*` divider entries that are section headers rather than
+# servers. Match on the underscore prefix, not on a hand-maintained list of names -
+# the old `del(._role) | del(._enable_when) | del(._install_note)` form silently
+# leaked every key nobody remembered to add to it.
 if command -v jq >/dev/null 2>&1; then
-    OUTPUT=$(printf '%s' "$OUTPUT" | jq 'del(._README) | .mcpServers |= with_entries(.value |= (del(._role) | del(._enable_when) | del(._install_note)))')
+    OUTPUT=$(printf '%s' "$OUTPUT" | jq '
+        del(._README)
+        | .mcpServers |= (
+            with_entries(select(.key | startswith("_") | not))
+            | map_values(with_entries(select(.key | startswith("_") | not)))
+        )')
 fi
 
 # Validate the result is parseable JSON before writing.

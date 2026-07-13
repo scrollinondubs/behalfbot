@@ -102,6 +102,148 @@ class McpJsonRenderMatrixTest(unittest.TestCase):
         self.assertFalse([k for k in entry if k.startswith("_")])
 
 
+CALENDAR_WRITE_TOOLS = {"create-event", "update-event", "delete-event", "respond-to-event"}
+
+
+def _render_config(config: dict) -> dict:
+    template = hydrator.load_json(str(TEMPLATE_PATH))
+    hydrated, _unresolved = hydrator.hydrate(config, template, env={})
+    return hydrated["mcpServers"]
+
+
+def _calendar_tools(servers: dict) -> set[str]:
+    return set(servers["google-calendar"]["env"]["ENABLED_TOOLS"].split(","))
+
+
+class GoogleMcpRenderTest(unittest.TestCase):
+    """Gmail + Calendar MCP servers (issue #57).
+
+    The load-bearing case is the FIRST one: an existing install whose config
+    predates modules.google must render byte-identically to before. Everything
+    else here is downstream of that.
+    """
+
+    def test_config_without_google_keys_renders_no_google_servers(self) -> None:
+        for config in (
+            {},
+            {"second_brain": {"backend": "siyuan"}},
+            {"modules": {"admin": True}},  # modules exists, google does not
+        ):
+            servers = _render_config(config)
+            self.assertNotIn("gmail", servers)
+            self.assertNotIn("google-calendar", servers)
+
+    def test_existing_install_server_set_is_unchanged(self) -> None:
+        # The exact server set a pre-#57 config rendered. If adding a Google
+        # entry ever leaks into an install that did not ask for it, this fails.
+        servers = _render_config({"second_brain": {"backend": "siyuan"}})
+        self.assertEqual(
+            set(servers), {"memory", "playwright", "context7", "github", "siyuan"}
+        )
+
+    def test_gmail_registers_when_flag_set(self) -> None:
+        servers = _render_config({"modules": {"google": {"gmail": True}}})
+        entry = servers["gmail"]
+        self.assertEqual(entry["command"], "npx")
+        self.assertIn("@gongrzhe/server-gmail-autoauth-mcp", entry["args"])
+        self.assertEqual(
+            set(entry["env"]), {"GMAIL_OAUTH_PATH", "GMAIL_CREDENTIALS_PATH"}
+        )
+        self.assertFalse([k for k in entry if k.startswith("_")])
+        # Enabling Gmail must not drag Calendar in with it.
+        self.assertNotIn("google-calendar", servers)
+
+    def test_calendar_defaults_to_read_only_when_trust_line_absent(self) -> None:
+        # A config that enables Calendar but never mentions trust_line lands on
+        # the read floor. `==` on a missing path is False, so the override skips.
+        servers = _render_config({"modules": {"google": {"calendar": True}}})
+        tools = _calendar_tools(servers)
+        self.assertIn("list-events", tools)
+        self.assertEqual(tools & CALENDAR_WRITE_TOOLS, set())
+
+    def test_calendar_read_only_trust_line_withholds_write_tools(self) -> None:
+        servers = _render_config(
+            {
+                "modules": {"google": {"calendar": True}},
+                "trust_line": {"calendar": "read_only"},
+            }
+        )
+        self.assertEqual(_calendar_tools(servers) & CALENDAR_WRITE_TOOLS, set())
+
+    def test_calendar_read_write_trust_line_grants_write_tools(self) -> None:
+        servers = _render_config(
+            {
+                "modules": {"google": {"calendar": True}},
+                "trust_line": {"calendar": "read_write"},
+            }
+        )
+        tools = _calendar_tools(servers)
+        self.assertEqual(tools & CALENDAR_WRITE_TOOLS, CALENDAR_WRITE_TOOLS)
+        self.assertIn("list-events", tools)  # widened, not swapped
+
+    def test_calendar_entry_shape(self) -> None:
+        entry = _render_config({"modules": {"google": {"calendar": True}}})[
+            "google-calendar"
+        ]
+        self.assertIn("@cocal/google-calendar-mcp", entry["args"])
+        # _override_when and friends are template-only and must not ship.
+        self.assertFalse([k for k in entry if k.startswith("_")])
+
+    def test_shipped_config_defaults_calendar_to_read_only(self) -> None:
+        # Guards the chassis.config.yaml default itself: if someone raises
+        # trust_line.calendar back to read_write, every install that turns
+        # Calendar on silently gets delete-event. Make that a failing test,
+        # not a surprise.
+        import yaml  # noqa: PLC0415 - test-only dependency
+
+        with open(REPO_ROOT / "chassis.config.yaml") as f:
+            shipped = yaml.safe_load(f)
+        self.assertEqual(shipped["trust_line"]["calendar"], "read_only")
+        self.assertIs(shipped["modules"]["google"]["gmail"], False)
+        self.assertIs(shipped["modules"]["google"]["calendar"], False)
+
+
+class OverrideWhenTest(unittest.TestCase):
+    ENTRY = {
+        "_enable_when": "chassis.config.yaml.modules.x == true",
+        "env": {"TOOLS": "read"},
+        "_override_when": [
+            {
+                "predicate": "chassis.config.yaml.trust_line.x == 'read_write'",
+                "set": {"env.TOOLS": "read,write"},
+            }
+        ],
+    }
+
+    def test_override_applies_when_predicate_holds(self) -> None:
+        out = hydrator.apply_overrides(self.ENTRY, {"trust_line": {"x": "read_write"}})
+        self.assertEqual(out["env"]["TOOLS"], "read,write")
+
+    def test_override_skipped_when_predicate_fails(self) -> None:
+        out = hydrator.apply_overrides(self.ENTRY, {"trust_line": {"x": "read_only"}})
+        self.assertEqual(out["env"]["TOOLS"], "read")
+
+    def test_override_skipped_on_missing_config_path(self) -> None:
+        out = hydrator.apply_overrides(self.ENTRY, {})
+        self.assertEqual(out["env"]["TOOLS"], "read")
+
+    def test_template_entry_is_not_mutated(self) -> None:
+        # apply_overrides deep-copies. A shared template dict must survive being
+        # rendered against a permissive config and then a restrictive one.
+        hydrator.apply_overrides(self.ENTRY, {"trust_line": {"x": "read_write"}})
+        self.assertEqual(self.ENTRY["env"]["TOOLS"], "read")
+
+    def test_entry_without_override_when_is_returned_unchanged(self) -> None:
+        entry = {"command": "npx"}
+        self.assertEqual(hydrator.apply_overrides(entry, {}), entry)
+
+    def test_malformed_clauses_are_ignored(self) -> None:
+        for clauses in ("not-a-list", ["not-a-dict"], [{"predicate": "x == 'y'"}], [{}]):
+            entry = {"env": {"TOOLS": "read"}, "_override_when": clauses}
+            out = hydrator.apply_overrides(entry, {"trust_line": {"x": "read_write"}})
+            self.assertEqual(out["env"]["TOOLS"], "read")
+
+
 class EnableWhenEvaluatorTest(unittest.TestCase):
     CONFIG = {"second_brain": {"backend": "siyuan", "mode": "adapter"}}
 

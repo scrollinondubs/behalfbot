@@ -213,6 +213,15 @@ modules:
     telegram_trigger_user_id: null          # Optional - telegram user_id whose 👀 fires Mode B
                                             # (queue-from-telegram-reaction). Leave null to disable Mode B.
     telegram_admin_chat_ids: null           # Optional - comma-separated chat_ids where Mode B is active
+  google:                                   # Gmail + Calendar over on-disk OAuth, for HEADLESS installs
+    gmail: false                            # Claude's hosted Google connectors need a browser and a human,
+    calendar: false                         # so they never complete over SSH. A Linux/VPS install has no
+                                            # other path to Google; a desktop install that already has the
+                                            # connectors working can leave both false.
+                                            # Both flags default false, so an install that never sets them
+                                            # renders .mcp.json exactly as it did before these keys existed.
+                                            # Pre-flight (OAuth client, scopes, headless consent):
+                                            #   docs/installer-homework.md
   dealflow: false
   health_general: false
   banking: false                            # Hard opt-in - trust line requires explicit installer decision
@@ -220,7 +229,11 @@ modules:
 
 trust_line:
   email: read_and_draft                     # Never auto-send
-  calendar: read_write
+  calendar: read_only                       # LOAD-BEARING as of the Google MCP servers: read_only registers
+                                            # google-calendar with the read tools only. Raise to read_write to
+                                            # add create/update/delete/respond. Read-only is the default because
+                                            # a mistake an agent can make on its own is one you find out about
+                                            # from someone else's calendar.
   github: collaborator                      # Agent-side account separate from installer-personal
   google_drive: read_primary_write_on_ask
   notion: read_write
