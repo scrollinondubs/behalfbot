@@ -1,7 +1,7 @@
 {
   "id": "behalfbot-loom-vision",
-  "name": "Behalf.bot — Loom Vision",
-  "description": "Process a Loom share URL into multimodal context: downloads the video, samples key frames at 1 frame per 5 seconds, and pairs them with the auto-generated transcript. Lets Claude see what's happening on screen during a walkthrough, code review, or bug repro — not just what was said. Token-cheap visual context for any Loom link.",
+  "name": "Behalf.bot - Loom Vision",
+  "description": "Process a Loom share URL into multimodal context: downloads the video, samples key frames at 1 frame per 5 seconds, and pairs them with the auto-generated transcript. Lets Claude see what's happening on screen during a walkthrough, code review, or bug repro - not just what was said. Token-cheap visual context for any Loom link.",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
@@ -35,7 +35,7 @@
       },
       "output_root": {
         "type": "string",
-        "description": "Directory where per-video output folders are written. Each Loom video gets a subdir named loom-<video_id> containing video.mp4, transcript.vtt, and frame_NNN.jpg files.",
+        "description": "Directory where per-video output folders are written. Each Loom video gets a subdir named loom-<video_id> containing video.mp4, transcript.vtt, transcript.txt, transcript.json, and frame_NNN.jpg files.",
         "default": "${CHASSIS_HOME}/temp"
       }
     },
@@ -53,14 +53,19 @@
   "dependencies": {
     "system": [
       {
+        "name": "node",
+        "install": "brew install node",
+        "_explanation": "Runs the transcript JSON to VTT/plaintext conversion embedded in process-loom.sh. Also required transitively by loom-dl (it is an npm CLI), so a working loom-dl implies node is present. Listed explicitly so a chassis that ships loom-dl as a prebuilt binary still installs node."
+      },
+      {
         "name": "loom-dl",
         "install": "npm install -g loom-dl",
-        "_explanation": "loom-dl is a small Node CLI that handles the Loom share URL → mp4 + transcript download. Not on Homebrew, ships via npm. Verified against loom-dl 1.1.1."
+        "_explanation": "loom-dl is a small Node CLI that handles the Loom share URL to mp4 + transcript download. Not on Homebrew, ships via npm. Verified against loom-dl 1.1.1, which writes the transcript as <basename>.transcript.json (schemaVersion 1.1.x)."
       },
       {
         "name": "ffmpeg",
         "install": "brew install ffmpeg",
-        "_explanation": "Frame sampling. Any recent ffmpeg works."
+        "_explanation": "Frame sampling, plus ffprobe (bundled) to read video duration for bounding the final transcript cue. Any recent ffmpeg works."
       }
     ]
   },
