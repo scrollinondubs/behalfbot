@@ -10,6 +10,21 @@ set -euo pipefail
 
 echo "[loom-vision] checking deps..."
 
+# node - runs the transcript JSON -> VTT conversion in process-loom.sh, and is
+# required by loom-dl anyway. Installing loom-dl below needs npm (hence node),
+# so this is mostly a clear, early failure message.
+if command -v node >/dev/null 2>&1; then
+  echo "[loom-vision] node present ($(node --version 2>/dev/null || echo 'unknown version'))"
+else
+  if command -v brew >/dev/null 2>&1; then
+    echo "[loom-vision] installing node via Homebrew..."
+    brew install node
+  else
+    echo "[loom-vision] ERROR: node not found and Homebrew unavailable. Install Node manually." >&2
+    exit 1
+  fi
+fi
+
 # loom-dl - Node CLI, not on Homebrew
 if command -v loom-dl >/dev/null 2>&1; then
   echo "[loom-vision] loom-dl present ($(loom-dl --version 2>/dev/null || echo 'unknown version'))"
