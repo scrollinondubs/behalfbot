@@ -72,8 +72,9 @@ interactively, never committed):
 | `DATABASE_URL` | Turso (vibecodelisboa prod) | Mac mini env / Vaultwarden |
 | `DATABASE_AUTH_TOKEN` | Turso auth | Mac mini env / Vaultwarden |
 | `ENCRYPTION_SECRET` | repo-credential decryption | Mac mini env (`NEXTAUTH_SECRET` fallback exists in code; set the real one) |
-| `GITHUB_PAT` | jacketyjax PAT - member-repo clone, push, PR | `/Users/jax/.behalfbot/.env` |
+| `GITHUB_PAT` | jacketyjax PAT - member-repo clone, push, PR | `/Users/jax/.behalfbot/.env.baked` |
 | `BEHALFBOT_ANTHROPIC_API_KEY` | dedicated Anthropic key, $60/mo Console cap | Anthropic Console / Vaultwarden |
+| `RESEND_API_KEY` | member notify emails after job completion (#73) | Vaultwarden `resend-api-key-vcl` |
 
 That is the complete set. Anything not in this table (Vaultwarden master,
 Postgres DSN, SiYuan token, Discord token, OAuth refresh tokens) must

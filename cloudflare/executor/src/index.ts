@@ -16,15 +16,19 @@ interface Env {
   // Shared secret the Mac mini poke authenticates with. Minted fresh for
   // this Worker; not reused from any other system.
   EXECUTOR_TRIGGER_TOKEN: string
-  // The five executor secrets (issue #41's set). Set via `wrangler secret
-  // put`, passed into the container as env vars below. Nothing else - no
-  // Vaultwarden, no Postgres, no SiYuan, no Discord, no OAuth (issue #66
-  // packaging boundary).
+  // The executor secrets (issue #41's set + RESEND_API_KEY per #73). Set
+  // via `wrangler secret put`, passed into the container as env vars
+  // below. Nothing else - no Vaultwarden, no Postgres, no SiYuan, no
+  // Discord, no OAuth (issue #66 packaging boundary).
   DATABASE_URL: string
   DATABASE_AUTH_TOKEN: string
   ENCRYPTION_SECRET: string
   GITHUB_PAT: string
   BEHALFBOT_ANTHROPIC_API_KEY: string
+  // Member notifications. Without it the processor's notify step throws at
+  // module load (resend-client constructs at import time) AFTER the PR has
+  // shipped, retroactively marking completed jobs failed (#73).
+  RESEND_API_KEY: string
 }
 
 export class ExecutorContainer extends Container<Env> {
@@ -42,6 +46,7 @@ export class ExecutorContainer extends Container<Env> {
       ENCRYPTION_SECRET: env.ENCRYPTION_SECRET,
       GITHUB_PAT: env.GITHUB_PAT,
       BEHALFBOT_ANTHROPIC_API_KEY: env.BEHALFBOT_ANTHROPIC_API_KEY,
+      RESEND_API_KEY: env.RESEND_API_KEY,
     }
   }
 }
