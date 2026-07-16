@@ -71,6 +71,8 @@ Three system CLIs are required:
 - `loom-dl` - install with `npm install -g loom-dl` (Node CLI, not on Homebrew)
 - `ffmpeg` - install with `brew install ffmpeg` (macOS) or your distro's package manager (Linux). Supplies `ffprobe`, used to bound the final transcript cue.
 
+If you install ffmpeg from something other than a full package - notably the `ffmpeg-static` npm module - you may get the `ffmpeg` binary without `ffprobe`. That is not fatal: the script detects the missing `ffprobe` and degrades gracefully, estimating the end time of the last transcript cue instead of reading the true video duration. Frames, transcript text, and all earlier cue timings are unaffected. To get exact bounding, install ffmpeg via Homebrew, your distro package manager, or the official static builds from ffmpeg.org, all of which bundle `ffprobe`.
+
 Chassis installs run `plugins/loom-vision/setup.sh` automatically during bootstrap. Standalone / ClawHub installs need to run the install commands once manually; all are idempotent.
 
 ## Why this exists
