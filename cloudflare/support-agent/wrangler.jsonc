@@ -1,0 +1,70 @@
+// Behalf.bot support agent on Cloudflare Containers (issue #66).
+//
+// DO NOT `wrangler deploy` without Sean's explicit approval. Auth: wrangler
+// reads CLOUDFLARE_API_TOKEN from the environment (account-owned token
+// "behalfbot-fable-cf-containers", stored in Vaultwarden). The token is
+// never written to this repo or baked into any file.
+//
+// AUTH TRAP: the ambient CLOUDFLARE_API_TOKEN in the Jax install env
+// (.env.baked) belongs to the AllBets account and targets the WRONG
+// account. Before any wrangler call, export the Vaultwarden token per
+// README.md and confirm `wrangler whoami` shows account
+// 8a119b24123c444dddea567ffde1a405. The account_id pin below forces the
+// correct account regardless.
+//
+// This is a SEPARATE Worker from behalfbot-executor, deliberately. Worker
+// secrets are scoped per Worker, so the executor's credential set
+// (GITHUB_PAT, Turso, ENCRYPTION_SECRET) never exists in this Worker's
+// environment at all. Sharing one Worker would put every executor secret
+// one code-path bug away from the support container. Separate Workers
+// make the #66 trust boundary a platform guarantee instead of a code
+// discipline.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "behalfbot-support-agent",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  // sean@grid7.com's account (NOT the AllBets account).
+  "account_id": "8a119b24123c444dddea567ffde1a405",
+  "containers": [
+    {
+      "class_name": "SupportContainer",
+      "image": "./Dockerfile",
+      // Support asks are independent (stateless container, see README), so
+      // this can scale out later. v1 pins one instance to keep behavior
+      // observable; the in-container shim additionally caps concurrent
+      // asks per instance.
+      "max_instances": 1,
+      // 1/2 vCPU, 4 GiB memory, 8 GB disk. The working set is the claude
+      // CLI plus a ~1 MB baked docs corpus; "basic" (1 GiB) may fit but
+      // standard-1 gives the CLI headroom. Revisit after smoke-testing.
+      "instance_type": "standard-1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "SUPPORT_CONTAINER",
+        "class_name": "SupportContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["SupportContainer"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+  // Secrets (set via `wrangler secret put <NAME>`, never in this file):
+  //   SUPPORT_TRIGGER_TOKEN         - shared secret for the intake surface
+  //   BEHALFBOT_ANTHROPIC_API_KEY   - dedicated key; NEVER Sean's Max
+  //                                   subscription
+  //
+  // That is the COMPLETE set (issue #66 packaging boundary). Never
+  // `wrangler secret put` any of: GITHUB_PAT, DATABASE_URL,
+  // DATABASE_AUTH_TOKEN, ENCRYPTION_SECRET, Vaultwarden anything, Postgres
+  // DSN, SiYuan token, Discord token, or any OAuth token of Sean's.
+}

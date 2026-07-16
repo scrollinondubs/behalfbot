@@ -1,0 +1,53 @@
+# Knowledge corpus allowlist for the support-agent image (issue #66).
+#
+# build.sh copies ONLY the paths listed here (relative to the behalfbot
+# repo root) into build-context/knowledge/. Deny-by-default: a path not
+# on this list does not exist inside the image. Directories are copied
+# recursively.
+#
+# Everything listed is from the PUBLIC scrollinondubs/behalfbot repo -
+# nothing here is confidential to begin with. The manifest still matters:
+# it is the audit surface for what shapes the agent, and build.sh
+# verifies no forbidden path (dating, whatsapp, bfl, private) slips in
+# even if this list is edited carelessly later.
+#
+# DELIBERATELY EXCLUDED (the #66 boundary):
+#   plugins/                          - dating, whatsapp, bfl, and other
+#                                       personal-life plugin code/skills
+#   docs/plugins/dating.md            - dating plugin doc
+#   docs/plugins/whatsapp.md          - whatsapp plugin doc
+#   docs/plugins/bfl.md               - quantified-self plugin doc
+#   docs/plugins/welfare-check-sms-providers.md - personal-safety tooling
+#   cloudflare/                       - this scaffold; not support material
+# And, structurally, anything outside this repo: Sean's install
+# (new-jaxity), ~/jax-private, memory graphs, SiYuan content, dating
+# context. build.sh has no mechanism to reach them.
+
+README.md
+INSTALL_PROFILE.md
+bootstrap.sh
+chassis.config.yaml
+docker-compose.yml
+Dockerfile
+requirements.txt
+chassis/
+docs/SELF_INSTALL.md
+docs/LESSONS_FROM_V1.md
+docs/architectural-anti-patterns.md
+docs/backup-retention.md
+docs/briefing-pipeline.md
+docs/cloudflare-containers-eval.md
+docs/containerization.md
+docs/credential-bake.md
+docs/disaster-recovery.md
+docs/discord-intake.md
+docs/heartbeat-dispatcher.md
+docs/hydration.md
+docs/installer-homework.md
+docs/launchd-domains.md
+docs/mcp-setup.md
+docs/memory-seeding.md
+docs/multi-surface-channels.md
+docs/per-customer-repo-pattern.md
+docs/second-brain-adapters.md
+docs/security.md
