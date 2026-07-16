@@ -41,6 +41,8 @@ Setup installs three CLI dependencies:
 
 All are idempotent. Re-running setup.sh on an already-installed system is a no-op.
 
+> **Installing ffmpeg without Homebrew?** Use a full ffmpeg package - Homebrew, your distro's package manager (`apt install ffmpeg`), or the official static builds from ffmpeg.org. Avoid the `ffmpeg-static` npm module: it ships the `ffmpeg` binary alone and does not include `ffprobe`. The script still runs fine without `ffprobe` - it just can't read the exact video duration, so the last transcript cue gets an estimated end time instead of the real one. Frames, transcript text, and every earlier cue timing are unaffected.
+
 ## Usage
 
 The skill triggers automatically when the user pastes a Loom share URL or asks the agent to process Loom video content. The skill definition is in `skills/loom-vision/SKILL.md`.
