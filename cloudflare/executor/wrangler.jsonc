@@ -56,4 +56,5 @@
   //   GITHUB_PAT                    - jacketyjax PAT (clone + push + PR)
   //   BEHALFBOT_ANTHROPIC_API_KEY   - dedicated key, $60/mo capped; NEVER
   //                                   Sean's Max subscription
+  //   RESEND_API_KEY                - member notify emails (#73)
 }
