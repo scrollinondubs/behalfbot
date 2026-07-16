@@ -75,8 +75,9 @@
     },
 
     "_google-headless": {
-      "_role": "Gmail + Google Calendar for HEADLESS installs. Claude's hosted Google connectors need a browser and a human, so they never complete over SSH - a Linux/VPS install has no other path to Google. These two servers hold OAuth credentials on disk and run unattended. A desktop install that already has the hosted connectors working can leave both flags false. Setup + the one-time consent procedure: docs/installer-homework.md.",
-      "_credential_note": "Both servers share ONE Google Cloud OAuth client of type 'Desktop app' (gcp-oauth.keys.json). A service account is NOT an option for Gmail: reading a user's mailbox with one needs domain-wide delegation, which needs a Workspace admin and is impossible on a personal Gmail account. Calendar could use a service account; it deliberately does not, so the installer creates one client and follows one procedure."
+      "_role": "Gmail + Google Calendar + Google Sheets for HEADLESS installs. Claude's hosted Google connectors need a browser and a human, so they never complete over SSH - a Linux/VPS install has no other path to Google. These servers hold OAuth credentials on disk and run unattended. A desktop install that already has the hosted connectors working can leave all three flags false. Setup + the one-time consent procedure: docs/installer-homework.md.",
+      "_credential_note": "All three servers share ONE Google Cloud OAuth client of type 'Desktop app' (gcp-oauth.keys.json). A service account is NOT an option for Gmail: reading a user's mailbox with one needs domain-wide delegation, which needs a Workspace admin and is impossible on a personal Gmail account. Calendar and Sheets could each use a service account; they deliberately do not, so the installer creates one client and follows one procedure. Each server keeps its OWN consented token - one client, one procedure, one consent per server.",
+      "_sharing_note": "Scope is not access. A consented token carries the SCOPE to touch Sheets, but it still only reaches spreadsheets the credentialed identity can already open. The agent's Google account is not you. A spreadsheet you own is invisible to it until you share that spreadsheet with the agent's address (Editor, for writes). This is the single most common reason a correctly-configured Sheets server still cannot read a sheet."
     },
 
     "gmail": {
@@ -109,6 +110,28 @@
           "predicate": "chassis.config.yaml.trust_line.calendar == 'read_write'",
           "set": {
             "env.ENABLED_TOOLS": "list-calendars,list-events,search-events,get-event,get-freebusy,get-current-time,list-colors,create-event,update-event,delete-event,respond-to-event"
+          }
+        }
+      ]
+    },
+
+    "google-sheets": {
+      "_role": "optional - Google Sheets over an on-disk OAuth token. Reading a spreadsheet as a Drive FILE is not the same as writing a CELL, and writing cells is the thing people actually want (#63). Advertised tools, verified against the running server: list-spreadsheets, get-spreadsheet, get-values, update-values, append-values, create-from-template.",
+      "_enable_when": "chassis.config.yaml.modules.google.sheets == true",
+      "_install_note": "npm @shivaduke28/google-sheets-mcp. Chosen over mcp-google-sheets, google-sheets-mcp and mcp-google-sheets-full because it is the only candidate that (a) reads GOOGLE_OAUTH_CREDENTIALS - the SAME gcp-oauth.keys.json the google-calendar entry already reads, so it adds no second credential mechanism - and (b) enforces a write allowlist server-side. The server's own token env var is GOOGLE_OAUTH_TOKENS; the chassis feeds it from a .env key named GOOGLE_SHEETS_TOKEN_PATH so that a file holding ONLY the sheets token is not misread as the token for every Google server.",
+      "_scope_note": "The server requests TWO scopes: .../auth/spreadsheets AND .../auth/drive - full Drive, not Drive-readonly. The drive scope is how it resolves a spreadsheet's parent folder for the allowlist check. Consenting this server therefore hands its token more reach than 'Sheets' suggests. Stated plainly rather than buried: if that is too much, do not enable this module.",
+      "_trust_line_note": "NOT tool-gating. Unlike google-calendar, this server has no ENABLED_TOOLS filter - every tool above is always advertised. It instead REFUSES writes at call time unless the target spreadsheet is allowlisted 'readwrite' in the GOOGLE_MCP_CONFIG file. So the inline entry (no GOOGLE_MCP_CONFIG) is the read floor: update-values and append-values are rejected by the SERVER, not merely hidden from the agent. _override_when adds GOOGLE_MCP_CONFIG only when trust_line.sheets is read_write, and even then writes reach only the spreadsheets the installer listed by id. One honest gap: create-from-template checks READ access on its template, so on the read floor it can still COPY a readable sheet into a new file. It cannot alter an existing one.",
+      "command": "npx",
+      "args": ["-y", "@shivaduke28/google-sheets-mcp"],
+      "env": {
+        "GOOGLE_OAUTH_CREDENTIALS": "<GOOGLE_OAUTH_CREDENTIALS>",
+        "GOOGLE_OAUTH_TOKENS": "<GOOGLE_SHEETS_TOKEN_PATH>"
+      },
+      "_override_when": [
+        {
+          "predicate": "chassis.config.yaml.trust_line.sheets == 'read_write'",
+          "set": {
+            "env.GOOGLE_MCP_CONFIG": "<GOOGLE_SHEETS_ALLOWLIST>"
           }
         }
       ]
