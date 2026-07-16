@@ -35,7 +35,21 @@ RUN useradd --create-home --shell /usr/sbin/nologin executor
 
 # Executor code slice, prepared by build.sh:
 #   build-context/vibecodelisboa/  - shallow clone, .git removed, .env*
-#                                    removed, node_modules installed
+#                                    removed, NO node_modules (installed
+#                                    below so platform binaries match the
+#                                    linux image, not the macOS build host)
+#
+# Manifests first so the dependency layer caches across source-only
+# rebuilds. npm install (not ci) because the repo lockfile is currently
+# out of sync with package.json (missing platform optionals); dev deps
+# included on purpose - tsx is a devDependency and the shim spawns it.
+COPY build-context/vibecodelisboa/package.json build-context/vibecodelisboa/package-lock.json /app/vibecodelisboa/
+# HUSKY=0: the repo's prepare script runs husky, which fails in a context
+# with no .git (build.sh strips it).
+RUN cd /app/vibecodelisboa \
+  && HUSKY=0 npm install --no-audit --no-fund \
+  && npm cache clean --force
+
 COPY --chown=executor:executor build-context/vibecodelisboa /app/vibecodelisboa
 
 # In-container HTTP shim (trigger endpoint the Worker forwards to).
