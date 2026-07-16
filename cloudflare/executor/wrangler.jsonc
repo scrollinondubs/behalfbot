@@ -1,0 +1,59 @@
+// Behalf.bot executor on Cloudflare Containers (issues #41 / #66).
+//
+// DO NOT `wrangler deploy` without Sean's explicit approval. Auth: wrangler
+// reads CLOUDFLARE_API_TOKEN from the environment (account-owned token
+// "behalfbot-fable-cf-containers", stored in Vaultwarden). The token is
+// never written to this repo or baked into any file.
+//
+// AUTH TRAP: the ambient CLOUDFLARE_API_TOKEN in the Jax install env
+// (.env.baked) belongs to the AllBets account and targets the WRONG
+// account. Before any wrangler call, export the Vaultwarden token per
+// README.md and confirm `wrangler whoami` shows account
+// 8a119b24123c444dddea567ffde1a405. The account_id pin below forces the
+// correct account regardless.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "behalfbot-executor",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  // sean@grid7.com's account (NOT the AllBets account).
+  "account_id": "8a119b24123c444dddea567ffde1a405",
+  "containers": [
+    {
+      "class_name": "ExecutorContainer",
+      "image": "./Dockerfile",
+      // Single-in-flight contract, instance-level belt on top of the
+      // DB-level optimistic-UPDATE braces.
+      "max_instances": 1,
+      // 1/2 vCPU, 4 GiB memory, 8 GB disk. Fits clone + node + claude CLI
+      // per docs/cloudflare-containers-eval.md section 3. Bump to
+      // "standard-2" if a member repo ever blows the working set.
+      "instance_type": "standard-1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "EXECUTOR_CONTAINER",
+        "class_name": "ExecutorContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ExecutorContainer"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+  // Secrets (set via `wrangler secret put <NAME>`, never in this file):
+  //   EXECUTOR_TRIGGER_TOKEN        - shared secret for the Mac mini poke
+  //   DATABASE_URL                  - Turso
+  //   DATABASE_AUTH_TOKEN           - Turso
+  //   ENCRYPTION_SECRET             - repo-credential decryption
+  //   GITHUB_PAT                    - jacketyjax PAT (clone + push + PR)
+  //   BEHALFBOT_ANTHROPIC_API_KEY   - dedicated key, $60/mo capped; NEVER
+  //                                   Sean's Max subscription
+}

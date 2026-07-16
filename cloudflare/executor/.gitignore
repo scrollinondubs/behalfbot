@@ -1,0 +1,5 @@
+# Staged by build.sh from the private vibecodelisboa repo. Never commit -
+# it is a snapshot of another repo, and must always be rebuilt fresh.
+build-context/
+node_modules/
+.wrangler/

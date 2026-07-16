@@ -1,0 +1,17 @@
+{
+  "name": "behalfbot-executor-worker",
+  "private": true,
+  "description": "Worker + Container scaffold for the Behalf.bot executor (behalfbot#41, behalfbot#66). Deploy is gated on Sean's approval.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build-context": "bash build.sh"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "wrangler": "^4.111.0",
+    "@cloudflare/workers-types": "^5.20260716.1"
+  }
+}
