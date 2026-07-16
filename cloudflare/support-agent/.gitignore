@@ -1,0 +1,6 @@
+# Staged by build.sh from the manifest allowlist. Never commit - it is a
+# derived snapshot and must always be rebuilt fresh (the boundary verifier
+# runs at stage time).
+build-context/
+node_modules/
+.wrangler/
