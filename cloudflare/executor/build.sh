@@ -37,8 +37,11 @@ echo "[build] scrubbing git metadata + any env files..."
 rm -rf "${REPO_DIR}/.git"
 find "${REPO_DIR}" -maxdepth 2 -name ".env*" -type f -delete
 
-echo "[build] installing production deps (tsx + processor imports need them)..."
-(cd "${REPO_DIR}" && npm ci)
+# node_modules is deliberately NOT installed here. The image targets
+# linux/amd64; a host-side install on the macOS arm64 Mac mini would bake
+# darwin binaries (esbuild, @libsql, sqlite-vec) into the image and tsx
+# would fail at runtime. The Dockerfile runs npm install inside the image
+# instead, so platform-specific optional deps resolve for the container.
 
 echo "[build] build-context ready: ${REPO_DIR}"
 echo "[build] next (GATED ON SEAN'S APPROVAL): CLOUDFLARE_API_TOKEN in env, then 'npx wrangler deploy' from ${SCRIPT_DIR}"
