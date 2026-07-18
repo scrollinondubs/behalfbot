@@ -40,42 +40,16 @@ fi
 
 # Discover enabled plugins via chassis.config.yaml. We avoid yq here for the
 # same chassis-portability reasons as elsewhere — Python is everywhere.
-enabled_plugins=$(python3 - "$CONFIG" <<'PY'
-import sys
-import re
+# Parser extracted to lib/enabled-plugins.py so activate-plugins.sh shares it
+# (behalfbot#53 design section 4 - no drift between the two callers).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+enabled_plugins=$(python3 "$SCRIPT_DIR/lib/enabled-plugins.py" "$CONFIG")
 
-# Tiny YAML parser sufficient for chassis.config.yaml's modules block. Avoids
-# shipping PyYAML as a hard dep. Handles the modules: <plugin>: enabled: <bool>
-# pattern only.
-path = sys.argv[1]
-in_modules = False
-plugin = None
-plugins = []
-for raw in open(path):
-    line = raw.rstrip("\n")
-    if not line.strip() or line.lstrip().startswith("#"):
-        continue
-    indent = len(line) - len(line.lstrip())
-    stripped = line.strip()
-    if indent == 0:
-        in_modules = stripped == "modules:"
-        plugin = None
-        continue
-    if not in_modules:
-        continue
-    if indent == 2 and stripped.endswith(":"):
-        plugin = stripped[:-1]
-        continue
-    if indent == 4 and plugin is not None:
-        m = re.match(r"enabled:\s*(true|false)\b", stripped)
-        if m and m.group(1) == "true":
-            plugins.append(plugin)
-            plugin = None  # one shot per plugin
-        elif m and m.group(1) == "false":
-            plugin = None
-print("\n".join(sorted(plugins)))
-PY
-)
+# Layered plugin roots, highest precedence first (behalfbot#53 Phase 0):
+# customer-private plugins-local/, legacy customer plugins/, fetched
+# vendored-plugins/, image-baked /app/plugins fallback. First hit wins.
+: "${CHASSIS_PLUGINS_SEARCH_PATH:=$CHASSIS_HOME/plugins-local:$CHASSIS_HOME/plugins:$CHASSIS_HOME/vendored-plugins:${CHASSIS_PLUGINS_ROOT:-/app/plugins}}"
+export CHASSIS_PLUGINS_SEARCH_PATH
 
 # Build merged triggers section
 merged=$(python3 - <<PY
@@ -87,10 +61,21 @@ from pathlib import Path
 chassis_home = Path(os.environ["CHASSIS_HOME"])
 plugin_names = """$enabled_plugins""".strip().splitlines()
 
+# Layered lookup: first root containing the plugin's manifest wins. Replaces
+# the old hardcoded chassis_home/"plugins" path (behalfbot#53 review finding 1).
+search_roots = [Path(p) for p in os.environ.get("CHASSIS_PLUGINS_SEARCH_PATH", "").split(":") if p]
+if not search_roots:
+    search_roots = [chassis_home / "plugins"]
+
 entries = []
 for name in plugin_names:
-    manifest = chassis_home / "plugins" / name / "openclaw.plugin.json"
-    if not manifest.exists():
+    manifest = None
+    for root in search_roots:
+        cand = root / name / "openclaw.plugin.json"
+        if cand.exists():
+            manifest = cand
+            break
+    if manifest is None:
         continue
     try:
         data = json.loads(manifest.read_text())

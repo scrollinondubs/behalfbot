@@ -73,7 +73,13 @@ if [[ -z "${CHASSIS_ROOT:-}" ]]; then
 fi
 
 if [[ -z "${CHASSIS_PLUGINS_ROOT:-}" ]]; then
-    if [[ -d "/app/plugins" ]]; then
+    # Runtime-pull layering (behalfbot#53): a fetched vendored-plugins tree
+    # validated by plugins.lock wins over the image-baked fallback. The
+    # customer-local $CHASSIS_HOME/plugins dir is NOT the fetch destination -
+    # it holds customer-local plugins and stays the last-resort host default.
+    if [[ -n "${CHASSIS_HOME:-}" && -f "$CHASSIS_HOME/plugins.lock" && -d "$CHASSIS_HOME/vendored-plugins" ]]; then
+        export CHASSIS_PLUGINS_ROOT="$CHASSIS_HOME/vendored-plugins"
+    elif [[ -d "/app/plugins" ]]; then
         export CHASSIS_PLUGINS_ROOT="/app/plugins"
     elif [[ -n "${CHASSIS_HOME:-}" && -d "$CHASSIS_HOME/plugins" ]]; then
         export CHASSIS_PLUGINS_ROOT="$CHASSIS_HOME/plugins"

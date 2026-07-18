@@ -1,0 +1,15 @@
+# behalfbot-plugins runtime-pull pin (behalfbot#53 Phase 0)
+#
+# Format: single non-comment line "<tag> <40-hex-commit-sha>"
+#   example: v0.1.0 0123456789abcdef0123456789abcdef01234567
+#
+# The SHA is the gate, not the tag. fetch-plugins.sh resolves the tag remotely
+# and REFUSES to fetch when the resolved SHA differs from the SHA below - a
+# force-moved tag never auto-refetches (fleet-RCE fix, #53 review finding 3).
+#
+# This pin moves ONLY at a chassis VERSION bump (Sean-gated), in the same PR
+# that touches the sibling chassis/VERSION file.
+#
+# UNPINNED: scrollinondubs/behalfbot-plugins does not exist yet. While no pin
+# line is present below, fetch-plugins.sh is a no-op and the image-baked
+# /app/plugins tree remains the active plugin source.
