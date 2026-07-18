@@ -526,23 +526,48 @@ preflight_bot_identity() {
 activate_plugins() {
     step "9/14" "Activate enabled plugins"
 
-    log "TODO: for each plugin in plugins/ directory:"
-    log "  - Read its openclaw.plugin.json"
-    log "  - Check chassis.config.yaml.modules.<plugin>.enabled"
-    log "  - If enabled: source plugin's activation hook + export its env vars"
-    log "  - Write chassis-env.sh that the launchd/systemd unit sources"
-    log ""
-    log "Per-plugin chassis-env.sh exports (V1-known):"
-    log "  whatsapp: CHASSIS_WHATSAPP_SAFE=\$CHASSIS_PLUGINS_ROOT/whatsapp/scripts/wacli-safe.sh"
-    log "  bfl:      BFL_ARCHIVE_DIR=<from config>"
-    log "  dating:   SOCIAL_CHANNEL_ID=<from config>"
-    log "  etc."
-    log ""
-    log "Plugin trigger merge (per chassis/scripts/merge-plugin-triggers.sh):"
-    log "  - Reads contracts.triggers from each enabled plugin's openclaw.plugin.json"
-    log "  - Writes merged registry to \$CUSTOMER_HOME/triggers.yaml"
-    log "  - Read by chassis/scripts/dispatch-trigger.sh on every inbound message"
-    log "  - Re-run any time a plugin is enabled/disabled or its manifest changes"
+    # Real implementation lives in chassis/scripts/activate-plugins.sh
+    # (behalfbot#53 Phase 0 - replaces the former log-only stub). The meat is
+    # kept in a chassis script, not inline here, because bootstrap.sh is
+    # image-baked while chassis scripts ride the clone overlay: fixes to
+    # activation logic ship via clone refresh without an image release.
+    #
+    # It discovers plugins across the layered roots (plugins-local >
+    # customer plugins > vendored-plugins fetched from behalfbot-plugins >
+    # image-baked /app/plugins fallback), gates on chassis.config.yaml
+    # modules.<name>.enabled, runs each plugin's setup.sh, writes
+    # $CUSTOMER_HOME/chassis-env.sh from contracts.env, merges
+    # contracts.mcpServers into .mcp.json (managed markers), and re-merges
+    # plugin triggers via merge-plugin-triggers.sh.
+    local activator=""
+    local candidate
+    for candidate in \
+        "$CHASSIS_HOME/chassis/chassis/scripts/activate-plugins.sh" \
+        "$CHASSIS_HOME/chassis/scripts/activate-plugins.sh" \
+        "${CHASSIS_ROOT:-/app/chassis}/scripts/activate-plugins.sh"; do
+        if [[ -f "$candidate" ]]; then
+            activator="$candidate"
+            break
+        fi
+    done
+
+    if [[ -z "$activator" ]]; then
+        # Mixed-state migration window (new image, stale clone): behave like
+        # the old stub - log and continue, baked plugins still drive.
+        log "  WARN: activate-plugins.sh not found in clone or image - skipping"
+        log "  plugin activation (refresh the chassis clone to enable it)"
+        return 0
+    fi
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  [dry-run] would run: $activator"
+        return 0
+    fi
+
+    if ! CHASSIS_HOME="$CHASSIS_HOME" CUSTOMER_HOME="${CUSTOMER_HOME:-$CHASSIS_HOME}" \
+        bash "$activator" 2>&1 | tee -a "$TRANSCRIPT"; then
+        log "  WARN: plugin activation reported errors (non-fatal, see above)"
+    fi
 }
 
 # ============================================================
