@@ -27,6 +27,14 @@ services:
         INSTALLER_UID: ${INSTALLER_UID:-1000}
         INSTALLER_GID: ${INSTALLER_GID:-1000}
     container_name: behalfbot
+    # Discovery label for chassis-update.sh's post-update healthcheck. The
+    # updater has filtered on `label=com.behalfbot.chassis` since v0.1.0, but
+    # nothing ever set it - not the Dockerfile (no LABEL instruction), not this
+    # file, not docker-publish.yml (which stamps only org.opencontainers.image.*).
+    # The filter matched zero containers on every install, which is half of why
+    # the healthcheck silently degraded into a check that always passed.
+    labels:
+      com.behalfbot.chassis: "true"
     user: "${INSTALLER_UID:-1000}:${INSTALLER_GID:-1000}"
     # group_add lets the container's chassis user reach /var/run/docker.sock
     # without changing primary GID. The host docker socket is typically
