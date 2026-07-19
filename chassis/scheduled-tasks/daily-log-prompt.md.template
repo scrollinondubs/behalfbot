@@ -8,15 +8,30 @@ Chassis-supplied template. Customer install copies this file to
   "Sean Tierney's autonomous assistant", "Ben Lakoff's autonomous assistant")
 - `{{ CUSTOMER_ORG_HANDLES }}` - space-separated org handles the customer
   operates under (e.g. "vibecodelisboa fenerum" or just "kogent")
-- `{{ CUSTOMER_DAILY_LOG_PARENT_ID }}` - SiYuan block ID of the parent doc
-  under which daily logs are written (canonical ID, NOT a name-based path)
-- `{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}` - SiYuan notebook (box) ID hosting
-  the parent
+- `{{ CUSTOMER_DAILY_LOG_PARENT }}` - the parent daily logs are written
+  under, in whatever form the install's backend addresses a parent:
+    - SiYuan: the parent doc's canonical block ID (`20260507083000-abcd123`).
+      NOT a name-based hpath - see the double-parent incident below.
+    - Notion: the parent page id (32-char uuid).
+    - Obsidian: a vault-relative directory (`Daily Logs/`).
+  This replaces the old `{{ CUSTOMER_DAILY_LOG_PARENT_ID }}` +
+  `{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}` pair (2026-07-19). Two vars existed
+  because SiYuan needs a notebook AND a parent; the adapter's `create_doc`
+  takes one `parent`, and the SiYuan adapter resolves the notebook from
+  `second_brain.databases.notes_root` in chassis.config.yaml. Existing installs
+  keep working - bootstrap copies this template once and never rewrites it -
+  but should collapse the two on their next edit.
 
 The heartbeat dispatcher fires this nightly at 02:00 after
 `chassis/scripts/daily-log-gather.py` has already collected a full-day JSON
 payload from every operational surface Jax touched. This prompt consumes
-that payload, synthesizes it into a structured log, and writes to SiYuan.
+that payload, synthesizes it into a structured log, and writes it to the
+install's second brain.
+
+Backend-neutral by construction: every tool call below is `mcp__secondbrain__*`,
+the chassis-owned server that resolves SiYuan / Notion / Obsidian at startup.
+Do NOT reach for `mcp__siyuan__*` here even on a SiYuan install - in adapter
+mode it is not registered, and naming it is what made this prompt SiYuan-only.
 
 ---
 
@@ -24,7 +39,7 @@ You are Jax, {{ CUSTOMER_JAX_IDENTITY }}. Read CLAUDE.md for your full
 operating manual.
 
 Your task: read the gather payload for the day that just ended and write a
-structured daily log entry to SiYuan.
+structured daily log entry to the second brain.
 
 ## Step 1: Read the gather payload
 
@@ -49,9 +64,12 @@ as the "context" for this prompt. It has this shape:
     { "to": "...", "subject": "...", "excerpt": "...", "date": "..." }
   ],
   "gmail_scan_deferred": true|false,
-  "siyuan_activity": [
-    { "id": "...", "hpath": "/...", "len": N, "updated_at": "...", "excerpt": "..." }
+  "second_brain_backend": "siyuan|notion|obsidian",
+  "second_brain_activity": [
+    { "id": "...", "hpath": "/...", "title": "...", "len": N,
+      "updated_at": "...", "excerpt": "...", "deeplink": "..." }
   ],
+  "siyuan_activity": [ "deprecated alias holding the same list as second_brain_activity" ],
   "postmortems": [
     { "source": "discord msg <id>", "timestamp": "...", "excerpt": "..." }
   ],
@@ -86,55 +104,66 @@ From the payload, produce the log. **Groupings and priorities:**
 - Extract 3-5 items from `postmortems`. Format each as
   `{what happened} -> {what we learned}`. If there are zero items, keep
   the header and leave the body empty.
-- For `siyuan_activity`, note the meaningful writing (not empty auto-created
-  docs, not template stubs). The gather has already filtered by content
-  length > 200 chars, but you should apply editorial judgment: an entity-
-  formation plan is meaningful; a dating profile stub is not.
+- For `second_brain_activity`, note the meaningful writing (not empty
+  auto-created docs, not template stubs). The gather has already filtered by
+  content length > 200 chars, but you should apply editorial judgment: an
+  entity-formation plan is meaningful; a dating profile stub is not.
+- Weight that judgment by `second_brain_backend`. SiYuan rows come from block
+  `updated` timestamps and mean a doc actually changed. Obsidian rows come
+  from filesystem mtime, which a git pull or an iCloud resync also moves - on
+  an Obsidian install treat the list as candidates, and drop anything whose
+  excerpt shows no sign of real editing rather than reporting a sync as work.
 
-## Step 3: Write the daily log to SiYuan
+## Step 3: Write the daily log to the second brain
 
-Write under the canonical Daily Logs parent - NOT by name match, by exact
-ID. Using a name-based hpath caused a double-parent bug on Sean's install
+Write under the canonical Daily Logs parent - by exact ID, NOT by name
+match. Using a name-based path caused a double-parent bug on Sean's install
 2026-04-17/18 where logs landed in the wrong notebook or got a malformed
-sibling created with the parent's ID as its name.
+sibling created with the parent's ID as its name. The rule survives the
+backend change: pass the configured parent through verbatim, never a name
+you assembled yourself.
 
 **Canonical Daily Logs parent (customer-install-specific):**
-
-- Notebook (box): `{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}`
-- Parent node ID: `{{ CUSTOMER_DAILY_LOG_PARENT_ID }}`
+`{{ CUSTOMER_DAILY_LOG_PARENT }}`
 
 **Create the doc:**
 
 ```
-mcp__siyuan__create_doc(
-  notebook: "{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}",
-  path: "/Daily Logs/YYYY-MM-DD",
-  markdown: "...",
+mcp__secondbrain__create_doc(
+  parent: "{{ CUSTOMER_DAILY_LOG_PARENT }}",
+  title: "YYYY-MM-DD",
+  body: "...",
 )
 ```
 
-**Mandatory post-create verification** (chassis hardening pattern - after
-`create_doc`, verify with SQL against the SiYuan blocks table):
+It returns `{id, deeplink}`. Treat `id` as opaque - it is a SiYuan block ID,
+a Notion page id, or an Obsidian vault-relative path depending on the
+install, and nothing in this prompt should parse it.
 
-```sql
-SELECT id, hpath, box
-FROM blocks
-WHERE hpath = '/Daily Logs/YYYY-MM-DD'
-  AND box   = '{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}'
-  AND type  = 'd'
-LIMIT 3
+**Mandatory post-create verification** (chassis hardening pattern). The old
+version of this step ran a SQL SELECT against the SiYuan blocks table, which
+is why it only worked on one backend. Read the doc back instead - it proves
+the same thing (the write landed and is retrievable) on all three:
+
+```
+mcp__secondbrain__read_doc(doc_id: "<id returned by create_doc>")
 ```
 
-- Zero rows -> the tool call silently failed. Re-attempt once. If still
-  zero, print
-  `ERROR: daily-log doc not created at /Daily Logs/YYYY-MM-DD` to stdout
-  and exit non-zero so the dispatcher raises a Discord alert. Do NOT
-  fabricate a success confirmation.
-- More than one row -> you created a duplicate (or one already existed).
-  Print `WARNING: duplicate detected: [ids]` and stop; do not write again.
-- Exactly one row with matching `box` = `{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}`
-  -> success. Capture the returned block ID and use it in the Step 4 stdout
-  report.
+- `create_doc` returned no `id`, or `read_doc` errors, or the body comes
+  back empty -> the write silently failed. Re-attempt once. If it fails
+  again, print
+  `ERROR: daily-log doc not created under {{ CUSTOMER_DAILY_LOG_PARENT }}`
+  to stdout and exit non-zero so the dispatcher raises a Discord alert. Do
+  NOT fabricate a success confirmation.
+- Before creating, run
+  `mcp__secondbrain__search(query: "Daily Log - YYYY-MM-DD", limit: 5)`.
+  If today's log already exists, print
+  `WARNING: duplicate detected: [ids]` and stop; do not write again. This
+  replaces the old "more than one row" SQL check - search is the portable
+  way to ask the same question, and it has to run BEFORE the write rather
+  than after it.
+- `read_doc` returns the body you wrote -> success. Capture the id and
+  deeplink and use them in the Step 4 stdout report.
 
 Dispatcher escalates `ERROR:` / `WARNING:` lines via the alerts channel.
 
@@ -150,7 +179,8 @@ empty)` keep their `##` header but leave the body blank.
 
 - [Grouped by feature-shipped. Each item: 1-sentence narrative + PR/issue
   link(s). Include operational bullets: emails sent (from operational_email),
-  SiYuan writing (from siyuan_activity), and any custom-metric-worthy work.]
+  second-brain writing (from second_brain_activity), and any
+  custom-metric-worthy work.]
 
 ## Learnings & Tribal Knowledge
 (skip body if empty)
@@ -198,7 +228,8 @@ in 60 seconds.
 
 Log to stdout (the dispatcher captures this):
 
-- Confirm the SiYuan doc path created + block ID
+- Confirm the doc created: the parent it was written under, plus the id and
+  deeplink `create_doc` returned
 - List section headings that had non-empty bodies
 - One-line summary of the day (for morning briefing context)
 

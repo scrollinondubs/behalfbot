@@ -40,14 +40,49 @@ import sys
 
 
 def load_yaml(path):
+    """Parse chassis.config.yaml. PyYAML when available, fallback parser otherwise.
+
+    This used to `sys.exit(1)` when PyYAML was missing, which is what forced
+    bootstrap-mcp-config.sh to keep a second, worse renderer around for the
+    no-PyYAML case: a sed+jq pass that stripped `_enable_when` without
+    evaluating it and therefore registered every gated server at once - siyuan
+    AND notion AND secondbrain on the same install. Two renderers with two
+    different answers is a worse failure than a degraded parser, so the
+    dependency is now soft and there is exactly one renderer.
+
+    The fallback is `chassis.second_brain.factory._parse_yaml_minimal`, already
+    shipped and already tested for exactly this subtree. It does not support
+    lists; `_enable_when` predicates only ever address scalar leaves
+    (`modules.google.gmail == true`, `second_brain.backend == 'siyuan'`), so a
+    list-valued key resolves to None and its clause evaluates False - the same
+    conservative direction the predicate evaluator already takes for a missing
+    key.
+    """
     try:
         import yaml
     except ImportError:
-        print(f'ERROR: PyYAML not installed. apt-get install python3-yaml '
-              f'OR pip install pyyaml', file=sys.stderr)
+        pass
+    else:
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+
+    package_parent = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    if package_parent not in sys.path:
+        sys.path.insert(0, package_parent)
+    try:
+        from chassis.second_brain.factory import _parse_yaml_minimal
+    except ImportError:
+        print('ERROR: PyYAML not installed and chassis.second_brain is not '
+              'importable, so chassis.config.yaml cannot be parsed. '
+              'apt-get install python3-yaml OR pip install pyyaml',
+              file=sys.stderr)
         sys.exit(1)
+    print('WARN: PyYAML not installed - parsing chassis.config.yaml with the '
+          'minimal fallback parser (scalars and nested mappings only).',
+          file=sys.stderr)
     with open(path) as f:
-        return yaml.safe_load(f) or {}
+        return _parse_yaml_minimal(f.read()) or {}
 
 
 def load_json(path):
@@ -328,12 +363,29 @@ def main():
                    help='print hydrated JSON to stdout, do not write')
     args = p.parse_args()
 
-    for path, label in [(args.config, 'config'), (args.template, 'template')]:
-        if not os.path.exists(path):
-            print(f'ERROR: {label} not found: {path}', file=sys.stderr)
-            sys.exit(1)
+    if not os.path.exists(args.template):
+        print(f'ERROR: template not found: {args.template}', file=sys.stderr)
+        sys.exit(1)
 
-    config = load_yaml(args.config)
+    # A missing chassis.config.yaml is the disaster-recovery case
+    # bootstrap-mcp-config.sh's fallback renderer was written for: reconstruct
+    # a usable .mcp.json on an install whose config is gone. Treat it as an
+    # empty config rather than an error, so that path can delegate here too.
+    #
+    # Empty config is the SAFE direction, and only because of how the predicate
+    # evaluator already treats a missing key: `== ` clauses go False (a gated
+    # server is dropped, so no siyuan, no notion, no secondbrain, no Google)
+    # while `!=` clauses go True. The result is core servers only, which is
+    # exactly what a recovery should produce - a minimal working config the
+    # operator widens on purpose, not every server at once.
+    if not os.path.exists(args.config):
+        print(f'WARN: config not found: {args.config} - rendering with an empty '
+              f'config. Feature-gated servers will be OMITTED. Restore '
+              f'chassis.config.yaml and re-run to get the full set.',
+              file=sys.stderr)
+        config = {}
+    else:
+        config = load_yaml(args.config)
     template = load_json(args.template)
     env = load_env(args.env)
 

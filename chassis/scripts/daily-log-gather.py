@@ -21,7 +21,28 @@ Design goals:
      against bot-authored messages in the last 24h).
   3. Reflection section is prompt-side; this script only supplies raw
      material.
-  4. Operational surfaces scanned: GitHub, Gmail, SiYuan, Discord.
+  4. Operational surfaces scanned: GitHub, Gmail, second brain, Discord.
+
+Second-brain surface (Stage 2, 2026-07-19)
+==========================================
+This script used to talk to SiYuan and only SiYuan, over hardcoded HTTP. That
+made the daily log a no-op on Obsidian and Notion installs: the SiYuan env vars
+are unset there, so the scan was skipped and the prompt narrated a day with no
+writing in it. The second-brain adapter (chassis/second_brain/) already knew how
+to read all three backends, but nothing outside its own package called it.
+
+The backend now decides which path runs:
+
+  - siyuan (and every install where the backend cannot be determined): the
+    original direct-HTTP `gather_siyuan` below, byte-for-byte unchanged. This
+    is deliberate. SiYuan is the backend every existing install runs, and the
+    adapter's `list_recent` is close to but not identical to this query (see
+    the divergence table in docs/second-brain-adapters.md). Routing SiYuan
+    through the adapter would have been a silent behavior change on every live
+    install to buy nothing.
+  - obsidian / notion: `gather_via_adapter`, which calls
+    `get_adapter().notes.list_recent()` and maps the hits into the same item
+    shape the SiYuan path emits.
 
 Env var contract (chassis is generic; customer install sets these):
   CHASSIS_HOME                     - customer install root (required)
@@ -33,6 +54,9 @@ Env var contract (chassis is generic; customer install sets these):
   DAILY_LOG_EXTRA_METRICS_SCRIPT   - path to a customer-side script that emits
                                      JSON under a `custom` metrics key
   DISCORD_TOKEN / DISCORD_BOT_TOKEN - Discord bot token (probes both)
+
+The obsidian / notion paths read their credentials from chassis.config.yaml via
+the adapter factory, so they need no DAILY_LOG_* vars of their own.
 
 Unset env vars degrade gracefully: the corresponding surface is skipped, a
 warning is emitted into the `warnings` array, and the rest of the gather
@@ -380,6 +404,116 @@ def gather_siyuan(url: str, token: str | None, since: datetime, until: datetime,
     return activity, warnings
 
 
+# --- Second-brain backend resolution + adapter surface --------------------
+
+
+def resolve_second_brain_backend(*, verbose: bool = False) -> str:
+    """Return the configured `second_brain.backend`, or 'siyuan' when unknown.
+
+    'siyuan' is the fallback on EVERY failure - no chassis.config.yaml, no
+    PyYAML, an import error, a malformed config. That is not laziness, it is
+    the compatibility guarantee: every install that predates the second-brain
+    adapter runs SiYuan, so an unresolvable config must keep running the exact
+    path it ran yesterday rather than degrade to an empty scan.
+    """
+    package_parent = Path(__file__).resolve().parents[2]
+    if str(package_parent) not in sys.path:
+        sys.path.insert(0, str(package_parent))
+    try:
+        from chassis.second_brain.factory import _load_config
+    except ImportError as e:
+        log(f"second_brain package not importable ({e}) - assuming siyuan", verbose=verbose)
+        return "siyuan"
+    try:
+        config = _load_config()
+    except Exception as e:  # noqa: BLE001 - any config failure means "assume siyuan"
+        log(f"chassis.config.yaml unreadable ({type(e).__name__}: {e}) - assuming siyuan",
+            verbose=verbose)
+        return "siyuan"
+    backend = ((config.get("second_brain") or {}).get("backend") or "siyuan")
+    return str(backend).strip().lower() or "siyuan"
+
+
+def hit_to_activity(hit: Any, backend: str) -> dict:
+    """Map a SearchHit onto the activity item shape the SiYuan path emits.
+
+    The SiYuan path's keys (`id`, `hpath`, `len`, `updated_at`, `excerpt`) are
+    the published contract - the daily-log prompt reads them by name. Rather
+    than emit a second shape for the other two backends and make the prompt
+    branch, each backend fills the same five keys with the closest honest
+    equivalent it has, and `deeplink` is added because the adapter gives it to
+    us for free on all three.
+
+    The per-backend `raw` payloads are documented in each adapter's
+    `list_recent` docstring; the .get() chains below are ordered
+    siyuan-then-obsidian-then-notion and fall through to a safe default,
+    because a hit whose raw shape we do not recognize should still produce a
+    usable row rather than a KeyError that kills the whole gather.
+    """
+    raw = hit.raw or {}
+    return {
+        "id": hit.id,
+        # SiYuan hpath; Obsidian vault-relative path (which IS the id); Notion
+        # has no path concept at all, so the page title stands in for one.
+        "hpath": raw.get("hpath") or (hit.id if backend == "obsidian" else hit.title),
+        "title": hit.title,
+        # body_len (siyuan chars) / size_bytes (obsidian bytes). Notion's search
+        # API returns no size, so fall back to the snippet we do have.
+        "len": raw.get("body_len") or raw.get("size_bytes") or len(hit.snippet or ""),
+        "updated_at": str(
+            raw.get("updated") or raw.get("last_edited_time") or raw.get("mtime") or ""
+        ),
+        "excerpt": (hit.snippet or "")[:300].strip(),
+        "deeplink": hit.deeplink,
+        "backend": backend,
+    }
+
+
+def gather_via_adapter(backend: str, since: datetime, until: datetime,
+                       *, verbose: bool) -> tuple[list[dict], list[str]]:
+    """Second-brain activity for non-SiYuan backends, via get_adapter().
+
+    Naive local datetimes are handed to the adapter, not the UTC-aware ones the
+    rest of this script uses. Obsidian compares against `st_mtime` and SiYuan
+    against a kernel-local clock string, so an aware UTC datetime would shift
+    the window by the host's offset - one hour of missed or double-counted
+    activity in Lisbon, more elsewhere. `list_recent` documents naive input as
+    "local time"; give it exactly that.
+    """
+    warnings: list[str] = []
+    package_parent = Path(__file__).resolve().parents[2]
+    if str(package_parent) not in sys.path:
+        sys.path.insert(0, str(package_parent))
+    try:
+        from chassis.second_brain.factory import get_adapter
+    except ImportError as e:
+        warnings.append(f"second_brain adapter not importable ({e}) - skipped {backend} scan")
+        return [], warnings
+    try:
+        adapter = get_adapter()
+    except Exception as e:  # noqa: BLE001 - factory raises ValueError on bad creds
+        warnings.append(
+            f"{backend} adapter could not be built ({type(e).__name__}: {e}) - "
+            f"skipped second-brain scan"
+        )
+        return [], warnings
+    try:
+        hits = adapter.notes.list_recent(
+            since=since.astimezone().replace(tzinfo=None),
+            until=until.astimezone().replace(tzinfo=None),
+            min_content_len=DEFAULT_SIYUAN_MIN_CONTENT_LEN,
+            limit=DEFAULT_SIYUAN_LIMIT,
+        )
+    except Exception as e:  # noqa: BLE001 - one dead surface must not fail the gather
+        warnings.append(
+            f"{backend} list_recent failed ({type(e).__name__}: {e}) - "
+            f"skipped second-brain scan"
+        )
+        return [], warnings
+    log(f"{backend} adapter returned {len(hits)} hit(s)", verbose=verbose)
+    return [hit_to_activity(hit, backend) for hit in hits], warnings
+
+
 # --- Discord postmortem mining --------------------------------------------
 
 
@@ -571,18 +705,28 @@ def build_output(now: datetime | None = None, *, verbose: bool = False) -> dict:
     else:
         warnings.append("DAILY_LOG_GMAIL_IDENTITY unset - skipped Gmail scan")
 
-    # SiYuan.
-    siyuan_url = (os.environ.get("DAILY_LOG_SIYUAN_URL")
-                  or os.environ.get("SIYUAN_URL") or "").strip()
-    siyuan_token = (os.environ.get("DAILY_LOG_SIYUAN_TOKEN")
-                    or os.environ.get("SIYUAN_TOKEN") or "").strip() or None
-    if siyuan_url:
-        siyuan_activity, siyuan_warn = gather_siyuan(
-            siyuan_url, siyuan_token, since, until, verbose=verbose
-        )
-        warnings.extend(siyuan_warn)
+    # Second brain. SiYuan keeps the direct-HTTP path it has always used; the
+    # other backends go through the adapter. See the module docstring for why
+    # SiYuan is deliberately NOT routed through get_adapter().
+    backend = resolve_second_brain_backend(verbose=verbose)
+    log(f"second-brain backend resolved: {backend}", verbose=verbose)
+    if backend == "siyuan":
+        siyuan_url = (os.environ.get("DAILY_LOG_SIYUAN_URL")
+                      or os.environ.get("SIYUAN_URL") or "").strip()
+        siyuan_token = (os.environ.get("DAILY_LOG_SIYUAN_TOKEN")
+                        or os.environ.get("SIYUAN_TOKEN") or "").strip() or None
+        if siyuan_url:
+            siyuan_activity, siyuan_warn = gather_siyuan(
+                siyuan_url, siyuan_token, since, until, verbose=verbose
+            )
+            warnings.extend(siyuan_warn)
+        else:
+            warnings.append("DAILY_LOG_SIYUAN_URL / SIYUAN_URL unset - skipped SiYuan scan")
     else:
-        warnings.append("DAILY_LOG_SIYUAN_URL / SIYUAN_URL unset - skipped SiYuan scan")
+        siyuan_activity, adapter_warn = gather_via_adapter(
+            backend, since, until, verbose=verbose
+        )
+        warnings.extend(adapter_warn)
 
     # Discord postmortems.
     channel_id = os.environ.get("DAILY_LOG_DISCORD_CHANNEL_ID", "").strip()
@@ -615,6 +759,14 @@ def build_output(now: datetime | None = None, *, verbose: bool = False) -> dict:
         "open_issues_awaiting_input": open_issues,
         "operational_email": operational_email,
         "gmail_scan_deferred": email_deferred,
+        # `second_brain_activity` is the name to read. `siyuan_activity` is the
+        # same list under its old name, kept because customer installs have a
+        # hand-filled daily-log-prompt.md on disk that reads it - bootstrap
+        # copies the template once and never rewrites it, so dropping the key
+        # would blank the "SiYuan writing" bullet on every existing install the
+        # day this ships. Remove it after installs have been migrated.
+        "second_brain_backend": backend,
+        "second_brain_activity": siyuan_activity,
         "siyuan_activity": siyuan_activity,
         "postmortems": postmortems,
         "metrics": metrics,
@@ -651,6 +803,8 @@ def main() -> int:
             "open_issues_awaiting_input": [],
             "operational_email": [],
             "gmail_scan_deferred": False,
+            "second_brain_backend": "unknown",
+            "second_brain_activity": [],
             "siyuan_activity": [],
             "postmortems": [],
             "metrics": {},
