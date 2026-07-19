@@ -30,6 +30,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT))
@@ -375,6 +376,102 @@ class EnableWhenEvaluatorTest(unittest.TestCase):
         self.assertFalse(self._eval("garbage"))
         self.assertFalse(self._eval(""))
         self.assertFalse(self._eval("a == 'x' && "))
+
+
+class UnresolvedCredentialEnvTest(unittest.TestCase):
+    """An unresolved <PLACEHOLDER> must never ship as a credential value.
+
+    The concrete failure: an installer who set NOTION_API_TOKEN was fine, but
+    one who set the other documented name got `"NOTION_API_TOKEN":
+    "<NOTION_INTEGRATION_TOKEN>"` written into .mcp.json. hydrate-mcp-json.py
+    warned and exited 2, and both callers treat exit 2 as loud-but-not-fatal, so
+    the MCP server started with the literal marker in its environment and sent
+    `Authorization: Bearer <NOTION_INTEGRATION_TOKEN>` on every request.
+
+    Credential-named keys are now dropped, so the var is unset instead. Keys
+    holding paths and hosts keep the pass-through behavior - a leftover marker
+    there is visibly wrong at startup and leaks nothing.
+    """
+
+    def setUp(self) -> None:
+        # substitute_placeholders falls back to os.environ when a key is absent
+        # from --env. On a developer machine that is a LIVE chassis shell, so an
+        # un-isolated test silently reads real SIYUAN_TOKEN / NOTION_API_TOKEN
+        # values and prints them on failure. Every scenario here runs against a
+        # cleared environment so "unresolved" means unresolved.
+        patcher = mock.patch.dict("os.environ", {}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _render_with_env(self, config: dict, env: dict) -> tuple[dict, dict]:
+        template = hydrator.load_json(str(TEMPLATE_PATH))
+        dropped: dict = {}
+        hydrated, _unresolved = hydrator.hydrate(config, template, env, dropped)
+        return hydrated["mcpServers"], dropped
+
+    def test_notion_token_is_dropped_when_unresolved(self) -> None:
+        servers, dropped = self._render_with_env(
+            {"second_brain": {"backend": "notion"}}, env={}
+        )
+        self.assertIn("notion", servers)
+        self.assertNotIn("NOTION_API_TOKEN", servers["notion"].get("env", {}))
+        self.assertEqual(dropped.get("notion"), ["NOTION_API_TOKEN"])
+
+    def test_notion_token_survives_when_resolved(self) -> None:
+        servers, dropped = self._render_with_env(
+            {"second_brain": {"backend": "notion"}},
+            env={"NOTION_API_TOKEN": "secret-not-a-real-token"},
+        )
+        self.assertEqual(
+            servers["notion"]["env"]["NOTION_API_TOKEN"], "secret-not-a-real-token"
+        )
+        self.assertNotIn("notion", dropped)
+
+    def test_no_placeholder_text_reaches_any_credential_env_value(self) -> None:
+        # The property that matters, asserted across the whole rendered file
+        # rather than one server: nothing named like a secret may hold a marker.
+        template = hydrator.load_json(str(TEMPLATE_PATH))
+        config = {
+            "second_brain": {"backend": "notion"},
+            "modules": {"google": {"gmail": True, "calendar": True, "sheets": True}},
+        }
+        hydrated, _unresolved = hydrator.hydrate(config, template, env={})
+        offenders = [
+            (name, key, value)
+            for name, entry in hydrated["mcpServers"].items()
+            for key, value in (entry.get("env") or {}).items()
+            if isinstance(value, str)
+            and hydrator._CREDENTIAL_NAME_PAT.search(key)
+            and value.strip().startswith("<")
+        ]
+        self.assertEqual(offenders, [], f"placeholder shipped as a credential: {offenders}")
+
+    def test_non_credential_placeholders_still_pass_through(self) -> None:
+        # GOOGLE_OAUTH_CREDENTIALS is a file path. Dropping it would change
+        # behavior the existing render tests depend on, and it leaks nothing.
+        servers, dropped = self._render_with_env(
+            {"modules": {"google": {"calendar": True}}}, env={}
+        )
+        self.assertTrue(
+            servers["google-calendar"]["env"]["GOOGLE_OAUTH_CREDENTIALS"].startswith("<")
+        )
+        self.assertNotIn("google-calendar", dropped)
+
+    def test_adapter_mode_secondbrain_drops_only_the_token(self) -> None:
+        # The secondbrain server carries SIYUAN_URL and SIYUAN_DEEPLINK_BASE
+        # alongside the tokens. An unset deeplink base must not take the server
+        # down with it - only the credential keys go.
+        servers, dropped = self._render_with_env(
+            {"second_brain": {"backend": "notion", "mode": "adapter"}}, env={}
+        )
+        env = servers["secondbrain"]["env"]
+        self.assertNotIn("NOTION_API_TOKEN", env)
+        self.assertNotIn("SIYUAN_TOKEN", env)
+        self.assertIn("SIYUAN_URL", env)
+        self.assertIn("SIYUAN_DEEPLINK_BASE", env)
+        self.assertEqual(
+            sorted(dropped["secondbrain"]), ["NOTION_API_TOKEN", "SIYUAN_TOKEN"]
+        )
 
 
 if __name__ == "__main__":

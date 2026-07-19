@@ -246,13 +246,55 @@ def substitute_placeholders(value, env, unresolved):
     return value
 
 
+# Env var names that carry a secret. An unresolved placeholder in one of these
+# becomes an Authorization header, so it must never survive into the output.
+# Names outside this set (GOOGLE_OAUTH_CREDENTIALS, SIYUAN_URL, *_DIR, ...) are
+# paths and hosts: a leftover placeholder there is visibly wrong at startup and
+# leaks nothing, so it keeps the existing pass-through-and-warn behavior.
+_CREDENTIAL_NAME_PAT = re.compile(r'(TOKEN|SECRET|PASSWORD|_KEY|APIKEY|_PAT)$')
+
+
+def drop_unresolved_env(entry, unresolved):
+    """Remove credential env keys whose value still carries a <PLACEHOLDER>.
+
+    An unresolved placeholder used to survive into the output verbatim, so a
+    server got `"NOTION_API_TOKEN": "<NOTION_API_TOKEN>"` in its environment and
+    sent that literal string as its bearer token. Every call 401'd while the
+    config looked correctly filled in.
+
+    Dropping the key gives the server the same view it would have had if nobody
+    had written a placeholder at all - the var is simply unset - and unset is a
+    failure mode consumers already handle loudly (the second_brain factory
+    raises on an empty token).
+    """
+    env = entry.get('env')
+    if not isinstance(env, dict) or not unresolved:
+        return entry, []
+    tokens = {f'<{key}>' for key in unresolved}
+    dropped = [k for k, v in env.items()
+               if isinstance(v, str)
+               and _CREDENTIAL_NAME_PAT.search(k)
+               and any(t in v for t in tokens)]
+    if not dropped:
+        return entry, []
+    entry = dict(entry)
+    entry['env'] = {k: v for k, v in env.items() if k not in dropped}
+    return entry, dropped
+
+
 def strip_meta_keys(entry):
     """Drop keys starting with `_` from a dict (template-only metadata)."""
     return {k: v for k, v in entry.items() if not k.startswith('_')}
 
 
-def hydrate(config, template, env):
-    """Build the hydrated mcpServers dict and return (output, unresolved)."""
+def hydrate(config, template, env, dropped_env=None):
+    """Build the hydrated mcpServers dict and return (output, unresolved).
+
+    Pass a dict as `dropped_env` to collect server name -> list of env keys
+    removed because their value did not resolve. It is an out-parameter rather
+    than a third return value so the existing two-tuple contract holds for
+    callers that do not care. See drop_unresolved_env.
+    """
     unresolved = set()
     out = {}
     servers = template.get('mcpServers', {})
@@ -268,6 +310,9 @@ def hydrate(config, template, env):
         overridden = apply_overrides(entry, config)
         stripped = strip_meta_keys(overridden)
         substituted = substitute_placeholders(stripped, env, unresolved)
+        substituted, dropped = drop_unresolved_env(substituted, unresolved)
+        if dropped and dropped_env is not None:
+            dropped_env[name] = dropped
         out[name] = substituted
     return {'mcpServers': out}, unresolved
 
@@ -292,7 +337,8 @@ def main():
     template = load_json(args.template)
     env = load_env(args.env)
 
-    hydrated, unresolved = hydrate(config, template, env)
+    dropped_env = {}
+    hydrated, unresolved = hydrate(config, template, env, dropped_env)
     output_text = json.dumps(hydrated, indent=2)
 
     if args.dry_run:
@@ -303,6 +349,18 @@ def main():
             f.write('\n')
         print(f'wrote {args.output} '
               f'({len(hydrated["mcpServers"])} mcpServers)')
+
+    if dropped_env:
+        for server, keys in sorted(dropped_env.items()):
+            print(f'WARN: {server}: dropped env {sorted(keys)} - the value did '
+                  f'not resolve.', file=sys.stderr)
+        print('      These vars are now UNSET for that server rather than being '
+              'set to the\n'
+              '      literal placeholder text. A credential placeholder shipped '
+              'as a value is\n'
+              '      a bearer token that 401s on every call while the config '
+              'looks correct.',
+              file=sys.stderr)
 
     if unresolved:
         print(f'WARN: unresolved placeholders left in output: '

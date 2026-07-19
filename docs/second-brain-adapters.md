@@ -37,13 +37,13 @@ Pick the backend in `chassis.config.yaml`.
 | siyuan | `SIYUAN_URL` | `second_brain.siyuan.base_url` | `http://127.0.0.1:6806` |
 | siyuan | - | `second_brain.siyuan.notebook_id` | `second_brain.databases.notes_root`; empty raises `ValueError` |
 | siyuan | `SIYUAN_DEEPLINK_BASE` | `second_brain.siyuan.deeplink_template` | `siyuan://blocks/` - **desktop-app URI, does not open on a phone** (see below) |
-| notion | `NOTION_API_TOKEN` | `second_brain.notion.token` | none |
-| notion | - | `second_brain.notion.notes_root` | `second_brain.databases.notes_root` |
+| notion | `NOTION_API_TOKEN` | `second_brain.notion.token` | none - **empty token raises `ValueError` at startup** |
+| notion | - | `second_brain.notion.notes_root` | `second_brain.databases.notes_root`; empty raises `ValueError` |
 | obsidian | - (no credential) | `second_brain.obsidian.vault_path` | none - required |
 
 Resolution is: **YAML key if set, else env var, else the documented default.** A YAML value of `${SIYUAN_TOKEN}` that expands to nothing counts as unset and falls through rather than shadowing the env var.
 
-The SiYuan adapter refuses to construct with an empty token or an empty `notebook_id`. Both used to be silently tolerated, which produced an adapter that answered every call with `Auth failed [session]`. Failing loudly at server startup is deliberate - `mcp_server.main()` resolves the adapter eagerly so a broken config shows up in `claude mcp list` and the server log, not mid-task.
+The SiYuan and Notion adapters refuse to construct with an empty token or an empty write target (`notebook_id` / `notes_root`), and reject an unhydrated `<PLACEHOLDER>` in place of a token. Both used to be silently tolerated, which produced an adapter that answered every call with `Auth failed [session]`. Failing loudly at server startup is deliberate - `mcp_server.main()` resolves the adapter eagerly so a broken config shows up in `claude mcp list` and the server log, not mid-task.
 
 > **Container gotcha:** from inside the chassis container, `127.0.0.1` is the container itself. A SiYuan kernel running on the host is reachable at `http://host.docker.internal:6806`. Set `SIYUAN_URL` accordingly.
 
@@ -87,7 +87,7 @@ second_brain:
 second_brain:
   backend: notion
   notion:
-    token: ${NOTION_INTEGRATION_TOKEN}
+    token: ${NOTION_API_TOKEN}
     notes_root: 1234abcd-5678-90ef-1234-567890abcdef   # parent page for create_doc
     databases:
       lp_crm: aaaa1111-bbbb-2222-cccc-333333333333

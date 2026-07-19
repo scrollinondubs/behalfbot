@@ -11,7 +11,7 @@
 # smoke test reports OK.
 #
 # Required env: sourced from $CHASSIS_HOME/.env at entrypoint time, so the
-# script can assume INSTANCE_NAME, BRIEFINGS_WEBHOOK_URL, NOTION_INTEGRATION_TOKEN,
+# script can assume INSTANCE_NAME, BRIEFINGS_WEBHOOK_URL, NOTION_API_TOKEN,
 # etc. are exported. Per-check fail-soft if env missing - just reports SKIP.
 #
 # Usage:
@@ -207,12 +207,12 @@ check_slack_intake_helper() {
 }
 
 check_second_brain_backend_reachable() {
-    if [[ -z "${NOTION_INTEGRATION_TOKEN:-}" ]]; then
-        record SKIP notion_read "NOTION_INTEGRATION_TOKEN not set"
+    if [[ -z "${NOTION_API_TOKEN:-}" ]]; then
+        record SKIP notion_read "NOTION_API_TOKEN not set"
         return
     fi
     local resp
-    resp=$(curl -fsS -H "Authorization: Bearer $NOTION_INTEGRATION_TOKEN" -H "Notion-Version: 2022-06-28" \
+    resp=$(curl -fsS -H "Authorization: Bearer $NOTION_API_TOKEN" -H "Notion-Version: 2022-06-28" \
         https://api.notion.com/v1/users/me 2>/dev/null || echo "")
     if echo "$resp" | jq -e .id >/dev/null 2>&1; then
         local bot_id

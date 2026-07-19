@@ -11,7 +11,7 @@ Per-installer config (chassis.config.yaml):
     second_brain:
       backend: notion
       notion:
-        token: ${NOTION_INTEGRATION_TOKEN}        # from .env / Vaultwarden
+        token: ${NOTION_API_TOKEN}        # from .env / Vaultwarden
         notes_root: <page-id>                       # parent page for create_doc
         databases:                                  # named handles → uuid
           lp_crm: <database-id>

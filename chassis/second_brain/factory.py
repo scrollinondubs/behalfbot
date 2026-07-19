@@ -95,6 +95,26 @@ def _resolve_env(value: Any) -> Any:
     return out
 
 
+def _is_unhydrated_placeholder(value: str) -> bool:
+    """True for a bare `<NAME>` token that hydration should have replaced.
+
+    hydrate-mcp-json.py substitutes `<TOKEN>` markers from .env. When the var is
+    unset it used to leave the marker in place, the MCP server received the
+    literal string in its environment, and it went out as
+    `Authorization: Bearer <NOTION_API_TOKEN>` - a 401 on every call from a
+    config that looked correctly filled in. The hydrator now drops credential
+    keys it could not resolve; this is the second line of defense, so a
+    hand-edited .env or .mcp.json cannot reintroduce the same shape.
+    """
+    stripped = value.strip()
+    return (
+        len(stripped) > 2
+        and stripped.startswith("<")
+        and stripped.endswith(">")
+        and stripped[1:-1].replace("_", "").isalnum()
+    )
+
+
 def _first_set(*candidates: Any) -> str:
     """First candidate that resolves to a non-empty string, '' when none do.
 
@@ -189,6 +209,15 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
             os.environ.get("SIYUAN_DEEPLINK_BASE"),
             "siyuan://blocks/",
         )
+        # Same placeholder guard the Notion branch applies. SiYuan's token comes
+        # through the same <SIYUAN_TOKEN> marker in .mcp.json.template, so it can
+        # arrive in the same unhydrated shape.
+        if token and _is_unhydrated_placeholder(token):
+            raise ValueError(
+                f"SiYuan adapter token is the unhydrated placeholder {token!r}, not a "
+                "credential. Set SIYUAN_TOKEN in the chassis .env and re-run "
+                "hydrate-mcp-json.py."
+            )
         if not token:
             raise ValueError(
                 "SiYuan adapter has no API token. Set SIYUAN_TOKEN in the chassis .env "
@@ -213,16 +242,44 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
         from chassis.second_brain.notion import NotionAdapter
 
         # Same credential source as the native notion MCP server (.env), same
-        # notes_root fallback as siyuan. Notion adapter mode is not validated as
-        # hard as siyuan yet - see docs/second-brain-adapters.md.
+        # notes_root fallback as siyuan.
         databases = sb_config.get("databases") or {}
+        token = _first_set(
+            backend_config.get("token"), os.environ.get("NOTION_API_TOKEN")
+        )
+        notes_root = _first_set(
+            backend_config.get("notes_root"), databases.get("notes_root")
+        )
+        # Same lesson as the SiYuan guards above, which exist because that exact
+        # failure burned an install (928c657). A happily-constructed adapter with
+        # an empty credential is worse than a startup error: every call comes
+        # back 401 and the config looks correct. Fail here instead.
+        if token and _is_unhydrated_placeholder(token):
+            raise ValueError(
+                f"Notion adapter token is the unhydrated placeholder {token!r}, not a "
+                "credential. hydrate-mcp-json.py leaves <NAME> markers in place when "
+                "the var is unset. Set NOTION_API_TOKEN in the chassis .env and re-run "
+                "the hydrator. Sending this string as a bearer token 401s on every call."
+            )
+        if not token:
+            raise ValueError(
+                "Notion adapter has no API token. Set NOTION_API_TOKEN in the chassis "
+                ".env (the same var direct mode uses), or second_brain.notion.token in "
+                "chassis.config.yaml to override it. Notion answers an empty or "
+                "placeholder bearer token with 401 on every call. Note the var was "
+                "briefly documented as NOTION_INTEGRATION_TOKEN in some files; "
+                "NOTION_API_TOKEN is the only name now."
+            )
+        if not notes_root:
+            raise ValueError(
+                "Notion adapter has no notes_root. Set second_brain.databases.notes_root "
+                "in chassis.config.yaml (the default write target), or "
+                "second_brain.notion.notes_root to override it. Without it, create_doc "
+                "has no parent page to write under."
+            )
         return NotionAdapter(
-            token=_first_set(
-                backend_config.get("token"), os.environ.get("NOTION_API_TOKEN")
-            ),
-            notes_root=_first_set(
-                backend_config.get("notes_root"), databases.get("notes_root")
-            ),
+            token=token,
+            notes_root=notes_root,
             databases={k: _resolve_env(v) for k, v in (backend_config.get("databases") or {}).items()},
             natural_keys=backend_config.get("natural_keys") or {},
             active_database=backend_config.get("active_database"),
