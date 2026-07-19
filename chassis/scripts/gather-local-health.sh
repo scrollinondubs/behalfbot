@@ -23,6 +23,8 @@
 #   low_memory_<n>MB               - available memory < MEM_MB_FLOOR (default 2048)
 #   dispatcher_stuck_<n>s          - dispatcher.lock older than LOCK_STALE_S (default 1800)
 #   dispatcher_silent_<n>s         - no heartbeat-state update for > SILENCE_S (default 7200)
+#   heartbeat_state_unreadable     - heartbeat-state.json exists but jq could not
+#                                    parse it, so the silence check could not run
 #
 # Customer-specific health checks (Ollama presence, launchd / systemd unit
 # state, Mac-Mini-specific peripherals, etc.) live in a sibling hook at
@@ -78,7 +80,27 @@ fi
 # script erroring before set_state).
 state_file="${CHASSIS_HOME}/scheduled-tasks/heartbeat-state.json"
 if [[ -f "$state_file" ]]; then
-    last_any=$(jq -r '[.[] | .last_checked // empty] | sort | last // empty' "$state_file" 2>/dev/null || echo "")
+    state_err="$(mktemp)"
+    # `select(type == "object")` before indexing, because the state file's top
+    # level is not uniformly objects - a scalar sibling key (a schema version,
+    # a bare timestamp) makes `.[] | .last_checked` abort with "Cannot index
+    # number with last_checked". The old form of this line paired that with a
+    # blanket `2>/dev/null || echo ""`, so the abort was indistinguishable from
+    # "no timestamps yet": last_any came back empty, the silence check below
+    # was skipped, and dispatcher_silent_<n>s could never fire. The alarm for a
+    # dead dispatcher was itself dead.
+    #
+    # jq failure is now caught explicitly and reported as its own issue rather
+    # than suppressed. It is not `|| echo ""` (which is the bug) and not an
+    # unguarded call under `set -e` (which would abort before the JSON contract
+    # is emitted, taking every other finding with it). A probe that cannot read
+    # the state file does not get to report an all-clear about it.
+    if ! last_any=$(jq -r '[.[] | select(type == "object") | .last_checked // empty] | sort | last // empty' "$state_file" 2>"$state_err"); then
+        issues+=("heartbeat_state_unreadable")
+        last_any=""
+        echo "gather-local-health: cannot read $state_file: $(tr '\n' ' ' <"$state_err")" >&2
+    fi
+    rm -f "$state_err"
     if [[ -n "$last_any" ]]; then
         # macOS `date -j -f` and GNU `date -d`. Try macOS first then fall back.
         last_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "$last_any" +%s 2>/dev/null || \
