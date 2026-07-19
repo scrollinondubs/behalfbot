@@ -10,6 +10,8 @@ on:
     paths:
       - 'chassis/second_brain/**'
       - 'chassis/scripts/hydrate-mcp-json.py'
+      - 'chassis/scripts/gmail-attachment.py'
+      - 'chassis/scripts/tests/**'
       - 'chassis/.mcp.json.template'
       - 'chassis.config.yaml'
       - 'requirements.txt'
@@ -19,6 +21,8 @@ on:
     paths:
       - 'chassis/second_brain/**'
       - 'chassis/scripts/hydrate-mcp-json.py'
+      - 'chassis/scripts/gmail-attachment.py'
+      - 'chassis/scripts/tests/**'
       - 'chassis/.mcp.json.template'
       - 'chassis.config.yaml'
       - 'requirements.txt'
@@ -38,4 +42,4 @@ jobs:
       # mcp is pinned to the same version as requirements.txt so the e2e
       # server test exercises what the image ships.
       - run: pip install pytest pyyaml mcp==1.28.1
-      - run: python3 -m pytest chassis/second_brain/tests/ -v
+      - run: python3 -m pytest chassis/second_brain/tests/ chassis/scripts/tests/ -v

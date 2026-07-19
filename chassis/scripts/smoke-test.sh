@@ -238,6 +238,34 @@ check_second_brain_backend_reachable() {
     esac
 }
 
+check_gmail_attachment_credentials() {
+    # Same helper contract as check_second_brain_backend_reachable: one
+    # STATUS|message line on stdout, always exit 0.
+    #
+    # Env only, no IMAP login. This runs at every boot, and repeated failed
+    # logins against Google get the account rate-limited and eventually
+    # flagged. The failure worth catching here is the half-configured install -
+    # hydration pulled the username field and not the password, which reads as
+    # configured but cannot authenticate.
+    local helper="$CHASSIS_ROOT/scripts/gmail-attachment.py"
+    if [[ ! -f "$helper" ]]; then
+        record SKIP gmail_attachment_credentials "$helper not found"
+        return
+    fi
+    local out status msg
+    out=$(python3 "$helper" check 2>/dev/null | tail -1)
+    if [[ -z "$out" ]]; then
+        record FAIL gmail_attachment_credentials "gmail-attachment.py check produced no output"
+        return
+    fi
+    status="${out%%|*}"
+    msg="${out#*|}"
+    case "$status" in
+        PASS|FAIL|SKIP) record "$status" gmail_attachment_credentials "$msg" ;;
+        *) record FAIL gmail_attachment_credentials "unparseable helper output: $out" ;;
+    esac
+}
+
 check_discord_webhook_reachable() {
     # Reach the briefings webhook with a HEAD-equivalent (no message sent) to
     # confirm DNS + connectivity. Actual post would be intrusive; skip.
@@ -266,6 +294,7 @@ run_core_checks() {
     check_slack_intake_helper
     check_postgres_connectivity
     check_second_brain_backend_reachable
+    check_gmail_attachment_credentials
     check_discord_webhook_reachable
 }
 
