@@ -1,0 +1,33 @@
+name: Shell unit tests
+
+# shell-lint.yml runs shellcheck, which catches syntax and idiom problems but
+# no behavior. The chassis-update healthcheck bug this job guards was valid
+# shell that always returned success, so lint could never have caught it.
+#
+# Scoped to the self-contained suites only. test-daily-log-gather.sh is not
+# here: it needs python3 + jq and is run by hand.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'chassis/scripts/_chassis-update-health.sh'
+      - 'chassis/scripts/chassis-update.sh'
+      - 'chassis/scripts/test-chassis-update-health.sh'
+      - '.github/workflows/shell-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'chassis/scripts/_chassis-update-health.sh'
+      - 'chassis/scripts/chassis-update.sh'
+      - 'chassis/scripts/test-chassis-update-health.sh'
+      - '.github/workflows/shell-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  chassis-update-health:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No docker daemon needed - the suite stubs the docker CLI on PATH.
+      - run: bash chassis/scripts/test-chassis-update-health.sh
