@@ -207,20 +207,35 @@ check_slack_intake_helper() {
 }
 
 check_second_brain_backend_reachable() {
-    if [[ -z "${NOTION_API_TOKEN:-}" ]]; then
-        record SKIP notion_read "NOTION_API_TOKEN not set"
+    # Dispatches per configured backend - see check-second-brain-backend.py for
+    # what each one verifies. Two things changed here 2026-07-19 (Stage 2):
+    #
+    #   - the check name is `second_brain_read`, not `notion_read`. That is the
+    #     name chassis.config.yaml already lists under
+    #     success_criteria.smoke_tests, so until now the criterion referenced a
+    #     check that never appeared in the output on ANY backend.
+    #   - Obsidian and SiYuan get real checks instead of a SKIP.
+    #
+    # The logic lives in Python rather than inline here because it has to read
+    # chassis.config.yaml (bash cannot, without a fourth hand-rolled YAML
+    # parser) and because per-backend branches need unit tests.
+    local helper="$CHASSIS_ROOT/scripts/check-second-brain-backend.py"
+    if [[ ! -f "$helper" ]]; then
+        record SKIP second_brain_read "$helper not found"
         return
     fi
-    local resp
-    resp=$(curl -fsS -H "Authorization: Bearer $NOTION_API_TOKEN" -H "Notion-Version: 2022-06-28" \
-        https://api.notion.com/v1/users/me 2>/dev/null || echo "")
-    if echo "$resp" | jq -e .id >/dev/null 2>&1; then
-        local bot_id
-        bot_id=$(echo "$resp" | jq -r .id)
-        record PASS notion_read "Notion API reached, bot id $bot_id"
-    else
-        record FAIL notion_read "Notion API call failed (token wrong / network blocked / scope issue)"
+    local out status msg
+    out=$(python3 "$helper" 2>/dev/null | tail -1)
+    if [[ -z "$out" ]]; then
+        record FAIL second_brain_read "check-second-brain-backend.py produced no output"
+        return
     fi
+    status="${out%%|*}"
+    msg="${out#*|}"
+    case "$status" in
+        PASS|FAIL|SKIP) record "$status" second_brain_read "$msg" ;;
+        *) record FAIL second_brain_read "unparseable helper output: $out" ;;
+    esac
 }
 
 check_discord_webhook_reachable() {
