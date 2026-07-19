@@ -61,6 +61,43 @@ the adapter factory, so they need no DAILY_LOG_* vars of their own.
 Unset env vars degrade gracefully: the corresponding surface is skipped, a
 warning is emitted into the `warnings` array, and the rest of the gather
 proceeds.
+
+Per-surface status (2026-07-19, new-jaxity#307)
+===============================================
+`warnings` alone could not answer the only question the prompt actually needs
+answered: for a bucket that came back empty, did nothing happen, or could we
+not look? It is a flat list of strings with no surface attribution, so the
+prompt collapsed both cases into "quiet day". On a day 8 PRs merged across
+three repos the GitHub query failed, `prs_by_repo` was `{}`, and the log said
+nothing shipped.
+
+`surfaces` carries the distinction structurally:
+
+    "surfaces": {
+      "github":       {"status": "ok",      "error": null},
+      "gmail":        {"status": "skipped", "error": "..."},
+      "second_brain": {"status": "error",   "error": "..."},
+      "discord":      {"status": "ok",      "error": null}
+    }
+
+  - ok      - the surface was queried and answered. An empty bucket under `ok`
+              is a real zero and may be narrated as such.
+  - skipped - never attempted, because a precondition (env var, credential)
+              was absent before the call. `error` holds the skip reason, not a
+              failure.
+  - error   - attempted, did not fully succeed. `error` holds the reason.
+
+Status is classified at the call site in `build_output` from facts it already
+holds - whether it invoked the gather function at all, and whether that call
+returned warnings - rather than by pattern-matching warning strings. A surface
+that was attempted and produced a warning is never `ok`; this is the same
+doctrine as chassis/scripts/_chassis-update-health.sh, "a healthcheck that
+cannot read the container does not get to report success".
+
+`warnings` is retained verbatim alongside `surfaces` for the same reason
+`siyuan_activity` is retained alongside `second_brain_activity`: bootstrap
+copies the prompt to disk once and never rewrites it, so every existing
+install is still reading the old key.
 """
 
 from __future__ import annotations
@@ -662,6 +699,30 @@ def gather_metrics(chassis_home: Path, prs_by_repo: dict, open_issues: list,
     return metrics
 
 
+# --- Surface status -------------------------------------------------------
+
+
+def surface_ok() -> dict:
+    return {"status": "ok", "error": None}
+
+
+def surface_skipped(reason: str) -> dict:
+    """A surface we never attempted. `error` holds the reason, not a failure."""
+    return {"status": "skipped", "error": reason}
+
+
+def surface_from_warnings(warns: list[str]) -> dict:
+    """Classify an ATTEMPTED surface from the warnings its gather returned.
+
+    Any warning at all demotes the surface out of `ok`. Deliberately blunt:
+    the caller cannot know which warnings are benign, and guessing wrong in
+    the permissive direction is the failure this whole block exists to stop.
+    """
+    if warns:
+        return {"status": "error", "error": "; ".join(warns)}
+    return surface_ok()
+
+
 # --- Main -----------------------------------------------------------------
 
 
@@ -684,6 +745,7 @@ def build_output(now: datetime | None = None, *, verbose: bool = False) -> dict:
     email_deferred = False
     siyuan_activity: list[dict] = []
     postmortems: list[dict] = []
+    surfaces: dict[str, dict] = {}
 
     # GitHub.
     gh_user = os.environ.get("DAILY_LOG_GH_USER", "").strip()
@@ -692,8 +754,11 @@ def build_output(now: datetime | None = None, *, verbose: bool = False) -> dict:
             gh_user, since, until, verbose=verbose
         )
         warnings.extend(gh_warn)
+        surfaces["github"] = surface_from_warnings(gh_warn)
     else:
-        warnings.append("DAILY_LOG_GH_USER unset - skipped GitHub scan")
+        reason = "DAILY_LOG_GH_USER unset - skipped GitHub scan"
+        warnings.append(reason)
+        surfaces["github"] = surface_skipped(reason)
 
     # Gmail.
     gmail_identity = os.environ.get("DAILY_LOG_GMAIL_IDENTITY", "").strip()
@@ -702,8 +767,21 @@ def build_output(now: datetime | None = None, *, verbose: bool = False) -> dict:
             gmail_identity, since, until, verbose=verbose
         )
         warnings.extend(gmail_warn)
+        if gmail_warn:
+            surfaces["gmail"] = surface_from_warnings(gmail_warn)
+        elif email_deferred:
+            # Deferral is not a result. This script did not read the mailbox;
+            # the prompt does it over MCP. Reporting `ok` here would license
+            # the prompt to narrate an empty inbox it never actually opened.
+            surfaces["gmail"] = surface_skipped(
+                "Gmail retrieval deferred to the prompt's MCP tools"
+            )
+        else:
+            surfaces["gmail"] = surface_ok()
     else:
-        warnings.append("DAILY_LOG_GMAIL_IDENTITY unset - skipped Gmail scan")
+        reason = "DAILY_LOG_GMAIL_IDENTITY unset - skipped Gmail scan"
+        warnings.append(reason)
+        surfaces["gmail"] = surface_skipped(reason)
 
     # Second brain. SiYuan keeps the direct-HTTP path it has always used; the
     # other backends go through the adapter. See the module docstring for why
@@ -720,13 +798,17 @@ def build_output(now: datetime | None = None, *, verbose: bool = False) -> dict:
                 siyuan_url, siyuan_token, since, until, verbose=verbose
             )
             warnings.extend(siyuan_warn)
+            surfaces["second_brain"] = surface_from_warnings(siyuan_warn)
         else:
-            warnings.append("DAILY_LOG_SIYUAN_URL / SIYUAN_URL unset - skipped SiYuan scan")
+            reason = "DAILY_LOG_SIYUAN_URL / SIYUAN_URL unset - skipped SiYuan scan"
+            warnings.append(reason)
+            surfaces["second_brain"] = surface_skipped(reason)
     else:
         siyuan_activity, adapter_warn = gather_via_adapter(
             backend, since, until, verbose=verbose
         )
         warnings.extend(adapter_warn)
+        surfaces["second_brain"] = surface_from_warnings(adapter_warn)
 
     # Discord postmortems.
     channel_id = os.environ.get("DAILY_LOG_DISCORD_CHANNEL_ID", "").strip()
@@ -737,10 +819,15 @@ def build_output(now: datetime | None = None, *, verbose: bool = False) -> dict:
             channel_id, discord_token, since, verbose=verbose
         )
         warnings.extend(discord_warn)
+        surfaces["discord"] = surface_from_warnings(discord_warn)
     elif not channel_id:
-        warnings.append("DAILY_LOG_DISCORD_CHANNEL_ID unset - skipped Discord scan")
+        reason = "DAILY_LOG_DISCORD_CHANNEL_ID unset - skipped Discord scan"
+        warnings.append(reason)
+        surfaces["discord"] = surface_skipped(reason)
     else:
-        warnings.append("DISCORD_TOKEN / DISCORD_BOT_TOKEN unset - skipped Discord scan")
+        reason = "DISCORD_TOKEN / DISCORD_BOT_TOKEN unset - skipped Discord scan"
+        warnings.append(reason)
+        surfaces["discord"] = surface_skipped(reason)
 
     # Metrics.
     extra_script = os.environ.get("DAILY_LOG_EXTRA_METRICS_SCRIPT", "").strip() or None
@@ -770,6 +857,9 @@ def build_output(now: datetime | None = None, *, verbose: bool = False) -> dict:
         "siyuan_activity": siyuan_activity,
         "postmortems": postmortems,
         "metrics": metrics,
+        "surfaces": surfaces,
+        # Retained alongside `surfaces` for installs whose on-disk prompt
+        # predates it. See the per-surface status note in the module docstring.
         "warnings": warnings,
     }
 
@@ -808,6 +898,14 @@ def main() -> int:
             "siyuan_activity": [],
             "postmortems": [],
             "metrics": {},
+            # A crash means no surface was read to completion. Every one of
+            # them reports error, so the prompt cannot read this payload as a
+            # quiet day.
+            "surfaces": {
+                name: {"status": "error",
+                       "error": f"gather crashed: {type(e).__name__}: {e}"}
+                for name in ("github", "gmail", "second_brain", "discord")
+            },
             "warnings": [f"gather crashed: {type(e).__name__}: {e}"],
         }
 
