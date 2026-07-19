@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
-"""pacman-process-reactions.py — Process Telegram reaction events for Pacman.
+"""pacman-process-reactions.py - Process Telegram reaction events for Pacman.
 
 Called inline from a Telegram gather script after a getUpdates call. Reads
 the raw `result` array (JSON) from stdin and:
 1. Caches every message body under `<chat_id>:<message_id>` for later lookup
 2. For each `message_reaction` update: if 👀 was added by the configured
    trigger user in one of the configured admin chats, look up the cached
-   source message, extract URLs, and POST each URL to the SiYuan
-   /To Investigate queue via pacman-queue-add.py.
+   source message, extract URLs, and enqueue each URL via pacman-queue-add.py.
+
+What changed (2026-07-19, docs/pacman-queue-storage.md): the helper this calls
+now writes to Postgres rather than to a SiYuan block, so SIYUAN_TOKEN and
+PACMAN_SIYUAN_QUEUE_BLOCK_ID are no longer part of this script's contract.
 
 Required env (chassis bootstrap hydrates from chassis.config.yaml or .env):
     PACMAN_TELEGRAM_TRIGGER_USER_ID   Telegram user_id whose 👀 fires the trigger
     PACMAN_ADMIN_CHAT_IDS             Comma-separated chat_ids to watch
-    SIYUAN_TOKEN                      SiYuan API token (used by queue-add helper)
-    PACMAN_SIYUAN_QUEUE_BLOCK_ID      Queue parent block ID (used by helper)
+    CHASSIS_PG_DSN                    Postgres DSN (used by the queue-add helper)
 
-If any required env is missing the script silently no-ops (so chassis
-installs without Telegram integration can ship the script without
-configuring it).
+If the Telegram env is missing the script silently no-ops (so chassis installs
+without Telegram integration can ship the script without configuring it).
+
+A failed enqueue is NOT silent. Telegram reactions are the one intake where
+the URL exists nowhere else the moment the group chat moves on, so every
+failure is logged with the URL verbatim under event `queue_failed_urls`, which
+makes the log the recovery path. The script still exits 0 so the calling
+gather script completes, but the failure is recoverable rather than invisible.
 
 Cache file: $CHASSIS_HOME/scheduled-tasks/telegram-message-cache.json
 (last 200 messages by date). Logs to $CHASSIS_HOME/logs/pacman/YYYY-MM-DD.jsonl.
-
-Exits 0 always (caller continues regardless of reaction-processing outcome).
 """
 
 from __future__ import annotations
@@ -100,26 +105,35 @@ def save_cache(cache: dict) -> None:
     CACHE_FILE.write_text(json.dumps(cache, indent=2))
 
 
-def queue_url(url: str, source_tag: str) -> bool:
-    """Call pacman-queue-add.py to append URL to SiYuan queue. Returns True on success."""
+def queue_url(url: str, source_tag: str, source_ref: str | None = None) -> str | None:
+    """Enqueue a URL via pacman-queue-add.py. Returns the approval token, or None.
+
+    The helper prints the token on stdout and exits 2 when Postgres is
+    unreachable, so an enqueue failure is distinguishable from a rejected URL.
+    Both are logged; neither is swallowed.
+    """
     helper = Path(__file__).parent / "pacman-queue-add.py"
     if not helper.exists():
         log({"event": "queue_helper_missing", "path": str(helper)})
-        return False
+        return None
+    cmd = ["python3", str(helper), url, "--source", source_tag]
+    if source_ref:
+        cmd += ["--source-ref", source_ref]
     try:
-        result = subprocess.run(
-            ["python3", str(helper), url, "--source", source_tag],
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
         if result.returncode == 0:
-            return True
-        log({"event": "queue_helper_failed", "url": url, "rc": result.returncode, "stderr": result.stderr[:200]})
-        return False
+            return result.stdout.strip() or None
+        log({
+            "event": "queue_helper_failed",
+            "url": url,
+            "rc": result.returncode,
+            "db_unavailable": result.returncode == 2,
+            "stderr": result.stderr[:300],
+        })
+        return None
     except Exception as e:
         log({"event": "queue_helper_exception", "url": url, "err": str(e)[:200]})
-        return False
+        return None
 
 
 def main() -> int:
@@ -166,6 +180,7 @@ def main() -> int:
         }
 
     queued = []
+    failed = []
     for u in updates:
         rxn = u.get("message_reaction")
         if not rxn:
@@ -204,13 +219,31 @@ def main() -> int:
             if cleaned in seen_in_run:
                 continue
             seen_in_run.add(cleaned)
-            if queue_url(cleaned, source_tag=f"telegram-react-{chat_id}"):
-                queued.append({"url": cleaned, "chat_id": chat_id, "message_id": message_id})
+            token = queue_url(
+                cleaned,
+                source_tag=f"telegram-react-{chat_id}",
+                source_ref=f"{chat_id}:{message_id}",
+            )
+            if token:
+                queued.append({
+                    "url": cleaned,
+                    "token": token,
+                    "chat_id": chat_id,
+                    "message_id": message_id,
+                })
+            else:
+                failed.append({"url": cleaned, "chat_id": chat_id, "message_id": message_id})
 
     save_cache(cache)
 
     if queued:
         log({"event": "run_complete", "queued_count": len(queued), "queued": queued})
+
+    # The URL verbatim, not a count. Telegram reactions are the intake where a
+    # lost URL is unrecoverable once the group chat scrolls past it, so this
+    # log line is the manual recovery path: re-run pacman-queue-add.py on each.
+    if failed:
+        log({"event": "queue_failed_urls", "failed_count": len(failed), "failed": failed})
 
     return 0
 

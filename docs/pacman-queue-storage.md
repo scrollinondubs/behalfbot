@@ -1,6 +1,9 @@
 # Pacman queue storage - design proposal
 
-**Status:** proposal, not ratified. Nothing in this document is implemented.
+**Status:** ratified by Sean and implemented, 2026-07-19. Option A, sequenced
+A1 → A2 → A3 in a single PR. Section 9 records what actually shipped and where
+it differs from the proposal; sections 1 through 8 are left as written so the
+reasoning stays readable against the decision.
 **Author:** Jax, 2026-07-19
 **Decision owner:** Sean
 **Context:** Stage 2 of the second-brain adapter work. PR #58 listed "Pacman
@@ -314,3 +317,109 @@ not touch it.
    or accept that the queue becomes opaque?
 4. Approval tokens: widen the regex, or issue short opaque tokens? (Short
    tokens recommended - phone ergonomics.)
+
+---
+
+## 9. What shipped
+
+Option A, with A1, A2 and A3 in one PR. Differences from the proposal above,
+and the answers to section 8's four questions.
+
+### Answers to the open questions
+
+1. **Option A (Postgres).** As recommended.
+2. **Yes, `chassis/db/` was promoted first.** It is deliberately smaller than
+   the dating plugin's selector: DSN resolution, a connection helper, and a
+   migration runner. No backend selector and no ORM. The chassis already
+   decided Postgres is canonical, so core code does not inherit BFL's
+   SQLite-mirror branch. `plugins/dating/scripts/_chassis_db.py` is left
+   untouched - migrating it is a separate change with its own blast radius.
+3. **Replaced with a CLI listing, not a Discord command.**
+   `pacman-queue.py pending` lists claimable rows with their tokens and claims
+   nothing. A Discord `pacman queue` command is a thin wrapper over that if it
+   is ever wanted; the visibility itself is no longer missing.
+4. **Short opaque tokens**, as recommended. Details below.
+
+### The approval token
+
+Six characters from `bcdfghjkmnpqrstvwxz` - 19 lowercase letters, no digits,
+no vowels, no `y`, no `i`/`l`/`o`. Generated at enqueue, unique per row,
+identical on every backend. `chassis/pacman/tokens.py` owns the generator and
+the canonical `APPROVAL_RE`.
+
+The collision constraint in section 6 turned out to have a stronger answer than
+"unlikely". Because the alphabet contains no digits, a token can never be
+parsed as an integer, so it cannot collide with the outreach flow's numeric
+`approve N` form under any input - a structural guarantee rather than a
+probabilistic one. Dropping the vowels adds a second property for free: no
+six-letter English word survives, so `approve later` cannot be misread as a
+token either. Both directions are asserted in
+`chassis/pacman/tests/test_tokens.py`, including over a shared input set where
+no message may be accepted by both handlers.
+
+The legacy `\d{14}-\w{7}` form is still accepted, flagged as `legacy` by the
+parser, so proposals posted to Discord before the cutover remain approvable.
+Drop that alternative once none are outstanding.
+
+### Schema differences from the section 5 sketch
+
+- Added `token TEXT NOT NULL UNIQUE` - the sketch predated the decision to make
+  the queue row own the approval handle.
+- Added `legacy_block_id TEXT` plus a partial unique index on
+  `(legacy_block_id, url) WHERE legacy_block_id IS NOT NULL`. This is the
+  backfill's idempotency key. It has to be the pair and not the block alone,
+  because a block holding two URLs becomes two rows - the exact failure
+  section 7 step 4 exists to catch.
+- `entry_group` is `NOT NULL`. Every row belongs to a group even when the group
+  has one member; a nullable group would mean two code paths at read time.
+
+### One bug found during implementation
+
+`UPDATE ... RETURNING` does not preserve the ORDER BY of the subquery that
+selects the ids. The first version of `claim()` ordered only inside that
+subquery, so Postgres returned batches in update order and the drain processed
+out of FIFO order. Every fake-connection test passed; only the opt-in
+live-Postgres test caught it. `claim()` now wraps the update in a CTE and
+orders in an outer SELECT, and the ordering key is `(created_at, id)` rather
+than `created_at` alone, because `add_many` inserts a pasted batch in a tight
+loop and two rows can share a microsecond. Both properties have regression
+tests that run without a database.
+
+### Operator procedure
+
+Section 7's sequence holds, with concrete commands. Steps 2 and 3 are
+idempotent, so a partial run is retried by re-running it.
+
+```bash
+# 1. Freeze. Both gather-pacman-queue.sh and pacman.sh already honor this.
+touch "$CHASSIS_HOME/PACMAN_HARD_PAUSE"
+
+# 2. Apply the schema.
+docker compose run --rm chassis migrate
+
+# 3. Snapshot and inspect before writing anything. Keep the JSON - it is the rollback.
+docker compose run --rm chassis shell -c \
+  'python3 chassis/scripts/pacman-migrate-siyuan-queue.py --dry-run --snapshot /app/customer/state/pacman-queue-snapshot.json'
+
+# 4. Backfill. Non-zero exit means something was reported rather than migrated - read it.
+docker compose run --rm chassis shell -c \
+  'python3 chassis/scripts/pacman-migrate-siyuan-queue.py --snapshot /app/customer/state/pacman-queue-snapshot.json'
+
+# 5. Verify the row count matches the snapshot's URL count, and the order.
+docker compose run --rm chassis shell -c 'python3 chassis/scripts/pacman-queue.py pending --limit 100'
+
+# 6. Unfreeze and watch one real drain.
+rm "$CHASSIS_HOME/PACMAN_HARD_PAUSE"
+```
+
+Step 7 of section 7 - deleting the SiYuan blocks - stays manual and stays
+last. The backfill script never deletes anything, and a test asserts it
+contains no delete call at all.
+
+**On Sean's install specifically:** the dry run reads 0 blocks. `/To Investigate`
+(`20260409114829-al0ay1t`) exists and holds 158 blocks, but none contain a URL
+in either the `content` or `markdown` column, so there is nothing in flight to
+migrate. The backfill is still the right thing to ship for other installs and
+for the audit trail, but on this install steps 3 and 4 are expected to be
+no-ops. Do not read a `0` there as a failed query - it was checked directly
+against SiYuan, not inferred.
