@@ -7,6 +7,7 @@
 #   install-plugin <name>
 #                    - one-shot: run plugins/<name>/install.sh
 #   hydrate-env      - one-shot: pull secrets from Vaultwarden via rbw, write to .env
+#   migrate          - one-shot: apply chassis/db/migrations/*.sql
 #   smoke-test       - one-shot: run chassis + plugin smoke checks
 #   claude           - interactive Claude CLI (needs -it)
 #   shell            - interactive zsh (needs -it)
@@ -78,9 +79,26 @@ run_dispatcher_once() {
     touch /tmp/dispatcher.alive
 }
 
+run_chassis_migrations() {
+    # Idempotent and advisory-locked, so running it on every boot is safe and
+    # two containers starting together cannot race. Non-fatal on failure: an
+    # install with no Postgres still gets a dispatcher, it just gets a Pacman
+    # queue that fails loudly when touched (which is the intended behaviour -
+    # see chassis/db/connection.py).
+    (cd /app && python3 -m chassis.db.migrate) || \
+        log "WARN: chassis migrations did not apply - Postgres-backed features will fail loudly until they do"
+}
+
+cmd_migrate() {
+    ensure_customer_layout
+    source_env
+    (cd /app && exec python3 -m chassis.db.migrate "$@")
+}
+
 cmd_dispatcher() {
     ensure_customer_layout
     source_env
+    run_chassis_migrations
     log "dispatcher loop starting - tick=${DISPATCHER_INTERVAL_SECONDS}s, CHASSIS_HOME=$CHASSIS_HOME"
     # Touch sentinel up-front so healthcheck doesn't fail before first tick.
     touch /tmp/dispatcher.alive
@@ -97,6 +115,7 @@ cmd_dispatcher() {
 cmd_bootstrap() {
     ensure_customer_layout
     source_env
+    run_chassis_migrations
     log "running bootstrap.sh against CHASSIS_HOME=$CHASSIS_HOME"
     CHASSIS_HOME="$CHASSIS_HOME" bash /app/bootstrap.sh "$@"
 }
@@ -156,12 +175,13 @@ case "$MODE" in
     bootstrap)        cmd_bootstrap        "$@" ;;
     install-plugin)   cmd_install_plugin   "$@" ;;
     hydrate-env)      cmd_hydrate_env      "$@" ;;
+    migrate)          cmd_migrate          "$@" ;;
     smoke-test)       cmd_smoke_test       "$@" ;;
     claude)           cmd_claude           "$@" ;;
     shell)            cmd_shell            "$@" ;;
     *)
         echo "unknown mode: $MODE" >&2
-        echo "valid modes: dispatcher | bootstrap | install-plugin <name> | hydrate-env | smoke-test | claude | shell" >&2
+        echo "valid modes: dispatcher | bootstrap | install-plugin <name> | hydrate-env | migrate | smoke-test | claude | shell" >&2
         exit 2
         ;;
 esac
