@@ -140,7 +140,7 @@ matching - a single typo causes silent hydration failure.
 
 | Item name | VW field | Env var |
 |---|---|---|
-| `Behalf.bot - Notion integration token` | password | `NOTION_INTEGRATION_TOKEN` |
+| `Behalf.bot - Notion integration token` | password | `NOTION_API_TOKEN` |
 | `Behalf.bot - Notion DB IDs` | notes (KEY=value per line) | `NOTION_PROJECT_TRACKER_DB_ID`, `NOTION_READING_LIST_DB_ID`, `NOTION_MEMORY_PAGE_ID` |
 | `Behalf.bot - Google OAuth client` | username = CLIENT_ID, password = CLIENT_SECRET | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` |
 

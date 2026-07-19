@@ -71,6 +71,13 @@ fi
 #
 # "@dotenv" means parse the notes field as a KEY=value dotenv block.
 
+# Notion note: the Vaultwarden ITEM name below is unchanged. Only the env var
+# it is written out as changed, NOTION_INTEGRATION_TOKEN -> NOTION_API_TOKEN.
+# The chassis carried two names for one secret - the factory and .env.example
+# said NOTION_API_TOKEN, this script and .mcp.json.template said
+# NOTION_INTEGRATION_TOKEN. The Vaultwarden path happened to work; an installer
+# who followed .env.example instead shipped the literal placeholder string as
+# their bearer token and 401'd on every call. No VW item needs renaming.
 DEFAULT_MANIFEST=$(cat <<'JSON'
 {
   "Behalf.bot - Google Workspace agent": {
@@ -87,7 +94,7 @@ DEFAULT_MANIFEST=$(cat <<'JSON'
   "Behalf.bot - Slack bot token": "SLACK_BOT_TOKEN",
   "Behalf.bot - Slack workspace_id": "SLACK_WORKSPACE_ID",
   "Behalf.bot - Slack Marc user_id": "INSTALLER_SLACK_USER_ID",
-  "Behalf.bot - Notion integration token": "NOTION_INTEGRATION_TOKEN",
+  "Behalf.bot - Notion integration token": "NOTION_API_TOKEN",
   "Behalf.bot - Notion DB IDs": {"notes": "@dotenv"},
   "Behalf.bot - Vaultwarden API token": "RBW_VW_API_TOKEN",
   "Behalf.bot - Postgres password": "POSTGRES_PASSWORD",

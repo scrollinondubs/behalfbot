@@ -55,7 +55,7 @@
       "command": "npx",
       "args": ["-y", "@suekou/mcp-notion-server"],
       "env": {
-        "NOTION_API_TOKEN": "<NOTION_INTEGRATION_TOKEN>"
+        "NOTION_API_TOKEN": "<NOTION_API_TOKEN>"
       }
     },
 
@@ -70,7 +70,7 @@
         "SIYUAN_URL": "<SIYUAN_URL>",
         "SIYUAN_TOKEN": "<SIYUAN_TOKEN>",
         "SIYUAN_DEEPLINK_BASE": "<SIYUAN_DEEPLINK_BASE>",
-        "NOTION_API_TOKEN": "<NOTION_INTEGRATION_TOKEN>"
+        "NOTION_API_TOKEN": "<NOTION_API_TOKEN>"
       }
     },
 
