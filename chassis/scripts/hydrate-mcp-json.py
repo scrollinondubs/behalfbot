@@ -386,6 +386,27 @@ def main():
         config = {}
     else:
         config = load_yaml(args.config)
+
+    # Obsidian has no native MCP server, so `mode: direct` (the default, and
+    # what a missing mode key means) renders an install with NO second-brain
+    # surface at all - the gating drops the native server that does not exist
+    # and the adapter server that was never asked for. The config is valid,
+    # the render is correct, and the installer silently has no second brain.
+    #
+    # SiYuan and Notion work on defaults; only Obsidian needs an extra key
+    # nobody is prompted for. Force it rather than emit a technically-correct
+    # config that cannot work (Sean's call, 2026-07-20).
+    sb = config.get('second_brain') if isinstance(config, dict) else None
+    if isinstance(sb, dict) and sb.get('backend') == 'obsidian':
+        mode = sb.get('mode')
+        if mode != 'adapter':
+            was = repr(mode) if mode is not None else 'unset'
+            print(f"WARN: second_brain.backend is 'obsidian' but mode is {was}. "
+                  "Obsidian has no native MCP server, so direct mode would render "
+                  "no second-brain server at all. Forcing mode='adapter'. "
+                  "Set second_brain.mode: adapter in chassis.config.yaml to silence this.",
+                  file=sys.stderr)
+            sb['mode'] = 'adapter'
     template = load_json(args.template)
     env = load_env(args.env)
 
