@@ -72,10 +72,35 @@ if [[ -z "${CHASSIS_ROOT:-}" ]]; then
     fi
 fi
 
+# Plugin root resolution (behalfbot#82).
+#
+# Order of preference:
+#   1. $CUSTOMER_HOME/vendored-plugins - the tree fetched from
+#      scrollinondubs/behalfbot-plugins at the pinned tag+SHA. This is the
+#      authoritative source once a fetch has succeeded.
+#   2. /app/plugins - the image-baked tree. The fallback when no fetch has run
+#      yet, when the fetch failed, or on an air-gapped/frozen install.
+#   3. $CHASSIS_HOME/plugins - host-side installs with no container layout.
+#
+# The non-empty test on (1) is the important part and is not decoration. An
+# empty or half-written vendored-plugins directory must NOT shadow the baked
+# tree: that would turn a failed fetch into a chassis that silently loads no
+# plugins and reports nothing wrong. A directory only counts as a usable
+# plugin root if it actually contains at least one plugin manifest.
+_chassis_plugin_root_usable() {
+    local dir="$1"
+    [[ -d "$dir" ]] || return 1
+    compgen -G "$dir"/*/openclaw.plugin.json > /dev/null 2>&1
+}
+
 if [[ -z "${CHASSIS_PLUGINS_ROOT:-}" ]]; then
-    if [[ -d "/app/plugins" ]]; then
+    _vendored="${CUSTOMER_HOME:-${CHASSIS_HOME:-}}/vendored-plugins"
+    if _chassis_plugin_root_usable "$_vendored"; then
+        export CHASSIS_PLUGINS_ROOT="$_vendored"
+    elif [[ -d "/app/plugins" ]]; then
         export CHASSIS_PLUGINS_ROOT="/app/plugins"
     elif [[ -n "${CHASSIS_HOME:-}" && -d "$CHASSIS_HOME/plugins" ]]; then
         export CHASSIS_PLUGINS_ROOT="$CHASSIS_HOME/plugins"
     fi
+    unset _vendored
 fi
