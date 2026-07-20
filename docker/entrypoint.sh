@@ -79,6 +79,32 @@ run_dispatcher_once() {
     touch /tmp/dispatcher.alive
 }
 
+run_plugin_fetch() {
+    # behalfbot#82. Pull the vendored plugin tree from scrollinondubs/behalfbot-plugins
+    # at the tag+SHA recorded in PLUGINS_PIN, into $CUSTOMER_HOME/vendored-plugins.
+    #
+    # Non-fatal by design: a fetch problem must never take the bot down. On any
+    # failure the previous tree (or the image-baked /app/plugins) stays active.
+    #
+    # Exit 3 is the exception worth shouting about - it means the pinned tag no
+    # longer resolves to the pinned SHA, i.e. a tag was force-moved. That is a
+    # supply-chain signal, not a transient error, so it gets its own log line.
+    local fetcher="$CHASSIS_ROOT/scripts/fetch-plugins.sh"
+    if [[ ! -x "$fetcher" ]]; then
+        log "WARN: plugin fetcher missing at $fetcher - running on the baked plugin tree"
+        return 0
+    fi
+    local rc=0
+    "$fetcher" || rc=$?
+    case "$rc" in
+        0) : ;;
+        3) log "SECURITY: plugin tag/SHA mismatch - refused to fetch, previous tree kept. Investigate before trusting the plugin set." ;;
+        4) log "WARN: plugin fetch produced a corrupt tree - previous tree kept" ;;
+        *) log "WARN: plugin fetch failed (rc=$rc) - continuing on the previous/baked tree" ;;
+    esac
+    return 0
+}
+
 run_chassis_migrations() {
     # Idempotent and advisory-locked, so running it on every boot is safe and
     # two containers starting together cannot race. Non-fatal on failure: an
@@ -98,6 +124,7 @@ cmd_migrate() {
 cmd_dispatcher() {
     ensure_customer_layout
     source_env
+    run_plugin_fetch
     run_chassis_migrations
     log "dispatcher loop starting - tick=${DISPATCHER_INTERVAL_SECONDS}s, CHASSIS_HOME=$CHASSIS_HOME"
     # Touch sentinel up-front so healthcheck doesn't fail before first tick.
@@ -115,6 +142,7 @@ cmd_dispatcher() {
 cmd_bootstrap() {
     ensure_customer_layout
     source_env
+    run_plugin_fetch
     run_chassis_migrations
     log "running bootstrap.sh against CHASSIS_HOME=$CHASSIS_HOME"
     CHASSIS_HOME="$CHASSIS_HOME" bash /app/bootstrap.sh "$@"
