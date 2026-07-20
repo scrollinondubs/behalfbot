@@ -205,6 +205,16 @@ if [[ -z "$tree" || ! -f "$tree/registry.json" ]]; then
     exit 4
 fi
 
+# --- resolve the chassis version --------------------------------------------
+# Needed BEFORE the swap so min_chassis_version can gate what gets installed,
+# rather than only being recorded after the fact.
+CHASSIS_VERSION="unknown"
+for vf in "$CUSTOMER_HOME/chassis/chassis/VERSION" "$CHASSIS_ROOT/VERSION"; do
+    [[ -f "$vf" ]] && { CHASSIS_VERSION=$(<"$vf"); break; }
+done
+CHASSIS_VERSION="$(printf '%s' "$CHASSIS_VERSION" | tr -d '[:space:]')"
+[[ -z "$CHASSIS_VERSION" ]] && CHASSIS_VERSION="unknown"
+
 # --- sanity check: every registry plugin present, every manifest parses -----
 if ! python3 - "$tree" <<'PY'
 import json, sys
@@ -230,6 +240,68 @@ then
     exit 4
 fi
 
+# --- min_chassis_version gate -----------------------------------------------
+# registry.json declares a min_chassis_version per plugin. Until 2026-07-20
+# nothing read it (behalfbot#86), so a plugin needing a newer chassis installed
+# silently and failed later at runtime with nothing connecting the failure to
+# the version mismatch.
+#
+# Policy: skip the individual plugin, keep the rest of the tree. One too-new
+# plugin must not take a working install backwards. Skips are logged and
+# recorded in the lockfile, so an omission is visible rather than inferred.
+SKIP_LIST_FILE="$parent/.plugin-skips.$$"
+: > "$SKIP_LIST_FILE"
+
+if [[ "$CHASSIS_VERSION" == "unknown" ]]; then
+    log "WARN: chassis VERSION not found - installing all plugins without checking min_chassis_version"
+else
+    CHASSIS_VERSION="$CHASSIS_VERSION" SKIP_OUT="$SKIP_LIST_FILE" python3 - "$tree" <<'PY' || log "WARN: min_chassis_version gate errored - continuing without it"
+import json, os, shutil, sys
+from pathlib import Path
+
+def parse(v):
+    """Loose semver to comparable tuple. A non-numeric segment sorts as -1 so a
+    malformed version can never silently compare as newer than a real one."""
+    out = []
+    for part in str(v).strip().split("."):
+        digits = ""
+        for ch in part:
+            if not ch.isdigit():
+                break
+            digits += ch
+        out.append(int(digits) if digits else -1)
+    while len(out) < 3:
+        out.append(0)
+    return tuple(out[:3])
+
+tree = Path(sys.argv[1])
+chassis = parse(os.environ["CHASSIS_VERSION"])
+reg = json.loads((tree / "registry.json").read_text())
+skipped = []
+for p in reg.get("plugins", []):
+    need = p.get("min_chassis_version")
+    if not need:
+        continue
+    if parse(need) > chassis:
+        pdir = tree / p.get("path", p["name"])
+        if pdir.is_dir():
+            shutil.rmtree(pdir)
+        skipped.append("%s %s" % (p["name"], need))
+Path(os.environ["SKIP_OUT"]).write_text("".join(l + "\n" for l in skipped))
+PY
+fi
+
+SKIPPED_PLUGINS=""
+if [[ -s "$SKIP_LIST_FILE" ]]; then
+    while read -r _name _need || [[ -n "$_name" ]]; do
+        [[ -z "$_name" ]] && continue
+        log "SKIPPED $_name - needs chassis >= $_need, this chassis is $CHASSIS_VERSION"
+        SKIPPED_PLUGINS="$SKIPPED_PLUGINS$_name:$_need "
+    done < "$SKIP_LIST_FILE"
+    log "Bump the chassis VERSION to install the skipped plugin(s)."
+fi
+rm -f "$SKIP_LIST_FILE"
+
 # --- atomic swap ------------------------------------------------------------
 previous=""
 if [[ -d "$PLUGINS_FETCH_ROOT" ]]; then
@@ -244,13 +316,9 @@ fi
 [[ -n "$previous" ]] && rm -rf "$previous"
 
 # --- write lockfile ---------------------------------------------------------
-CHASSIS_VERSION="unknown"
-for vf in "$CUSTOMER_HOME/chassis/chassis/VERSION" "$CHASSIS_ROOT/VERSION"; do
-    [[ -f "$vf" ]] && { CHASSIS_VERSION=$(<"$vf"); break; }
-done
-
 PIN_TAG="$PIN_TAG" PIN_SHA="$PIN_SHA" PLUGINS_REPO="$PLUGINS_REPO" \
 CHASSIS_VERSION="$CHASSIS_VERSION" FETCH_ROOT="$PLUGINS_FETCH_ROOT" \
+SKIPPED_PLUGINS="$SKIPPED_PLUGINS" \
 python3 - "$LOCK_FILE" <<'PY'
 import json, os, sys, datetime
 from pathlib import Path
@@ -276,6 +344,10 @@ lock = {
     "commit": sha,
     "fetched_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "chassis_version": os.environ["CHASSIS_VERSION"].strip(),
+    "skipped": [
+        {"name": e.split(":")[0], "min_chassis_version": e.split(":")[1]}
+        for e in os.environ.get("SKIPPED_PLUGINS", "").split() if ":" in e
+    ],
     "frozen": False,
     "plugins": plugins,
 }
