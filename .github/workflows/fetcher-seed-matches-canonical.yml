@@ -1,0 +1,43 @@
+name: fetcher-seed-matches-canonical
+
+# The chassis carries a seed copy of the plugin fetcher at
+# chassis/scripts/fetch-plugins.sh. Its own header states that
+# tools/fetch-plugins.sh in scrollinondubs/behalfbot-plugins is the source of
+# truth and the two must stay byte-identical.
+#
+# Until this workflow existed, that invariant held only by whoever remembered.
+# That is precisely the drift class behalfbot#53 was written to kill, one layer
+# down - so enforce it rather than document it.
+
+on:
+  pull_request:
+    paths:
+      - 'chassis/scripts/fetch-plugins.sh'
+      - '.github/workflows/fetcher-seed-matches-canonical.yml'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  diff-against-canonical:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch canonical fetcher from behalfbot-plugins
+        run: |
+          curl -fsSL \
+            https://raw.githubusercontent.com/scrollinondubs/behalfbot-plugins/main/tools/fetch-plugins.sh \
+            -o /tmp/canonical-fetch-plugins.sh
+
+      - name: Compare
+        run: |
+          if diff -u /tmp/canonical-fetch-plugins.sh chassis/scripts/fetch-plugins.sh; then
+            echo "Seed matches canonical."
+          else
+            echo ""
+            echo "::error::chassis/scripts/fetch-plugins.sh has drifted from the canonical copy in behalfbot-plugins."
+            echo "The canonical copy is tools/fetch-plugins.sh in scrollinondubs/behalfbot-plugins."
+            echo "Change it there first, then re-sync this seed byte-for-byte."
+            exit 1
+          fi
