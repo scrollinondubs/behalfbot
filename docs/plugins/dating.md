@@ -93,12 +93,12 @@ Three things must be in place before enabling:
 - **Android emulator** — a host GUI process (Android Studio / qemu), screen-attached, with adb-server listening on host:5037. The chassis container has no display, no adb-server, and can only reach the host's adb via a `tcp:host.docker.internal:5037` bridge — which gets the emulator state but not the rest of the stack.
 - **Playwright + Chromium** — Tinder runs through the Playwright web flow with a persistent browser profile. Bundling Chromium-on-arm64 into the chassis image is ~600MB of additional bloat for a single plugin.
 - **CLIP scorer + taste-refs / negative-refs** — the calibration engine (`scripts/score-calibrate.py`, `scripts/dating-reconcile.py`) reads / writes large ML model caches + reference image directories that live on the host filesystem.
-- **Sean's `~/Desktop/dating-swipes/seans-picks/` feedback loop** — installer hand-sorts screenshots into like/super-like/pass folders. The subagent reads those folders to update calibration. Mounting `~/Desktop` into the container would be a security-model regression.
-- **dating-context subagent skill bundle** — the cwd loads its own CLAUDE.md + skill files + sean-facts.md from the host's dating-context directory tree.
+- **The installer's hand-sorted picks feedback loop** (`${CHASSIS_HOME}/rhl-picks/` by default) - the installer sorts screenshots into like/super-like/pass folders and the subagent reads them to update calibration. Mounting a folder from the installer's host home directory into the container would be a security-model regression.
+- **dating-context subagent skill bundle** - the cwd loads its own CLAUDE.md + skill files + installer-facts.md from the host's dating-context directory tree.
 
 The chassis-runtime "everything in a container heartbeat" path doesn't fit. Dating is the canonical "fat-client plugin" tier: schedule via host launchd, fire `claude -p` against the dating subagent's cwd, let it use Keychain auth + full host filesystem. The dispatcher's other heartbeats stay in-container.
 
-Reference install (scrollinondubs/new-jaxity, post-2026-05-25 cutover):
+Reference install (<v1-reference-install>, post-2026-05-25 cutover):
 - `scheduled-tasks/com.<assistant>.dating-swipe-{1,2,3}.plist` — launchd plists fire 10:00 / 14:00 / 18:00 local.
 - `scripts/dating-swipe-host.sh` — wrapper script: 0-30 min random jitter (preserves the chassis dispatcher's anti-detection profile), `gather-dating-swipe.sh` gate, then `claude -p --max-budget-usd 6` with the dating-swipe-prompt against the dating-context cwd.
 - HEARTBEATS.md keeps the dating-swipe-N blocks HTML-commented (so the reconciler doesn't false-positive on staleness) with an inline pointer to the host launchd jobs.
@@ -187,8 +187,8 @@ The plugin extracts the architectural pattern only — installer-personal data f
 - The V1 installer's specific Hinge profile, voice prompt, age, height, neighborhood, character preferences, vision board photos
 - Specific city venues, GPS coords, neighborhood rotation lists
 - Hard-coded Discord channel IDs (replaced with `${SOCIAL_CHANNEL_ID}` placeholder)
-- Memory entries from the V1 install (lead:darina, lead:eva, etc.)
-- Specific match incidents (Eva catfish, Jacqueline catfish, Whitney GO DARK, etc.)
+- Memory entries from the V1 install (the per-match `lead:` entities and their observation history)
+- Specific match incidents from the V1 install (confirmed-catfish cases where a photo set reverse-imaged to an unrelated person, matches marked GO DARK, and the rest of the per-match history)
 - The local CLIP face scorer + taste references (installer must build their own at install time — face-aesthetic preference is fundamentally per-installer)
 
 Each installer authors their own `installer-facts.md`, builds their own taste references if they enable the face scorer, and accumulates their own pending-instructions / cleared-matches state over time.

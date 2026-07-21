@@ -46,8 +46,8 @@ Catfish keyword markers (in site titles):
 
 High-suspicion domains (direct hit → RED):
     onlyfans.com, leakedmodels.com, thothub.tv, aznude.com, wikifeet.com,
-    bellazon.com, fapello.com, plus Russian / Eastern-European escort
-    aggregators. Match is exact-or-subdomain.
+    bellazon.com, fapello.com, plus known escort-directory and
+    catfish-marketplace aggregators. Match is exact-or-subdomain.
 
 Low-suspicion filter (excluded from "distinct names" count):
     bbc.com, freepik.com, pinterest.com, xwhos.com, toolify.ai,
@@ -102,7 +102,8 @@ HIGH_SUSPICION_DOMAINS = (
     "aznude.com", "wikifeet.com", "bellazon.com", "thothd.com",
     "adultgallery.com", "fapello.com", "thotvideos.com", "scoreland.com",
     "yespornpics.com", "pornpics.com", "sxyprn.com", "eroticbeauties.net",
-    # Russian / Eastern-European catfish-marketplace + escort aggregators
+    # Escort-directory + catfish-marketplace aggregators where stolen photo
+    # sets recirculate
     "rusescort.com", "putana.org", "escort-russia.com",
 )
 LOW_SUSPICION_DOMAINS = (
@@ -119,7 +120,7 @@ LOW_SUSPICION_DOMAINS = (
     "imdb.com", "xwhos.com", "themoviedb.org",
     # Tech tutorials / blog content
     "toolify.ai", "iphonephotographyschool.com", "caraqu.com",
-    # Russian shopping / general e-commerce (false positives we hit a lot)
+    # General e-commerce (frequent visual-similarity false positives)
     "usadostavka.ru", "ozon.ru", "wildberries.ru",
 )
 # Stop-words and noise patterns we strip before counting "distinct names".
@@ -967,7 +968,7 @@ def run_verification(name: str, platform: str, photos: list[Path], output_root: 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify a dating-match profile photo via reverse image search.")
-    parser.add_argument("--name", required=True, help="Match's first name (e.g. 'Eva')")
+    parser.add_argument("--name", required=True, help="Match's first name (e.g. 'Jane')")
     parser.add_argument("--platform", required=True, help="Dating platform (tinder/hinge/bumble)")
     parser.add_argument("--photo", help="Path to a single profile photo")
     parser.add_argument("--photos", nargs="+", help="Paths to multiple profile photos (uses first as primary)")

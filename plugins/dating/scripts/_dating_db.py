@@ -4,7 +4,7 @@
 Ported from <v1-reference-install> PR #522. Chassis adaptations vs <v1-reference-install> source:
   - imports _chassis_db from plugins/dating/scripts/ (not from scripts/)
   - BEHALFBOT_PG_DSN env var used by _chassis_db (CHASSIS_PG_DSN accepted as V1-compat alias)
-  - No Sean-specific data; installer-neutral
+  - No installer-specific personal data; installer-neutral
 
 Public API
 ----------
