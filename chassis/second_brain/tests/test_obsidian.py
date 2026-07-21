@@ -32,6 +32,7 @@ from chassis.second_brain.obsidian import (  # noqa: E402
     ObsidianError,
     ObsidianNotes,
     ObsidianReadOnlyError,
+    _strip_frontmatter,
 )
 
 
@@ -207,6 +208,194 @@ class TestReadOnlyVault(ObsidianVaultTestCase):
         self.assertFalse((self.vault / "Scratch.md").exists())
 
 
+_TEMPLATER_NOTE = (
+    "---\n"
+    "created: <% tp.date.now() %>\n"
+    "tags:\n"
+    "  - notary\n"
+    "  - templater\n"
+    "---\n"
+    "\n"
+    "Body about the notary appointment.\n"
+    "\n"
+    "```dataview\n"
+    "LIST FROM #notary\n"
+    "```\n"
+)
+
+
+class TestStripFrontmatter(unittest.TestCase):
+    def test_strips_leading_fence(self):
+        self.assertEqual(
+            _strip_frontmatter("---\ntags: [a]\n---\nbody line\n"),
+            "body line\n",
+        )
+
+    def test_no_frontmatter_untouched(self):
+        self.assertEqual(_strip_frontmatter("plain body\n"), "plain body\n")
+
+    def test_unterminated_fence_untouched(self):
+        # Guessing where an unterminated fence ends risks eating body content.
+        text = "---\ntags: [a]\nno closing fence\n"
+        self.assertEqual(_strip_frontmatter(text), text)
+
+    def test_templater_syntax_inside_fence_is_skipped_verbatim(self):
+        body = _strip_frontmatter(_TEMPLATER_NOTE)
+        self.assertTrue(body.startswith("Body about the notary"))
+        self.assertNotIn("tp.date.now", body)
+        # The dataview block is BODY content and must survive.
+        self.assertIn("```dataview", body)
+
+    def test_dots_closing_delimiter(self):
+        self.assertEqual(_strip_frontmatter("---\na: 1\n...\nbody\n"), "body\n")
+
+    def test_mid_document_rules_not_treated_as_frontmatter(self):
+        text = "intro\n---\nnot frontmatter\n---\nmore\n"
+        self.assertEqual(_strip_frontmatter(text), text)
+
+
+class TestFrontmatterEmit(ObsidianVaultTestCase):
+    def _fm_notes(self, **kwargs) -> ObsidianNotes:
+        return ObsidianNotes(str(self.vault), frontmatter=True, **kwargs)
+
+    def test_create_doc_emits_created_and_tags(self):
+        notes = self._fm_notes(frontmatter_tags="jax, briefing")
+        doc_id = notes.create_doc("Briefings/", "2026-07-21", "# Today\n")
+        raw = notes.read_doc(doc_id)
+        self.assertTrue(raw.startswith("---\ncreated: "))
+        self.assertIn("tags:\n  - jax\n  - briefing\n", raw)
+        # Frontmatter closes and the body survives below it.
+        self.assertIn("---\n\n# Today\n", raw)
+
+    def test_tags_accept_a_real_list_too(self):
+        notes = self._fm_notes(frontmatter_tags=["a", "b"])
+        raw = notes.read_doc(notes.create_doc("", "Listy", "body"))
+        self.assertIn("  - a\n  - b\n", raw)
+
+    def test_no_tags_config_omits_tags_key(self):
+        raw = self._fm_notes().read_doc(self._fm_notes().create_doc("", "NoTags", "body"))
+        self.assertIn("created: ", raw)
+        self.assertNotIn("tags:", raw)
+
+    def test_disabled_by_default(self):
+        doc_id = self.notes.create_doc("", "Plain", "just the body\n")
+        self.assertEqual(self.notes.read_doc(doc_id), "just the body\n")
+
+    def test_body_with_own_frontmatter_is_not_double_wrapped(self):
+        # A caller (or template) that already supplies frontmatter wins - the
+        # adapter must never stack a second fence on top.
+        notes = self._fm_notes(frontmatter_tags="jax")
+        doc_id = notes.create_doc("", "OwnFm", _TEMPLATER_NOTE)
+        raw = notes.read_doc(doc_id)
+        self.assertEqual(raw, _TEMPLATER_NOTE)
+        self.assertNotIn("created: 2", raw.split("---")[1])
+
+    def test_append_never_adds_frontmatter(self):
+        notes = self._fm_notes(frontmatter_tags="jax")
+        notes.append_to_doc("Inbox.md", "appended line\n")
+        body = notes.read_doc("Inbox.md")
+        self.assertTrue(body.endswith("appended line\n"))
+        self.assertNotIn("---", body)
+
+
+class TestFrontmatterStrippedFromSnippets(ObsidianVaultTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        (self.vault / "Templated.md").write_text(_TEMPLATER_NOTE, encoding="utf-8")
+
+    def test_search_snippet_excludes_frontmatter(self):
+        hits = [h for h in self.notes.search("notary appointment") if h.id == "Templated.md"]
+        self.assertEqual(len(hits), 1)
+        self.assertNotIn("tp.date.now", hits[0].snippet)
+        self.assertNotIn("---", hits[0].snippet)
+        self.assertIn("notary appointment", hits[0].snippet)
+
+    def test_frontmatter_only_match_still_returns_the_note(self):
+        # 'templater' appears ONLY inside the frontmatter (as a tag). The note
+        # must still be findable; the snippet falls back to the body head.
+        hits = [h for h in self.notes.search("templater") if h.id == "Templated.md"]
+        self.assertEqual(len(hits), 1)
+        self.assertTrue(hits[0].snippet.startswith("Body about the notary"))
+        self.assertGreater(hits[0].score, 0.0)
+
+    def test_search_does_not_corrupt_the_note(self):
+        self.notes.search("notary")
+        self.assertEqual(
+            (self.vault / "Templated.md").read_text(encoding="utf-8"), _TEMPLATER_NOTE
+        )
+
+    def test_list_recent_snippet_excludes_frontmatter(self):
+        from datetime import datetime, timedelta
+
+        hits = self.notes.list_recent(
+            since=datetime.now() - timedelta(hours=1),
+            until=datetime.now() + timedelta(hours=1),
+            limit=50,
+        )
+        templated = [h for h in hits if h.id == "Templated.md"]
+        self.assertEqual(len(templated), 1)
+        self.assertTrue(templated[0].snippet.startswith("Body about the notary"))
+        self.assertNotIn("---", templated[0].snippet)
+
+
+class TestDailyNotes(ObsidianVaultTestCase):
+    def _daily_notes(self, **kwargs) -> ObsidianNotes:
+        return ObsidianNotes(str(self.vault), daily_notes_dir="Journal/Daily", **kwargs)
+
+    def test_daily_note_id_uses_configured_dir_and_date_format(self):
+        from datetime import date
+
+        notes = self._daily_notes()
+        self.assertEqual(notes.daily_note_id(date(2026, 7, 21)), "Journal/Daily/2026-07-21.md")
+
+    def test_daily_note_id_defaults_to_today(self):
+        from datetime import datetime
+
+        notes = self._daily_notes()
+        today = datetime.now().date().strftime("%Y-%m-%d")
+        self.assertEqual(notes.daily_note_id(), f"Journal/Daily/{today}.md")
+
+    def test_daily_note_id_without_dir_lands_in_vault_root(self):
+        from datetime import date
+
+        self.assertEqual(self.notes.daily_note_id(date(2026, 7, 21)), "2026-07-21.md")
+
+    def test_append_creates_then_appends(self):
+        from datetime import date
+
+        notes = self._daily_notes()
+        day = date(2026, 7, 21)
+        doc_id = notes.append_to_daily_note("- first entry\n", day)
+        self.assertEqual(doc_id, "Journal/Daily/2026-07-21.md")
+        self.assertEqual(notes.read_doc(doc_id), "- first entry\n")
+
+        doc_id_2 = notes.append_to_daily_note("- second entry\n", day)
+        self.assertEqual(doc_id_2, doc_id)
+        body = notes.read_doc(doc_id)
+        self.assertIn("- first entry\n", body)
+        self.assertTrue(body.endswith("- second entry\n"))
+
+    def test_created_daily_note_gets_frontmatter_when_enabled(self):
+        from datetime import date
+
+        notes = self._daily_notes(frontmatter=True, frontmatter_tags="daily")
+        doc_id = notes.append_to_daily_note("- entry\n", date(2026, 7, 21))
+        raw = notes.read_doc(doc_id)
+        self.assertTrue(raw.startswith("---\ncreated: "))
+        self.assertIn("  - daily\n", raw)
+        self.assertTrue(raw.endswith("- entry\n"))
+
+    def test_read_only_vault_refuses_daily_note_write(self):
+        from datetime import date
+
+        notes = ObsidianNotes(
+            str(self.vault), read_only=True, daily_notes_dir="Journal/Daily"
+        )
+        with self.assertRaises(ObsidianReadOnlyError):
+            notes.append_to_daily_note("- entry\n", date(2026, 7, 21))
+        self.assertFalse((self.vault / "Journal").exists())
+
+
 class TestPathTraversal(ObsidianVaultTestCase):
     def test_read_traversal_rejected(self):
         with self.assertRaises(ObsidianError) as ctx:
@@ -253,6 +442,35 @@ class TestFactory(ObsidianVaultTestCase):
         adapter = get_adapter(self._write_config("    read_only: true\n"))
         with self.assertRaises(ObsidianReadOnlyError):
             adapter.notes.create_doc("", "Scratch", "body")
+
+    def test_factory_passes_frontmatter_config_through(self):
+        adapter = get_adapter(
+            self._write_config(
+                "    frontmatter: true\n"
+                "    frontmatter_tags: jax, briefing\n"
+            )
+        )
+        doc_id = adapter.notes.create_doc("", "FromFactory", "body")
+        raw = adapter.notes.read_doc(doc_id)
+        self.assertTrue(raw.startswith("---\ncreated: "))
+        self.assertIn("  - jax\n  - briefing\n", raw)
+
+    def test_factory_passes_daily_notes_dir_through(self):
+        from datetime import date
+
+        adapter = get_adapter(self._write_config("    daily_notes_dir: Journal/Daily\n"))
+        self.assertEqual(
+            adapter.notes.daily_note_id(date(2026, 7, 21)),
+            "Journal/Daily/2026-07-21.md",
+        )
+
+    def test_factory_defaults_leave_frontmatter_off_and_daily_dir_root(self):
+        from datetime import date
+
+        adapter = get_adapter(self._write_config())
+        doc_id = adapter.notes.create_doc("", "Defaults", "plain body\n")
+        self.assertEqual(adapter.notes.read_doc(doc_id), "plain body\n")
+        self.assertEqual(adapter.notes.daily_note_id(date(2026, 7, 21)), "2026-07-21.md")
 
     def test_factory_unknown_backend_lists_all_three(self):
         config = self._tmp / "chassis.config.yaml"

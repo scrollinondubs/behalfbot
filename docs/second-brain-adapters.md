@@ -98,6 +98,12 @@ second_brain:
     active_database: lp_crm                             # default for upsert/query
 ```
 
+**Large documents are chunked.** Notion caps block children at 100 per request and rich_text content at 2000 chars per field ([request limits](https://developers.notion.com/reference/request-limits)); before chunking, any document over ~100 non-empty lines - every morning briefing - was an opaque HTTP 400. `create_doc` now sends the first 100 blocks with the page create and appends the rest in sequential 100-block PATCH chunks; `append_to_doc` chunks the same way. Lines over 2000 chars split across multiple rich_text parts inside one paragraph (rendered seamlessly, nothing truncated) up to Notion's 100-parts-per-block ceiling.
+
+**Chunked writes are NOT atomic.** Notion has no batch transaction, so a failure partway leaves a half-written page. The adapter leaves partial content in place (a rollback delete can itself fail, and on `append_to_doc` the adapter cannot tell its own blocks from pre-existing ones) and raises `NotionPartialWriteError` - a `NotionError` subclass carrying `doc_id`, `chunks_written`, `chunks_total`, with a message stating exactly how many chunks landed. Retry by sending only the remaining content; blindly re-sending the full body duplicates what already landed.
+
+**429s are retried, bounded.** Notion allows ~3 requests/second per integration, and chunked writes plus `list_recent` scans will trip that. `_request` retries HTTP 429 up to 5 times, honouring the `Retry-After` header (seconds or HTTP-date, capped at 30s per sleep; linear backoff fallback when absent), then gives up with an error naming the attempt count. Retrying a 429 is safe even for writes - Notion's limiter rejects the request before executing it, so a rate-limited append never half-landed. Network errors and 5xx are deliberately NOT retried: there the write may have been applied before the failure surfaced, and a blind retry double-writes.
+
 ### Obsidian
 
 ```yaml
@@ -107,11 +113,24 @@ second_brain:
     vault_path: /home/hugues/second-brain   # absolute path to the vault root
     vault_name: second-brain                 # for obsidian:// deeplinks; defaults to the directory name
     read_only: true                          # pull-only vault clone (e.g. read-only deploy key)
+    frontmatter: false                       # emit YAML frontmatter (created, tags) on create_doc
+    frontmatter_tags: jax, briefing          # tags for emitted frontmatter (YAML list under PyYAML,
+                                             # comma-separated string under the fallback parser)
+    daily_notes_dir: Journal/Daily           # where YYYY-MM-DD.md daily notes live; unset = vault root
 ```
 
 Doc ids are vault-relative paths (`Briefings/2026-07-09.md`; the `.md` suffix is optional on input). `create_doc` treats `parent` as a vault-relative directory and empty `parent` as the vault root. No Obsidian process or plugin is required - the adapter reads and writes the vault files directly.
 
 Read-only vaults are first-class: with `read_only: true`, or when the filesystem itself denies writes (pull-only git clone through a read-only deploy key), `create_doc` / `append_to_doc` raise `ObsidianReadOnlyError` naming the cause. Config states intent, the filesystem states truth - a write is refused if either side blocks it, and the error says which. Writes that do proceed are atomic (temp file + rename), doc ids that resolve outside the vault root are rejected, and `create_doc` refuses to overwrite an existing note.
+
+**Frontmatter** is opt-in and conservative. With `frontmatter: true`, `create_doc` prepends a YAML fence carrying `created` (local-time ISO-8601) and the configured `frontmatter_tags` - but ONLY when the body does not already start with a `---` fence, so a caller- or template-supplied fence always wins and is never double-wrapped. Appends never touch frontmatter, and the adapter never rewrites existing notes - Templater syntax and Dataview blocks in a real vault pass through untouched. On the read side, `search` and `list_recent` build their SNIPPETS from the frontmatter-stripped body (no more YAML noise at the top of every hit), while matching still runs against the full text so a query that hits only a tag still finds the note (scored 0.5, below a body match). `read_doc` always returns the raw file verbatim. Stripping only happens when the note starts with a `---` line and a closing `---`/`...` line exists (Obsidian's own definition); an unterminated fence is returned unchanged rather than guessed at.
+
+**Daily notes** follow the Daily Notes plugin's default `YYYY-MM-DD.md` convention. `second_brain.obsidian.daily_notes_dir` names the folder the plugin is configured to use (unset = vault root). Two helpers on `ObsidianNotes`:
+
+- `daily_note_id(day=None)` - the doc id for a given date (default today, local time), e.g. `Journal/Daily/2026-07-21.md`.
+- `append_to_daily_note(content, day=None)` - append to the daily note, creating it first (with frontmatter, when enabled) if it does not exist yet. Returns the doc id. This is the call briefing and daily-log writers should use - they cannot know whether today's note exists.
+
+Custom plugin date formats (anything other than `YYYY-MM-DD`) are not supported - that is a Phase 2 config key if an install needs it.
 
 `${VAR}` references resolve against `os.environ` at import time; chassis bootstrap loads `.env` before any plugin imports the adapter.
 
@@ -236,13 +255,14 @@ The `NotesAdapter` and `DatabaseAdapter` Protocols live in `chassis/second_brain
 - Raise the appropriate adapter-error subclass (e.g. `SiYuanError`, `NotionError`) on backend failures, not bare `Exception`.
 - Return real ids / urls — never empty strings on success.
 - Treat empty `parent` in `create_doc` as a signal to use the configured default (`notes_root` for Notion, hpath="/" for SiYuan).
-- Truncate single-line content over the backend's hard limit (Notion: 2000 chars per text block) rather than failing.
+- Survive content over the backend's hard limits rather than failing: Notion splits >2000-char lines across rich_text parts and chunks >100-block documents across sequential requests. Truncation is a last resort reserved for pathological input (a single line over 200k chars).
 
 The `SearchHit` dataclass is the canonical return shape for both `notes.search` and `database.query`. Adapters MAY put backend-specific extras under `raw` for callers that need them.
 
 ## V1 caveats
 
 - **No simultaneous writes.** One backend per install. Migration tools (e.g. SiYuan→Notion bulk migration for an installer who switches) are V2.
+- **Notion `read_doc` returns the first 100 blocks only.** Chunked writes mean pages can now exceed 100 blocks, but `read_doc` still fetches a single unpaginated children page. Paginated + recursive read is Phase 2; until then a briefing written in 3 chunks reads back truncated.
 - **Markdown↔block fidelity is paragraph-only in Notion adapter V1.** Headings + lists are read out cleanly but `create_doc` writes everything as paragraph blocks. Heading/list parsing is a follow-up — current <v1-reference-install> briefings render as plain prose in SiYuan, so feature-parity is preserved.
 - **Notion `database.query` filters are `equals`-only on rich_text properties.** Numeric/date filters land in the follow-up; the natural-key upsert flow only needs equality.
 - **Notion property type inference is heuristic.** For exact schema fidelity, callers can pass already-shaped Notion property dicts under the `_raw_properties` key (passes through verbatim).

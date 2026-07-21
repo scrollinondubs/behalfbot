@@ -24,12 +24,24 @@ Config (chassis.config.yaml):
         vault_path: /home/user/second-brain   # absolute path to the vault root
         vault_name: second-brain               # for obsidian:// deeplinks; defaults to the directory name
         read_only: false                       # true for pull-only vault clones
+        frontmatter: false                     # emit YAML frontmatter (created, tags) on create_doc
+        frontmatter_tags: jax, briefing        # tags for emitted frontmatter (list under PyYAML,
+                                               # comma-separated string under the fallback parser)
+        daily_notes_dir: Journal/Daily         # where YYYY-MM-DD.md daily notes live ('' = vault root)
+
+Frontmatter handling is deliberately conservative: the adapter only ever
+PREPENDS frontmatter to documents it creates itself, and only when the body
+does not already start with a `---` fence. It never rewrites existing notes,
+so Templater syntax, Dataview blocks, and hand-written frontmatter in a real
+vault are never touched. On read, frontmatter is stripped from search /
+list_recent SNIPPETS only - `read_doc` always returns the raw file verbatim.
 """
 
 from __future__ import annotations
 
 import os
 import tempfile
+from datetime import date as _date
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
@@ -45,6 +57,45 @@ from chassis.second_brain.base import (
 _SKIP_DIRS = {".obsidian", ".git", ".trash", ".github"}
 
 _SNIPPET_LEN = 200
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Return the body with a leading YAML frontmatter fence removed.
+
+    Only strips when the note STARTS with a `---` line and a closing `---` (or
+    `...`) line exists - Obsidian's own definition of frontmatter. An
+    unterminated fence returns the text unchanged: guessing where frontmatter
+    ends risks eating body content. Templater/Dataview syntax inside the fence
+    is irrelevant here - everything up to the closing delimiter is skipped
+    verbatim, never parsed.
+
+    Display-only: used for search/list_recent snippets. Files on disk are
+    never rewritten through this.
+    """
+    if not text.startswith("---"):
+        return text
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].strip() != "---":
+        return text
+    for index in range(1, len(lines)):
+        if lines[index].strip() in ("---", "..."):
+            return "".join(lines[index + 1 :]).lstrip("\n")
+    return text
+
+
+def _split_tags(raw: object) -> tuple[str, ...]:
+    """Normalize a tags config value to a tuple of non-empty strings.
+
+    Accepts a YAML list (PyYAML path) or a comma-separated string (the
+    minimal fallback parser in factory.py cannot represent lists).
+    """
+    if raw is None:
+        return ()
+    if isinstance(raw, str):
+        return tuple(tag.strip() for tag in raw.split(",") if tag.strip())
+    if isinstance(raw, (list, tuple)):
+        return tuple(str(tag).strip() for tag in raw if str(tag).strip())
+    return ()
 
 
 class ObsidianError(RuntimeError):
@@ -65,6 +116,9 @@ class ObsidianNotes(NotesAdapter):
         vault_path: str,
         vault_name: str | None = None,
         read_only: bool = False,
+        frontmatter: bool = False,
+        frontmatter_tags: object = None,
+        daily_notes_dir: str = "",
     ) -> None:
         if not vault_path:
             raise ObsidianError(
@@ -78,6 +132,9 @@ class ObsidianNotes(NotesAdapter):
             )
         self._vault_name = vault_name or self._vault.name
         self._read_only = read_only
+        self._frontmatter = frontmatter
+        self._frontmatter_tags = _split_tags(frontmatter_tags)
+        self._daily_notes_dir = (daily_notes_dir or "").strip().strip("/")
 
     # -- path safety ---------------------------------------------------------
 
@@ -157,6 +214,23 @@ class ObsidianNotes(NotesAdapter):
                 pass
             raise
 
+    # -- frontmatter ---------------------------------------------------------
+
+    def _compose_frontmatter(self) -> str:
+        """YAML frontmatter block for adapter-created notes.
+
+        Emitted only when `frontmatter: true` in config and only on
+        create_doc for bodies that do not already start with a `---` fence -
+        never merged into existing frontmatter, never applied to appends.
+        """
+        created = datetime.now().astimezone().isoformat(timespec="seconds")
+        lines = ["---", f"created: {created}"]
+        if self._frontmatter_tags:
+            lines.append("tags:")
+            lines.extend(f"  - {tag}" for tag in self._frontmatter_tags)
+        lines.append("---")
+        return "\n".join(lines) + "\n\n"
+
     # -- NotesAdapter --------------------------------------------------------
 
     def create_doc(self, parent: str, title: str, body: str) -> str:
@@ -172,6 +246,8 @@ class ObsidianNotes(NotesAdapter):
                 f"refusing to overwrite. Use append_to_doc to add to it."
             )
         self._ensure_writable("create_doc", target.parent)
+        if self._frontmatter and not body.startswith("---"):
+            body = self._compose_frontmatter() + body
         target.parent.mkdir(parents=True, exist_ok=True)
         self._atomic_write(target, body)
         return self._rel_id(target)
@@ -194,6 +270,38 @@ class ObsidianNotes(NotesAdapter):
                 f"read_doc: doc {doc_id!r} not found in vault {str(self._vault)!r}."
             )
         return target.read_text(encoding="utf-8")
+
+    # -- daily notes ---------------------------------------------------------
+
+    def daily_note_id(self, day: _date | None = None) -> str:
+        """Doc id of the daily note for `day` (default: today, local time).
+
+        Follows the Daily Notes plugin's default `YYYY-MM-DD.md` convention
+        under `second_brain.obsidian.daily_notes_dir` (vault root when the key
+        is unset). Custom plugin date formats are not supported - installs
+        that renamed the format need a Phase 2 config key.
+        """
+        chosen = day or datetime.now().date()
+        name = chosen.strftime("%Y-%m-%d")
+        if self._daily_notes_dir:
+            return f"{self._daily_notes_dir}/{name}.md"
+        return f"{name}.md"
+
+    def append_to_daily_note(self, content: str, day: _date | None = None) -> str:
+        """Append `content` to the daily note, creating it if absent.
+
+        The create/append seam other callers have to handle themselves is
+        folded in here because it is THE daily-note usage pattern: briefing
+        and daily-log writers do not care whether today's note exists yet.
+        Returns the doc id either way.
+        """
+        doc_id = self.daily_note_id(day)
+        target = self._resolve(doc_id)
+        if target.is_file():
+            self.append_to_doc(doc_id, content)
+            return doc_id
+        chosen = day or datetime.now().date()
+        return self.create_doc(self._daily_notes_dir, chosen.strftime("%Y-%m-%d"), content)
 
     def get_deeplink(self, doc_id: str) -> str:
         rel = self._rel_id(self._resolve(doc_id))
@@ -221,17 +329,26 @@ class ObsidianNotes(NotesAdapter):
                 text = path.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
                 continue
+            # Match against the full text (so a query hitting only frontmatter
+            # - e.g. a tag - still finds the note), but build snippets from
+            # the frontmatter-stripped body so they show prose, not YAML noise.
+            body = _strip_frontmatter(text)
             name_match = needle in path.stem.lower()
-            body_index = text.lower().find(needle)
-            if not name_match and body_index < 0:
+            body_index = body.lower().find(needle)
+            frontmatter_match = body_index < 0 and needle in text.lower()
+            if not name_match and body_index < 0 and not frontmatter_match:
                 continue
             if body_index >= 0:
                 start = max(0, body_index - 60)
-                snippet = text[start : start + _SNIPPET_LEN].strip()
+                snippet = body[start : start + _SNIPPET_LEN].strip()
             else:
-                snippet = text[:_SNIPPET_LEN].strip()
+                snippet = body[:_SNIPPET_LEN].strip()
             rel = self._rel_id(path)
-            score = (2.0 if name_match else 0.0) + (1.0 if body_index >= 0 else 0.0)
+            score = (
+                (2.0 if name_match else 0.0)
+                + (1.0 if body_index >= 0 else 0.0)
+                + (0.5 if frontmatter_match else 0.0)
+            )
             hits.append(
                 SearchHit(
                     id=rel,
@@ -285,7 +402,7 @@ class ObsidianNotes(NotesAdapter):
         hits: list[SearchHit] = []
         for mtime, size, path in candidates[: int(limit)]:
             try:
-                snippet = path.read_text(encoding="utf-8")[:_SNIPPET_LEN].strip()
+                snippet = _strip_frontmatter(path.read_text(encoding="utf-8"))[:_SNIPPET_LEN].strip()
             except (OSError, UnicodeDecodeError):
                 snippet = ""
             rel = self._rel_id(path)
@@ -309,6 +426,16 @@ class ObsidianAdapter(SecondBrainAdapter):
         vault_path: str,
         vault_name: str | None = None,
         read_only: bool = False,
+        frontmatter: bool = False,
+        frontmatter_tags: object = None,
+        daily_notes_dir: str = "",
     ) -> None:
-        self.notes = ObsidianNotes(vault_path, vault_name, read_only)
+        self.notes = ObsidianNotes(
+            vault_path,
+            vault_name,
+            read_only,
+            frontmatter=frontmatter,
+            frontmatter_tags=frontmatter_tags,
+            daily_notes_dir=daily_notes_dir,
+        )
         self.database = NotImplementedDatabase("obsidian")

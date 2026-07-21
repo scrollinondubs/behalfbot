@@ -291,6 +291,12 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
             vault_path=_resolve_env(backend_config.get("vault_path", "")),
             vault_name=_resolve_env(backend_config.get("vault_name", "")) or None,
             read_only=bool(backend_config.get("read_only", False)),
+            # Frontmatter emit is opt-in; tags may arrive as a YAML list
+            # (PyYAML) or a comma-separated string (the minimal fallback
+            # parser cannot represent lists) - the adapter normalizes both.
+            frontmatter=bool(backend_config.get("frontmatter", False)),
+            frontmatter_tags=backend_config.get("frontmatter_tags"),
+            daily_notes_dir=_first_set(backend_config.get("daily_notes_dir")),
         )
     raise ValueError(
         f"Unsupported second_brain.backend={backend!r}. "
