@@ -18,6 +18,10 @@ on:
       - 'chassis/scripts/resolve-plugin-root.sh'
       - 'chassis/scripts/test-plugin-root-resolution.sh'
       - 'docker/entrypoint.sh'
+      - 'plugins/dating/scripts/emulator-state.sh'
+      - 'plugins/dating/scripts/gather-dating-swipe.sh'
+      - 'plugins/dating/scheduled-tasks/recovery-hooks.d/dating-emulator-recovery.sh'
+      - 'plugins/dating/tests/test-emulator-state.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -29,6 +33,10 @@ on:
       - 'chassis/scripts/resolve-plugin-root.sh'
       - 'chassis/scripts/test-plugin-root-resolution.sh'
       - 'docker/entrypoint.sh'
+      - 'plugins/dating/scripts/emulator-state.sh'
+      - 'plugins/dating/scripts/gather-dating-swipe.sh'
+      - 'plugins/dating/scheduled-tasks/recovery-hooks.d/dating-emulator-recovery.sh'
+      - 'plugins/dating/tests/test-emulator-state.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
@@ -48,3 +56,14 @@ jobs:
       # resolved plugin root actually serves fetched plugins when a fetched
       # tree is present. No docker daemon, runs against temp dirs.
       - run: bash chassis/scripts/test-plugin-root-resolution.sh
+
+  dating-emulator-state:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for the RUNNING_LOCKED blind spot: a PIN-locked
+      # AVD passes every legacy readiness signal while unable to launch any
+      # app. The suite stubs adb on PATH and proves the probe distinguishes
+      # locked from unlocked, the gather reports emulator_locked instead of
+      # ready, and the recovery hook unlocks rather than restart-looping.
+      - run: bash plugins/dating/tests/test-emulator-state.sh

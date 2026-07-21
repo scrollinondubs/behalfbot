@@ -111,6 +111,17 @@
           "spoofed_lon": {
             "type": "number",
             "description": "GPS-spoof longitude. Same constraint as spoofed_lat."
+          },
+          "pin_env_var": {
+            "type": "string",
+            "description": "NAME of the environment variable holding the AVD's lock-screen PIN - not the PIN itself. The installer wires the named var to whatever their secret store is (Vaultwarden, 1Password, keychain, .env). The PIN never lives in config, the repo, or logs. Required whenever the AVD has a lock-screen PIN: a PIN-locked AVD cold-boots into user state RUNNING_LOCKED, where no credential-encrypted app can launch, and the recovery hook unlocks it as part of readiness. If the device is locked and the named var is unset, readiness reports emulator_locked and recovery fails loudly naming the var - it never silently skips, never restarts (a restart boots straight back to the lock screen), and NEVER wipes (wipe-data logs the installer out of every dating app).",
+            "default": "DATING_EMULATOR_PIN"
+          },
+          "required_packages": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Package names that must resolve a launcher activity (`cmd package resolve-activity --brief`) before the device counts as ready. Surfaced to scripts as the space-separated env var DATING_EMULATOR_REQUIRED_PACKAGES. This is the check that catches RUNNING_LOCKED: on a locked device the packages are installed (`pm list packages` passes) but resolve no activities. List every enabled platform's package, e.g. co.hinge.app, com.bumble.app, com.tinder.",
+            "default": ["co.hinge.app"]
           }
         }
       },

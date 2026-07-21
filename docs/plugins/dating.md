@@ -36,6 +36,9 @@ modules:
       avd_name: Dating_Pixel
       spoofed_lat: <installer's local-city lat>     # NEVER home coords
       spoofed_lon: <installer's local-city lon>     # NEVER home coords
+      pin_env_var: DATING_EMULATOR_PIN    # NAME of the env var holding the lock-screen PIN - never the PIN itself
+      required_packages:                  # every enabled platform's package - readiness requires each to
+        - co.hinge.app                    # resolve a launcher activity (catches RUNNING_LOCKED)
     safety_floor:
       photo_verification:
         mode: reply_gated
@@ -82,7 +85,7 @@ Three things must be in place before enabling:
    ${CHASSIS_HOME}/.venv-dating/bin/playwright install chromium
    ```
 
-6. **Android emulator + ADB** for any platform whose transport is `android_emulator`. Create the AVD at install time, name it per the manifest, and configure GPS spoofing to your local-city coordinates (NEVER home coords).
+6. **Android emulator + ADB** for any platform whose transport is `android_emulator`. Create the AVD at install time, name it per the manifest, and configure GPS spoofing to your local-city coordinates (NEVER home coords). **If the AVD has a lock-screen PIN**, wire the env var named by `emulator.pin_env_var` (default `DATING_EMULATOR_PIN`) to your secret store - a PIN-locked AVD cold-boots into `RUNNING_LOCKED`, where no dating app can launch, and the recovery hook needs the PIN to unlock it. The PIN value never goes in config, the repo, or logs.
 
 7. **Angel Protocol plugin enabled** (or accept that all in-person meet proposals will deflect to video until you do — the safety floor is hard-wired). Currently scaffold-only; see `docs/plugins/angel-protocol.md`.
 
@@ -157,12 +160,25 @@ Wrapper script `scripts/verify-match.sh` activates the dedicated venv and shells
 
 ## Recovery hook
 
-`scheduled-tasks/recovery-hooks.d/dating-emulator-recovery.sh` registers `chassis_recovery_dating_emulator()` — a self-healing watchdog the chassis heartbeat dispatcher calls every 15 minutes. It:
+`scheduled-tasks/recovery-hooks.d/dating-emulator-recovery.sh` registers `chassis_recovery_dating_emulator()` - a self-healing watchdog the chassis heartbeat dispatcher calls every 15 minutes. It:
 
 - Respects the `EMULATOR_PAUSE` flag (a file in this plugin directory)
 - Skips silently if the emulator is already ready
+- Probes device state through `scripts/emulator-state.sh` and picks the remedy per machine-readable state token - the remedies are opposite, so states are never collapsed:
+  - `emulator_not_running` / `emulator_not_booted` - start / restart
+  - `emulator_locked` - PIN unlock in place; a restart only boots a PIN-locked AVD straight back to the lock screen
+  - `emulator_no_focus` / `emulator_apps_unresolvable` - restart, but only after the signal persists across two samples
+- Unlocks a `RUNNING_LOCKED` device using the PIN from the env var named by `emulator.pin_env_var`. If the device is locked and that var is unset, the hook fails loudly naming the var - it never silently skips and never reports ready
+- Stands down entirely while a PIN unlock is in flight (unlock produces transient bad readings - null focus, 0-byte screencap - and killing qemu mid-unlock throws the unlock away)
+- **Never wipes.** `-wipe-data` clears a lock but logs the installer out of every dating app, each requiring manual GUI re-auth. Wiping is a human decision for a genuinely corrupt AVD, never automated recovery
 - Enforces a cooldown between restart attempts (default 30 min)
-- Posts to the configured ops webhook after 3 consecutive failures (default; configurable)
+- Posts to the configured ops webhook after 3 consecutive failures (default; configurable), and immediately when the device is locked with no PIN var configured (a config error retrying cannot fix)
+
+Readiness is defined by `scripts/emulator-state.sh`: adb attached, `sys.boot_completed=1`, user state not `RUNNING_LOCKED` (`dumpsys user`), a focused window, and every package in `emulator.required_packages` resolving a launcher activity (`cmd package resolve-activity --brief`). The last two checks exist because a PIN-locked device passes every weaker signal - adb, boot_completed, non-zero screencap, `pm list packages`, even window focus (the keyguard holds focus) - while unable to launch a single app.
+
+`scripts/gather-dating-swipe.sh` is the matching heartbeat gather: emits `{"count": 1, "reason": "emulator_ready"}` only when the device can actually launch the apps, and `{"count": 0, "reason": "<state>"}` otherwise. Point the dating heartbeat's gather at it instead of hand-rolling `adb devices` checks.
+
+Behavioural tests: `tests/test-emulator-state.sh` (stubbed adb; runs in CI via `shell-tests.yml`).
 
 The hook ports the V1 reference's `scripts/emulator-watchdog.sh` into a chassis-managed sourceable function with no installer-specific paths or AVD names baked in.
 
@@ -174,7 +190,10 @@ The installer must provide their own emulator-start script at `${DATING_EMULATOR
 - `CLAUDE.md` — subagent contract (loaded when the dating subagent starts)
 - `skills/dating.md` — the canonical dating playbook
 - `scripts/verify-match.{py,sh}` — photo-verification consensus engine
+- `scripts/emulator-state.sh` - shared AVD readiness probe + PIN unlock library
+- `scripts/gather-dating-swipe.sh` - heartbeat gather built on the readiness probe
 - `scheduled-tasks/recovery-hooks.d/dating-emulator-recovery.sh` — emulator self-heal hook
+- `tests/test-emulator-state.sh` - behavioural tests for probe, unlock, and hook routing (stubbed adb)
 - `cleared-matches.template.json` — preauth-clearance store template
 - `pending-instructions.template.md` — installer's real-time-overrides inbox template
 - `scheduling-blocks.template.md` — date/time blackout windows template
