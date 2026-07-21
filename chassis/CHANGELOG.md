@@ -16,6 +16,12 @@ Semver:
 - `MINOR` (`0.3.0` → `0.4.0`): new features, optional fields, opt-in behaviors. Backwards-compatible.
 - `PATCH` (`0.3.1` → `0.3.2`): fixes, prompt tweaks, internal refactors. Always backwards-compatible.
 
+## Unreleased
+
+### Fixed
+
+- **ClawHub loom-vision bundle resynced with the chassis script.** The publishable copy under `plugins/loom-vision/clawhub/loom-vision/` missed the 2026-07-15 transcript fix: it still told the agent to read `transcript.vtt`, a file loom-dl never writes (loom-dl 1.1.1 writes `video.transcript.json`), so the transcript half of the published skill silently did nothing. Verified against a real Loom URL before and after. The copy now carries the transcript JSON to VTT/plaintext conversion, and the stray `unknown` line that polluted the script's stdout contract under pipefail is gone (the output directory path must be the only stdout line). Bundle SKILL.md and README now document the real outputs (`transcript.vtt`, `transcript.txt`, `transcript.json`) and the `node` dependency.
+
 ## v0.3.0 - 2026-07-21
 
 The release that makes v0.2.0 real. The plugin fetcher shipped in v0.2.0 downloaded and verified a plugin tree that the chassis then never used; this release makes the fetched tree actually take effect, as an overlay rather than a swap. Also hardens the Notion and Obsidian second-brain adapters to the point where full-length documents survive a round trip, and removes nationality-based screening from the public dating plugin.
