@@ -18,6 +18,10 @@ Semver:
 
 ## Unreleased
 
+### Changed
+
+- **All seven plugins are now published in `behalfbot-plugins`.** `angel-protocol`, `bfl`, `dating`, `remarkable`, `restaurant-booking`, and `whatsapp` join `loom-vision` in the central plugins repo (behalfbot-plugins#3), genericized for public installs (no principal names, no reference-install repo slugs, and restaurant-booking no longer ships a real Discord channel id as its soft-confirm default - it now requires per-install configuration and fails loudly when unset). Registry floors: `dating` requires chassis >= 0.3.0 (the sanitized post-#99/#101 content and the overlay resolver it shadows through are both 0.3.0); the rest require >= 0.2.0, the first chassis that fetches at all. `PLUGINS_PIN` still points at `v0.1.0` in this entry: the pin can only move to a tag+SHA that exists AFTER the plugins-repo merge is tagged, so the bump lands as its own reviewed change once the tag is cut. Until the pin moves, every install keeps running the baked copies; after it moves, the fetched copies win by name under the 0.3.0 overlay and the baked tree remains the fallback.
+
 ### Fixed
 
 - **`chassis-update.sh` no longer silently reverts customer compose overrides (#100).** The updater brought the stack back with bare `docker compose pull` + `docker compose up -d`, dropping the per-install override (published ports, image pins, env_file, scaled-to-0 services) and then reporting success - its healthcheck polls the chassis container over the internal network and cannot see published ports. On the install that surfaced this, the update unpublished postgres's `127.0.0.1:5432` (breaking every host-side consumer and triggering a watchdog VM bounce mid-update) and created a fresh empty Vaultwarden the override scales to 0. Now:
