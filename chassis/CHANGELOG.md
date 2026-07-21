@@ -16,7 +16,53 @@ Semver:
 - `MINOR` (`0.3.0` → `0.4.0`): new features, optional fields, opt-in behaviors. Backwards-compatible.
 - `PATCH` (`0.3.1` → `0.3.2`): fixes, prompt tweaks, internal refactors. Always backwards-compatible.
 
-## Unreleased
+## v0.3.0 - 2026-07-21
+
+The release that makes v0.2.0 real. The plugin fetcher shipped in v0.2.0 downloaded and verified a plugin tree that the chassis then never used; this release makes the fetched tree actually take effect, as an overlay rather than a swap. Also hardens the Notion and Obsidian second-brain adapters to the point where full-length documents survive a round trip, and removes nationality-based screening from the public dating plugin.
+
+### Second brain
+
+- **Notion accepts documents longer than 100 blocks.** `create_doc` and `append_to_doc` chunk into batches of at most 100 and issue a create followed by sequential appends. Previously any document over roughly 100 non-empty lines returned `HTTP 400: body.children.length should be <= 100`, which meant a full-length briefing could not be written at all.
+- **Long paragraphs are no longer silently truncated.** Notion caps a single `rich_text` field at 2000 characters. The old code cut the content and reported success; it now splits across parts. This was losing text with no error.
+- **Notion rate limiting is handled.** `_request` honours `Retry-After` (seconds or HTTP-date) with a bounded retry count. Only 429s are retried - Notion's limiter rejects before executing, so a retry cannot double-write. 5xx and network errors are deliberately not retried, because the write may have landed.
+- **Chunked writes report partial failure precisely.** A failed chunk raises with the page id plus how many chunks of how many landed, so a retry is not blind. Partial content is left in place; a rollback delete can itself fail, and an append cannot distinguish its own blocks from pre-existing ones.
+- **Obsidian frontmatter.** Optional YAML frontmatter on write, and frontmatter stripped from `search`/`list_recent` snippets so existing notes stop returning metadata noise. Templater and Dataview content round-trips unchanged.
+- **Obsidian daily notes.** New `second_brain.obsidian.daily_notes_dir` config plus helpers, so briefings and daily-log output land where the Daily Notes plugin expects them.
+- **Test coverage for the Notion adapter**, which was the only adapter with none.
+
+### Plugins
+
+- **The fetched plugin tree is now actually used.** v0.2.0 claimed `CHASSIS_PLUGINS_ROOT` preferred `$CUSTOMER_HOME/vendored-plugins`. It never did: the preference lived in `_env.sh` behind an is-unset guard, while the Dockerfile ENV and `docker/entrypoint.sh` both set the variable before `_env.sh` could run. The fetch worked, the lockfile was written, and every install silently kept loading the baked tree.
+- **Resolution is an overlay, not a swap.** A plugin present in the fetched tree wins by name; anything only in the baked tree still loads. The v0.2.0 design, had it been reachable, would have taken every install from 7 plugins to the 1 currently published in `behalfbot-plugins`. A fetched directory without an `openclaw.plugin.json` never shadows a baked copy, and a failed fetch degrades per plugin rather than wholesale.
+- **A silent no-op is no longer possible.** Boot writes `plugins-root.state.json` with per-plugin provenance, and if a usable fetched tree exists but is not active the resolver exits 5 and the entrypoint logs an unmissable error.
+
+### Dating plugin
+
+- **Nationality-based screening removed from the public plugin.** The shipped defaults enabled a regional default-reject gate with a populated country list, and the documented triggers included ethnic self-identification and script detection. Those are identity attributes, not behaviour. The gate mechanism remains for installers who want to configure it; the chassis now ships it disabled with an empty list and names no countries.
+- **Behavioural fraud signals are now the primary path** - reverse-image consensus, photo sets found on aggregator sites, a digital footprint concentrated on one national internet with no corroboration elsewhere, refusal of verification. These are more accurate than a country list, which flags genuine expats and misses catfish operating from anywhere else.
+- `pimeyes_russian_internet_only_presence` renamed to `pimeyes_single_country_footprint_only`. The old key remains a defined deprecated alias that is honoured with a loud warning - the schema sets `additionalProperties: false`, so removing it outright would have invalidated existing configs, and a renamed safety setting that silently reverts to default is a safety regression.
+- **Personal identifiers removed.** Real first names attached to fraud allegations, installer-specific paths, and one collaborator's name hardcoded in a plist installer script.
+
+### Fixed
+
+- **Obsidian installs rendered no second-brain server at all.** With `backend: obsidian` and `mode` unset, the hydrator dropped the native entry (correct - Obsidian has no native MCP server) and also dropped the adapter entry (correct - `mode` defaults to `direct`). Two correct decisions producing a config with no second-brain tools, invisible until someone tried to use it. SiYuan and Notion were unaffected.
+
+### Added
+
+- **Release-notes tooling.** `chassis/scripts/release-material.sh` gathers the commit range, PRs, and surfaces for a version, deriving boundaries from `chassis/VERSION` history rather than tags, and a companion prompt turns that into operator-facing notes. GitHub releases now exist for v0.1.0 and v0.1.1, backfilled.
+
+### Known gaps
+
+- **Notion `read_doc` still reads only the first 100 top-level blocks and does not recurse into children.** Writing long documents is fixed; reading them back is not, so a chunked page reads back truncated. This matters for any read-modify-write flow against Notion. Tracked as Phase 2 of new-jaxity#304.
+- A sustained Notion 429 storm is covered by mocks only. The live tests never tripped one.
+
+### Migration
+
+None required.
+
+<!-- v0.2.0 entries retained below; the Changed section there describes a preference that never took effect. See the Plugins section above. -->
+
+### v0.3.0 detail - plugin root
 
 ### Fixed
 - **v0.2.0's plugin-root preference never ran.** The Changed entry below ("`CHASSIS_PLUGINS_ROOT` now prefers `$CUSTOMER_HOME/vendored-plugins`") described behaviour that was unreachable in every container: the preference lived in `_env.sh` behind an is-unset guard, but the Dockerfile ENV baked `CHASSIS_PLUGINS_ROOT=/app/plugins` and `docker/entrypoint.sh` defaulted and exported the same value before `_env.sh` could ever run. The fetch worked, `vendored-plugins/` and `plugins.lock` were written, and every install silently kept loading the baked tree. Verified empirically on a live 0.2.0 install (dispatcher env showed `/app/plugins` while a usable fetched tree sat ignored). The "verified in a container both ways" claim in the v0.2.0 notes covered the fetch and the loader's selection logic in isolation, not the boot path that preloads the variable.
