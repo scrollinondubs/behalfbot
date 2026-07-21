@@ -18,6 +18,10 @@ Semver:
 
 ## Unreleased
 
+### Changed
+
+- **All seven plugins are now published in `behalfbot-plugins`.** `angel-protocol`, `bfl`, `dating`, `remarkable`, `restaurant-booking`, and `whatsapp` join `loom-vision` in the central plugins repo (behalfbot-plugins#3), genericized for public installs (no principal names, no reference-install repo slugs, and restaurant-booking no longer ships a real Discord channel id as its soft-confirm default - it now requires per-install configuration and fails loudly when unset). Registry floors: `dating` requires chassis >= 0.3.0 (the sanitized post-#99/#101 content and the overlay resolver it shadows through are both 0.3.0); the rest require >= 0.2.0, the first chassis that fetches at all. `PLUGINS_PIN` still points at `v0.1.0` in this entry: the pin can only move to a tag+SHA that exists AFTER the plugins-repo merge is tagged, so the bump lands as its own reviewed change once the tag is cut. Until the pin moves, every install keeps running the baked copies; after it moves, the fetched copies win by name under the 0.3.0 overlay and the baked tree remains the fallback.
+
 ### Fixed
 
 - **Dating: a PIN-locked AVD can no longer pass readiness, and recovery unlocks it instead of restart-looping.** An AVD with a lock-screen PIN cold-boots into user state `RUNNING_LOCKED`: Android is up, but the credential-encrypted user is never unlocked, so no dating app's activities are registered. Every readiness signal the automation trusted is TRUE on that device (adb attached, `boot_completed=1`, non-zero screencap, packages installed, window focus non-null - the keyguard holds focus), so monitors reported it healthy while `resolve-activity` found nothing to launch. Worse, the unlock transition produces transient bad readings (0-byte screencap, null focus) that watchdogs read as a wedged GPU - killing the emulator mid-unlock, booting it back locked, and declaring the lock screen ready. Now:
