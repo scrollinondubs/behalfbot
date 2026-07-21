@@ -68,7 +68,9 @@ mkdir -p "$OUTPUT_DIR"
 # loom-dl treats a path ending in .mp4 as an explicit file. Do NOT change it to
 # a bare directory - loom-dl would then misinterpret the target and break.
 echo "Downloading Loom video $VIDEO_ID..." >&2
-loom-dl --url "$URL" --out "$OUTPUT_DIR/video.mp4" --transcript 2>&2
+# >&2 keeps loom-dl's progress chatter (which it prints on stdout) off OUR
+# stdout - the output directory path must be the only line stdout emits.
+loom-dl --url "$URL" --out "$OUTPUT_DIR/video.mp4" --transcript >&2
 
 # --- transcript JSON -> VTT + plaintext ------------------------------------
 # transcript JSON->VTT conversion added per beta feedback from Bart Boughton,

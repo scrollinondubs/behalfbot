@@ -19,7 +19,7 @@ Submission is via the `clawhub` CLI (`clawhub skill publish <folder>`), authenti
 
 | File | Purpose |
 |---|---|
-| `clawhub/loom-vision/SKILL.md` | The publishable skill definition. ClawHub parses its YAML frontmatter for registry metadata: `name`, `description` (becomes the search/UI summary), `version`, and `metadata.openclaw` (emoji, homepage, `requires.bins`, install specs for loom-dl + ffmpeg, and optional `envVars`). The env vars the script reads are declared with `required: false` because ClawHub's automated security analysis flags undeclared env var usage as a metadata mismatch. Chassis-only frontmatter (`plugin:`, `enabled_when:`) removed. |
+| `clawhub/loom-vision/SKILL.md` | The publishable skill definition. ClawHub parses its YAML frontmatter for registry metadata: `name`, `description` (becomes the search/UI summary), `version`, and `metadata.openclaw` (emoji, homepage, `requires.bins`, install specs for node, loom-dl and ffmpeg, and optional `envVars`). The env vars the script reads are declared with `required: false` because ClawHub's automated security analysis flags undeclared env var usage as a metadata mismatch. Chassis-only frontmatter (`plugin:`, `enabled_when:`) removed. |
 | `clawhub/loom-vision/process-loom.sh` | Standalone copy of the chassis script. Only differences from the canonical `skills/loom-vision/process-loom.sh`: default `OUTPUT_ROOT` is `${TMPDIR:-/tmp}/loom-vision` instead of `${CHASSIS_HOME}/temp`, and chassis/setup.sh references are gone from comments. Publishing uploads the whole folder, so this ships inside the bundle - `{baseDir}` in SKILL.md resolves to it at runtime. |
 | `clawhub/loom-vision/README.md` | Optional supporting file (allowed; only text files are accepted). Chassis install instructions replaced with `clawhub install`, plus the Behalf.bot pointer. No license section - see the licensing note below. |
 | `CLAWHUB_SUBMISSION.md` | This runbook. Not part of the published bundle (it lives one level above the skill folder, and publish only uploads `clawhub/loom-vision/`). |
@@ -57,5 +57,5 @@ ClawHub publishes **all** skills under **MIT-0** (public domain equivalent: anyo
 
 - Keep `clawhub/loom-vision/` in sync with the canonical chassis script by hand - the two copies intentionally differ only in OUTPUT_ROOT default and comments.
 - Do not add pricing or license text to SKILL.md; ClawHub rejects/ignores both.
-- Only text-based files are accepted in the bundle; the .sh is fine (scripts are scanned after upload). Bundle limit 50MB - ours is ~12KB.
+- Only text-based files are accepted in the bundle; the .sh is fine (scripts are scanned after upload). Bundle limit 50MB - ours is ~20KB.
 - `CLAWHUB_DISABLE_TELEMETRY=1` disables the CLI's install-count telemetry if you care.
