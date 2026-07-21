@@ -1,7 +1,7 @@
 {
   "id": "behalfbot-dating",
   "name": "Behalf.bot — Dating",
-  "description": "Dating-app automation as a sandboxed subagent: photo verification consensus engine, RU/UA/BY safety floor, reply-gated catfish screening, concierge framing, Angel Protocol prereq for in-person meets. Bound to a single ops channel; never co-runs with the main session.",
+  "description": "Dating-app automation as a sandboxed subagent: photo verification consensus engine, behaviour-based catfish screening (reply-gated), concierge framing, Angel Protocol prereq for in-person meets. Bound to a single ops channel; never co-runs with the main session.",
   "version": "0.1.0",
   "configSchema": {
     "type": "object",
@@ -117,7 +117,7 @@
       "safety_floor": {
         "type": "object",
         "additionalProperties": false,
-        "description": "Non-negotiable safety rules. Disabling any of these requires opening a follow-up issue acknowledging the trade-off — chassis-default is full safety floor on.",
+        "description": "Non-negotiable safety rules. Disabling any of these requires opening a follow-up issue acknowledging the trade-off - chassis-default is full safety floor on, except regional_default_reject which ships disabled and unconfigured (opt-in, installer-configured).",
         "properties": {
           "photo_verification": {
             "type": "object",
@@ -137,7 +137,15 @@
                   "tineye_byte_match_on_adult_aggregator": { "type": "boolean", "default": true },
                   "lens_named_celebrity": { "type": "boolean", "default": true },
                   "lens_high_confidence_adult_aggregator": { "type": "boolean", "default": true },
-                  "pimeyes_russian_internet_only_presence": { "type": "boolean", "default": true }
+                  "pimeyes_single_country_footprint_only": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Auto-reject when the PimEyes face-search footprint is concentrated exclusively on a single country's domains and aggregators with zero corroborating digital presence anywhere else. This is a behavioural fraud pattern (stolen photo sets recirculate inside one national internet), not a nationality test."
+                  },
+                  "pimeyes_russian_internet_only_presence": {
+                    "type": "boolean",
+                    "description": "DEPRECATED alias for pimeyes_single_country_footprint_only (renamed; same detection). If this key is present in an install's config, honor its value as the value of pimeyes_single_country_footprint_only AND post a deprecation warning to the social channel telling the installer to rename it. Never silently ignore it - a safety setting that silently reverts to default is a safety regression. This alias will be removed in a future version."
+                  }
                 }
               }
             }
@@ -145,21 +153,21 @@
           "regional_default_reject": {
             "type": "object",
             "additionalProperties": false,
-            "description": "Default-reject-with-override-gate for high-risk source markets. Calibrated against catfish-targeting clusters seen on the V1 install (Eva, Jacqueline, Nadya — three sketchy profiles in 72h). Installer can edit the country list for their threat model.",
+            "description": "OPTIONAL default-reject-with-override-gate mechanism for source regions the installer considers high-risk for their own threat model. Ships disabled with an empty country list - the chassis names no countries. The primary catfish defence is behavioural (photo-verification consensus, single-country footprint detection, verifiable local presence), not regional; enable this gate only if your own incident data justifies it.",
             "properties": {
-              "enabled": { "type": "boolean", "default": true },
+              "enabled": { "type": "boolean", "default": false },
               "country_codes": {
                 "type": "array",
                 "items": { "type": "string" },
-                "description": "ISO 3166-1 alpha-2 country codes flagged for default-reject + override-gate scrutiny.",
-                "default": ["RU", "UA", "BY"]
+                "description": "ISO 3166-1 alpha-2 country codes flagged for default-reject + override-gate scrutiny. Empty by default; the installer populates it (or leaves it empty) per their own threat model.",
+                "default": []
               },
               "override_gate_required_evidence": {
                 "type": "array",
                 "items": { "type": "string" },
                 "default": [
                   "photo_verification_clean",
-                  "western_digital_footprint",
+                  "corroborating_digital_footprint",
                   "verifiable_local_presence",
                   "standard_scoring_pass"
                 ]

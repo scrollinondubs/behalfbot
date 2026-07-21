@@ -41,9 +41,9 @@ REFS_ROOT = CHASSIS_HOME / "data" / "dating" / "taste-refs"
 CLIP_MODEL_NAME = "ViT-L-16-SigLIP2-384"
 CLIP_PRETRAINED = "webli"
 
-# Text prompts encoding the installer's type. Tune per installer via
-# installer-facts.md guidance - these ship as sensible defaults from the
-# V1 reference install.
+# Text prompts encoding the installer's type. These are placeholder
+# defaults only - every installer replaces them with prompts encoding
+# their own preferences (see installer-facts.md guidance).
 POS_PROMPTS = [
     "a photo of a blonde woman with light hair",
     "a portrait of a blonde woman smiling warmly",
@@ -59,19 +59,18 @@ NEG_PROMPTS = [
     "a photo of a woman with silver or platinum dyed hair",
 ]
 
-# Weighting for the final combined score.
-# Shifted text->image after RHL reconcile found 14 false-negatives in 19 days.
-# Text prompts narrowly encode "blonde / light / classic" which over-penalizes
-# attractive brunettes. The retrained taste_pos stack is a better signal.
-# Re-run score-calibrate.py if scoring quality drifts after a ref stack change.
+# Weighting for the final combined score. Placeholder code defaults -
+# they carry no meaning until calibrated against your own taste-refs
+# stack and RHL feedback. Re-run score-calibrate.py after building your
+# ref stack and whenever scoring quality drifts after a ref stack change.
 W_TEXT = 1.5   # text_delta - moderating signal on hair/aesthetic
 W_IMAGE = 1.0  # image_top3 - primary signal vs retrained positive stack
 W_NEG = 0.3    # negative-ref subtraction weight
 
-# Score rescaling bounds. These bounds map the empirical raw-score distribution
-# for the positive ref stack to a useful 0-100 spread.
-# Re-run score-calibrate.py to recalibrate when the distribution drifts
-# (after large positive-ref batch additions or W_TEXT/W_IMAGE retuning).
+# Score rescaling bounds. Placeholder code defaults - run score-calibrate.py
+# against your own positive ref stack to baseline them for your install, and
+# re-run when the distribution drifts (after large positive-ref batch
+# additions or W_TEXT/W_IMAGE retuning).
 SCORE_MIN = 0.65  # combined-score lower bound (rescaled to 0)
 SCORE_MAX = 1.05  # combined-score upper bound (rescaled to 100)
 
