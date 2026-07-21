@@ -74,33 +74,29 @@ fi
 
 # Plugin root resolution (behalfbot#82).
 #
-# Order of preference:
-#   1. $CUSTOMER_HOME/vendored-plugins - the tree fetched from
-#      scrollinondubs/behalfbot-plugins at the pinned tag+SHA. This is the
-#      authoritative source once a fetch has succeeded.
-#   2. /app/plugins - the image-baked tree. The fallback when no fetch has run
-#      yet, when the fetch failed, or on an air-gapped/frozen install.
-#   3. $CHASSIS_HOME/plugins - host-side installs with no container layout.
+# Delegates to resolve-plugin-root.sh, which overlays the fetched tree
+# ($CUSTOMER_HOME/vendored-plugins) over the baked one PER PLUGIN NAME and
+# materialises the result as a composed symlink root under
+# $CUSTOMER_HOME/state/plugins-root. See that script for the full contract,
+# including the operator-override rule (a pre-set CHASSIS_PLUGINS_ROOT is
+# honoured verbatim - which is why nothing may default this variable before
+# resolution runs; the Dockerfile ENV that used to do so was what made the
+# v0.2.0 fetched-tree preference unreachable).
 #
-# The non-empty test on (1) is the important part and is not decoration. An
-# empty or half-written vendored-plugins directory must NOT shadow the baked
-# tree: that would turn a failed fetch into a chassis that silently loads no
-# plugins and reports nothing wrong. A directory only counts as a usable
-# plugin root if it actually contains at least one plugin manifest.
-_chassis_plugin_root_usable() {
-    local dir="$1"
-    [[ -d "$dir" ]] || return 1
-    compgen -G "$dir"/*/openclaw.plugin.json > /dev/null 2>&1
-}
-
+# The old single-root preference chain is kept only as a fallback for the
+# window where a stale chassis tree lacks the resolver script.
 if [[ -z "${CHASSIS_PLUGINS_ROOT:-}" ]]; then
-    _vendored="${CUSTOMER_HOME:-${CHASSIS_HOME:-}}/vendored-plugins"
-    if _chassis_plugin_root_usable "$_vendored"; then
-        export CHASSIS_PLUGINS_ROOT="$_vendored"
+    _cpr_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+    _cpr=""
+    if [[ -n "$_cpr_dir" && -x "$_cpr_dir/resolve-plugin-root.sh" ]]; then
+        _cpr="$(bash "$_cpr_dir/resolve-plugin-root.sh" 2>/dev/null)" || true
+    fi
+    if [[ -n "$_cpr" ]]; then
+        export CHASSIS_PLUGINS_ROOT="$_cpr"
     elif [[ -d "/app/plugins" ]]; then
         export CHASSIS_PLUGINS_ROOT="/app/plugins"
     elif [[ -n "${CHASSIS_HOME:-}" && -d "$CHASSIS_HOME/plugins" ]]; then
         export CHASSIS_PLUGINS_ROOT="$CHASSIS_HOME/plugins"
     fi
-    unset _vendored
+    unset _cpr _cpr_dir
 fi

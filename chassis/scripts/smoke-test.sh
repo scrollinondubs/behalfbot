@@ -29,6 +29,12 @@ set -uo pipefail
 
 : "${CHASSIS_HOME:?CHASSIS_HOME must be set}"
 : "${CHASSIS_ROOT:=/app/chassis}"
+# Entrypoint-launched runs inherit the resolved overlay root. Standalone runs
+# (docker exec, host shell) resolve it the same way instead of assuming the
+# baked tree, so both paths test the plugin set that is actually live.
+if [[ -z "${CHASSIS_PLUGINS_ROOT:-}" && -x "$CHASSIS_ROOT/scripts/resolve-plugin-root.sh" ]]; then
+    CHASSIS_PLUGINS_ROOT="$(bash "$CHASSIS_ROOT/scripts/resolve-plugin-root.sh" 2>/dev/null)" || true
+fi
 : "${CHASSIS_PLUGINS_ROOT:=/app/plugins}"
 
 JSON_OUTPUT="false"

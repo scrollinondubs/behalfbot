@@ -20,14 +20,18 @@
 set -euo pipefail
 
 : "${CHASSIS_ROOT:=/app/chassis}"
-: "${CHASSIS_PLUGINS_ROOT:=/app/plugins}"
+# CHASSIS_PLUGINS_ROOT is deliberately NOT defaulted here (or in the
+# Dockerfile ENV). resolve_plugin_root() sets it after source_env, so a value
+# that is already present reliably means an operator set it (compose
+# environment, docker -e, or the customer .env). Defaulting it up here is
+# exactly what made the v0.2.0 fetched-tree preference in _env.sh unreachable.
 # Issue #6 customer-state split. CUSTOMER_HOME is the canonical name for the
 # customer-state mount inside the container; CHASSIS_HOME is kept as an alias
 # pointing at the SAME path so legacy chassis scripts (which read
 # $CHASSIS_HOME/.env, $CHASSIS_HOME/briefings, etc.) keep working untouched.
 : "${CUSTOMER_HOME:=/app/customer}"
 : "${CHASSIS_HOME:=$CUSTOMER_HOME}"
-export CUSTOMER_HOME CHASSIS_HOME CHASSIS_ROOT CHASSIS_PLUGINS_ROOT
+export CUSTOMER_HOME CHASSIS_HOME CHASSIS_ROOT
 : "${DISPATCHER_INTERVAL_SECONDS:=900}"
 : "${DISPATCHER_SCRIPT:=$CHASSIS_ROOT/scheduled-tasks/heartbeat-dispatcher.sh}"
 
@@ -66,6 +70,34 @@ source_env() {
     # billing, not PAYG. Matches the rationale in
     # chassis/scheduled-tasks/heartbeat-dispatcher.sh lines 67-80.
     unset ANTHROPIC_API_KEY || true
+}
+
+resolve_plugin_root() {
+    # Overlay resolution (behalfbot#82 fix): a plugin present in the fetched
+    # vendored-plugins tree wins by name; anything only in the baked tree
+    # still loads. Runs AFTER source_env so a CHASSIS_PLUGINS_ROOT from the
+    # customer .env or the compose environment counts as an operator override
+    # (the resolver honours it verbatim). Runs AFTER run_plugin_fetch in the
+    # boot modes so a fresh fetch is active on the same boot.
+    local resolver="$CHASSIS_ROOT/scripts/resolve-plugin-root.sh"
+    if [[ ! -x "$resolver" ]]; then
+        export CHASSIS_PLUGINS_ROOT="${CHASSIS_PLUGINS_ROOT:-/app/plugins}"
+        log "WARN: plugin-root resolver missing at $resolver - using $CHASSIS_PLUGINS_ROOT"
+        return 0
+    fi
+    local resolved rc=0
+    resolved="$(bash "$resolver")" || rc=$?
+    if [[ -n "$resolved" ]]; then
+        export CHASSIS_PLUGINS_ROOT="$resolved"
+    else
+        export CHASSIS_PLUGINS_ROOT="${CHASSIS_PLUGINS_ROOT:-/app/plugins}"
+    fi
+    if [[ "$rc" -ne 0 ]]; then
+        log "ERROR: PLUGIN ROOT ASSERTION FAILED (rc=$rc) - a usable fetched plugin tree exists but is NOT active."
+        log "ERROR: running on $CHASSIS_PLUGINS_ROOT - see $CUSTOMER_HOME/plugins-root.state.json for the resolution record."
+    else
+        log "plugin root: $CHASSIS_PLUGINS_ROOT"
+    fi
 }
 
 run_dispatcher_once() {
@@ -125,6 +157,7 @@ cmd_dispatcher() {
     ensure_customer_layout
     source_env
     run_plugin_fetch
+    resolve_plugin_root
     run_chassis_migrations
     log "dispatcher loop starting - tick=${DISPATCHER_INTERVAL_SECONDS}s, CHASSIS_HOME=$CHASSIS_HOME"
     # Touch sentinel up-front so healthcheck doesn't fail before first tick.
@@ -143,6 +176,7 @@ cmd_bootstrap() {
     ensure_customer_layout
     source_env
     run_plugin_fetch
+    resolve_plugin_root
     run_chassis_migrations
     log "running bootstrap.sh against CHASSIS_HOME=$CHASSIS_HOME"
     CHASSIS_HOME="$CHASSIS_HOME" bash /app/bootstrap.sh "$@"
@@ -152,6 +186,7 @@ cmd_install_plugin() {
     local name="${1:?install-plugin requires a plugin name}"
     ensure_customer_layout
     source_env
+    resolve_plugin_root
     local installer="$CHASSIS_PLUGINS_ROOT/$name/install.sh"
     if [[ ! -x "$installer" ]]; then
         log "FATAL: plugin installer not found at $installer"
@@ -182,6 +217,7 @@ cmd_hydrate_env() {
 cmd_smoke_test() {
     ensure_customer_layout
     source_env
+    resolve_plugin_root
     log "running chassis smoke tests"
     CHASSIS_HOME="$CHASSIS_HOME" bash "$CHASSIS_ROOT/scripts/smoke-test.sh" "$@"
 }
@@ -189,12 +225,14 @@ cmd_smoke_test() {
 cmd_claude() {
     ensure_customer_layout
     source_env
+    resolve_plugin_root
     exec claude "$@"
 }
 
 cmd_shell() {
     ensure_customer_layout
     source_env
+    resolve_plugin_root
     exec /usr/bin/zsh
 }
 
