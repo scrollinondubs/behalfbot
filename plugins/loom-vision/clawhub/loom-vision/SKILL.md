@@ -9,9 +9,15 @@ metadata:
     homepage: https://behalf.bot
     requires:
       bins:
+        - node
         - loom-dl
         - ffmpeg
     install:
+      - id: brew-node
+        kind: brew
+        formula: node
+        bins: [node]
+        label: Install Node.js (brew)
       - id: node-loom-dl
         kind: node
         package: loom-dl
@@ -35,6 +41,9 @@ metadata:
       - name: FRAME_QUALITY
         required: false
         description: ffmpeg -q:v JPEG quality, 1-31, lower is better. Default 3.
+      - name: TMPDIR
+        required: false
+        description: Standard system temp directory variable. Only used to derive the default OUTPUT_ROOT; never set it for this skill specifically.
 ---
 
 # Loom Vision
@@ -58,8 +67,14 @@ bash {baseDir}/process-loom.sh "<loom-share-url>"
 The script prints the output directory path to stdout. Inside that directory:
 
 - `video.mp4` - the original video (kept in case you want to re-process at a different frame interval)
-- `transcript.vtt` - Loom's auto-transcript with timestamps
+- `transcript.vtt` - Loom's auto-transcript as WebVTT with timestamps (read this one)
+- `transcript.txt` - the same transcript as plaintext, no timestamps
+- `transcript.json` - the raw loom-dl transcript JSON, kept verbatim
 - `frame_001.jpg`, `frame_002.jpg`, ... - sampled frames at 1 frame per N seconds (default 5)
+
+Note: loom-dl writes its transcript as `<basename>.transcript.json`, not VTT. The
+script converts that JSON into `transcript.vtt` + `transcript.txt` for you, so the
+"read the transcript" step below always has a file to read.
 
 ## What to do with the output
 
@@ -86,12 +101,15 @@ All knobs are environment variables, set before invoking the script:
 
 ## Dependencies
 
-Two system CLIs are required (declared in the install specs above so OpenClaw can offer to install them):
+Three system CLIs are required (declared in the install specs above so OpenClaw can offer to install them):
 
+- `node` - runs the transcript JSON to VTT conversion. It is also required by loom-dl, so if loom-dl works, node is already present. Install with `brew install node` if missing.
 - `loom-dl` - install with `npm install -g loom-dl` (Node CLI, not on Homebrew)
-- `ffmpeg` - install with `brew install ffmpeg` (macOS) or your distro's package manager (Linux)
+- `ffmpeg` - install with `brew install ffmpeg` (macOS) or your distro's package manager (Linux). Supplies `ffprobe`, used to bound the final transcript cue.
 
-Both installs are idempotent.
+All installs are idempotent.
+
+If your ffmpeg install lacks `ffprobe` (notably the `ffmpeg-static` npm module), the script degrades gracefully: it estimates the end time of the last transcript cue instead of reading the true video duration. Frames, transcript text, and all earlier cue timings are unaffected.
 
 ## Why this exists
 

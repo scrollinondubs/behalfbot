@@ -25,12 +25,13 @@ The agent then reads the transcript to anchor timing and browses the frames that
 clawhub install @<owner>/loom-vision
 ```
 
-Two CLI dependencies (declared in the skill's install specs, so OpenClaw can install them for you):
+Three CLI dependencies (declared in the skill's install specs, so OpenClaw can install them for you):
 
+- `node` - `brew install node`. Runs the transcript JSON to VTT conversion, and is required by loom-dl anyway.
 - `loom-dl` - `npm install -g loom-dl` (Node-based; not on Homebrew)
-- `ffmpeg` - `brew install ffmpeg` (macOS) or your distro's package manager (Linux)
+- `ffmpeg` - `brew install ffmpeg` (macOS) or your distro's package manager (Linux). Supplies `ffprobe` for duration bounding; installs without `ffprobe` still work, with an estimated end time on the last transcript cue.
 
-Both are idempotent.
+All are idempotent.
 
 ## Usage
 
@@ -43,10 +44,16 @@ bash process-loom.sh "https://www.loom.com/share/<32-hex-id>/..."
 The script prints the output directory path to stdout. The directory contains:
 
 - `video.mp4` - original video (kept for re-sampling at different intervals)
-- `transcript.vtt` - Loom's auto-transcript with timestamps
+- `transcript.vtt` - Loom's auto-transcript as WebVTT with timestamps
+- `transcript.txt` - the same transcript as plaintext
+- `transcript.json` - the raw loom-dl transcript JSON, kept verbatim
 - `frame_NNN.jpg` - sampled frames
 
 Frame N corresponds to timestamp `(N - 1) * FRAME_INTERVAL_SECONDS` from the start.
+
+loom-dl writes its transcript as `<basename>.transcript.json`, not VTT. The script
+converts that into `transcript.vtt` + `transcript.txt` so the agent always has a
+transcript file to read.
 
 ## Configuration
 
