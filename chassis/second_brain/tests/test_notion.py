@@ -35,7 +35,9 @@ from chassis.second_brain import notion as notion_mod  # noqa: E402
 from chassis.second_brain.notion import (  # noqa: E402
     NotionError,
     NotionNotes,
+    NotionPartialWriteError,
     _blocks_to_markdown,
+    _chunk_blocks,
     _markdown_to_blocks,
 )
 
@@ -109,6 +111,137 @@ class TestCreateDoc(NotionNotesTestCase):
         # is easier to trace than a KeyError from deep inside a heartbeat.
         self.response = {}
         self.assertEqual(self.notes.create_doc("", "T", "b"), "")
+
+
+class TestChunkedCreate(NotionNotesTestCase):
+    """THE Phase 1 bug: Notion caps block children at 100 per request, and an
+    unchunked briefing-sized create_doc was an opaque HTTP 400. These tests
+    assert the >100-block path explicitly."""
+
+    def test_create_over_100_blocks_chunks_into_create_plus_appends(self):
+        self.response = {"id": "page-1"}
+        body = "\n".join(f"line {i}" for i in range(250))
+        new_id = self.notes.create_doc("", "Morning Briefing", body)
+
+        self.assertEqual(new_id, "page-1")
+        self.assertEqual(len(self.calls), 3)
+
+        _, method, path, payload = self.calls[0]
+        self.assertEqual((method, path), ("POST", "/pages"))
+        self.assertEqual(len(payload["children"]), 100)
+        first_text = payload["children"][0]["paragraph"]["rich_text"][0]["text"]["content"]
+        self.assertEqual(first_text, "line 0")
+
+        _, method, path, payload = self.calls[1]
+        self.assertEqual((method, path), ("PATCH", "/blocks/page-1/children"))
+        self.assertEqual(len(payload["children"]), 100)
+        self.assertEqual(
+            payload["children"][0]["paragraph"]["rich_text"][0]["text"]["content"],
+            "line 100",
+        )
+
+        _, method, path, payload = self.calls[2]
+        self.assertEqual((method, path), ("PATCH", "/blocks/page-1/children"))
+        self.assertEqual(len(payload["children"]), 50)
+        self.assertEqual(
+            payload["children"][-1]["paragraph"]["rich_text"][0]["text"]["content"],
+            "line 249",
+        )
+
+    def test_create_exactly_100_blocks_is_a_single_request(self):
+        self.response = {"id": "page-1"}
+        self.notes.create_doc("", "T", "\n".join(f"l{i}" for i in range(100)))
+        self.assertEqual(len(self.calls), 1)
+
+    def test_create_101_blocks_appends_one_chunk_of_one(self):
+        self.response = {"id": "page-1"}
+        self.notes.create_doc("", "T", "\n".join(f"l{i}" for i in range(101)))
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(len(self.calls[1][3]["children"]), 1)
+
+    def test_no_block_ever_exceeds_100_children_per_request(self):
+        self.response = {"id": "page-1"}
+        self.notes.create_doc("", "T", "\n".join(f"l{i}" for i in range(731)))
+        for _, _, _, payload in self.calls:
+            self.assertLessEqual(len(payload["children"]), 100)
+
+    def test_partial_create_failure_reports_progress_and_page_id(self):
+        # Create succeeds, first append succeeds, second append blows up. The
+        # page now holds 2 of 3 chunks - the error must say so, or a retry is
+        # blind and either duplicates content or deletes good data.
+        responses = iter(
+            [
+                {"id": "page-1"},
+                {},
+                NotionError("Notion PATCH /blocks/page-1/children → HTTP 500: boom"),
+            ]
+        )
+
+        def scripted(token, method, path, payload=None):
+            self.calls.append((token, method, path, payload))
+            step = next(responses)
+            if isinstance(step, Exception):
+                raise step
+            return step
+
+        with mock.patch.object(notion_mod, "_request", side_effect=scripted):
+            with self.assertRaises(NotionPartialWriteError) as ctx:
+                self.notes.create_doc("", "T", "\n".join(f"l{i}" for i in range(250)))
+
+        exc = ctx.exception
+        self.assertEqual(exc.doc_id, "page-1")
+        self.assertEqual(exc.chunks_written, 2)
+        self.assertEqual(exc.chunks_total, 3)
+        self.assertIn("2 of 3", str(exc))
+        self.assertIn("page-1", str(exc))
+        self.assertIsInstance(exc, NotionError)  # callers catching NotionError still see it
+
+
+class TestChunkedAppend(NotionNotesTestCase):
+    def test_append_over_100_blocks_issues_sequential_patches(self):
+        self.notes.append_to_doc("doc-1", "\n".join(f"line {i}" for i in range(250)))
+        self.assertEqual(len(self.calls), 3)
+        for _, method, path, payload in self.calls:
+            self.assertEqual((method, path), ("PATCH", "/blocks/doc-1/children"))
+            self.assertLessEqual(len(payload["children"]), 100)
+        # Order preserved - chunk boundaries must not scramble the document.
+        self.assertEqual(
+            self.calls[2][3]["children"][-1]["paragraph"]["rich_text"][0]["text"]["content"],
+            "line 249",
+        )
+
+    def test_append_blank_content_makes_no_request(self):
+        # Notion 400s on an empty children array; an all-blank append is a no-op.
+        self.notes.append_to_doc("doc-1", "\n\n\n")
+        self.assertEqual(self.calls, [])
+
+    def test_partial_append_failure_reports_progress(self):
+        attempts = {"n": 0}
+
+        def flaky(token, method, path, payload=None):
+            attempts["n"] += 1
+            if attempts["n"] == 2:
+                raise NotionError("HTTP 502")
+            return {}
+
+        with mock.patch.object(notion_mod, "_request", side_effect=flaky):
+            with self.assertRaises(NotionPartialWriteError) as ctx:
+                self.notes.append_to_doc("doc-1", "\n".join(f"l{i}" for i in range(250)))
+
+        self.assertEqual(ctx.exception.chunks_written, 1)
+        self.assertEqual(ctx.exception.chunks_total, 3)
+        self.assertIn("1 of 3", str(ctx.exception))
+
+
+class TestChunkBlocks(unittest.TestCase):
+    def test_empty_list_yields_no_chunks(self):
+        self.assertEqual(_chunk_blocks([]), [])
+
+    def test_chunk_sizes_and_order(self):
+        blocks = [{"i": i} for i in range(205)]
+        chunks = _chunk_blocks(blocks)
+        self.assertEqual([len(c) for c in chunks], [100, 100, 5])
+        self.assertEqual([b["i"] for c in chunks for b in c], list(range(205)))
 
 
 class TestAppendAndRead(NotionNotesTestCase):
@@ -189,10 +322,25 @@ class TestMarkdownConversion(unittest.TestCase):
     def test_blank_lines_skipped(self):
         self.assertEqual(len(_markdown_to_blocks("a\n\n\nb")), 2)
 
-    def test_long_line_truncated_at_2000(self):
+    def test_long_line_splits_into_2000_char_rich_text_parts(self):
+        # Notion caps a single rich_text content field at 2000 chars. A long
+        # line used to be silently truncated there; now it splits into
+        # multiple parts within the same paragraph and nothing is lost.
         blocks = _markdown_to_blocks("x" * 5000)
-        content = blocks[0]["paragraph"]["rich_text"][0]["text"]["content"]
-        self.assertEqual(len(content), 2000)
+        self.assertEqual(len(blocks), 1)
+        parts = blocks[0]["paragraph"]["rich_text"]
+        self.assertEqual([len(p["text"]["content"]) for p in parts], [2000, 2000, 1000])
+        self.assertEqual("".join(p["text"]["content"] for p in parts), "x" * 5000)
+
+    def test_short_line_stays_a_single_part(self):
+        blocks = _markdown_to_blocks("hello")
+        self.assertEqual(len(blocks[0]["paragraph"]["rich_text"]), 1)
+
+    def test_pathological_line_caps_at_100_parts(self):
+        # Notion also caps rich_text arrays at 100 elements per block. A
+        # 200k+ char single line truncates there rather than 400ing.
+        blocks = _markdown_to_blocks("x" * 300_000)
+        self.assertEqual(len(blocks[0]["paragraph"]["rich_text"]), 100)
 
     def test_paragraph_roundtrip(self):
         # _markdown_to_blocks emits text.content; the API echoes plain_text.
@@ -287,6 +435,142 @@ class TestRequestErrorMapping(unittest.TestCase):
         self.assertEqual(captured["method"], "POST")
 
 
+def _http_error(code: int, body: bytes = b"{}", retry_after: str | None = None) -> urllib.error.HTTPError:
+    import email.message
+
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    err = urllib.error.HTTPError(
+        url="https://api.notion.com/v1/pages",
+        code=code,
+        msg="err",
+        hdrs=headers,
+        fp=None,
+    )
+    err.read = lambda: body  # type: ignore[method-assign]
+    return err
+
+
+class TestRateLimitRetry(unittest.TestCase):
+    """429 handling in _request: bounded retry honouring Retry-After.
+
+    Retrying 429 is safe for writes because Notion's limiter rejects the
+    request BEFORE executing it - a rate-limited append never half-landed.
+    That is also why ONLY 429 retries: a 5xx or network error may have
+    applied the write, and retrying those would double-write.
+    """
+
+    def test_429_retries_and_honours_retry_after(self):
+        sleeps: list[float] = []
+        outcomes = iter([_http_error(429, retry_after="7"), _http_error(429, retry_after="2"), None])
+
+        class FakeResp:
+            def read(self):
+                return b'{"id": "ok"}'
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            step = next(outcomes)
+            if step is not None:
+                raise step
+            return FakeResp()
+
+        with mock.patch.object(notion_mod.urllib.request, "urlopen", side_effect=fake_urlopen):
+            with mock.patch.object(notion_mod.time, "sleep", side_effect=sleeps.append):
+                result = notion_mod._request(TOKEN, "PATCH", "/blocks/x/children", {"children": []})
+
+        self.assertEqual(result, {"id": "ok"})
+        self.assertEqual(sleeps, [7.0, 2.0])
+
+    def test_429_exhaustion_raises_with_attempt_count(self):
+        def always_429(req, timeout=None):
+            raise _http_error(429, body=b'{"message":"rate limited"}', retry_after="1")
+
+        with mock.patch.object(notion_mod.urllib.request, "urlopen", side_effect=always_429):
+            with mock.patch.object(notion_mod.time, "sleep") as sleep:
+                with self.assertRaises(NotionError) as ctx:
+                    notion_mod._request(TOKEN, "GET", "/pages/x")
+
+        self.assertEqual(sleep.call_count, notion_mod._MAX_RATE_LIMIT_RETRIES)
+        message = str(ctx.exception)
+        self.assertIn("429", message)
+        self.assertIn(f"{notion_mod._MAX_RATE_LIMIT_RETRIES + 1} attempts", message)
+        self.assertIn("rate limited", message)
+
+    def test_missing_retry_after_falls_back_to_backoff(self):
+        sleeps: list[float] = []
+
+        def always_429(req, timeout=None):
+            raise _http_error(429)
+
+        with mock.patch.object(notion_mod.urllib.request, "urlopen", side_effect=always_429):
+            with mock.patch.object(notion_mod.time, "sleep", side_effect=sleeps.append):
+                with self.assertRaises(NotionError):
+                    notion_mod._request(TOKEN, "GET", "/pages/x")
+
+        self.assertEqual(sleeps, [1.0, 2.0, 3.0, 4.0, 5.0])
+
+    def test_absurd_retry_after_is_capped(self):
+        sleeps: list[float] = []
+        outcomes = iter([_http_error(429, retry_after="86400")])
+
+        class FakeResp:
+            def read(self):
+                return b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            try:
+                raise next(outcomes)
+            except StopIteration:
+                return FakeResp()
+
+        with mock.patch.object(notion_mod.urllib.request, "urlopen", side_effect=fake_urlopen):
+            with mock.patch.object(notion_mod.time, "sleep", side_effect=sleeps.append):
+                notion_mod._request(TOKEN, "GET", "/pages/x")
+
+        self.assertEqual(sleeps, [notion_mod._MAX_RETRY_AFTER_SECONDS])
+
+    def test_non_429_http_errors_are_not_retried(self):
+        attempts = {"n": 0}
+
+        def fail_500(req, timeout=None):
+            attempts["n"] += 1
+            raise _http_error(500, body=b'{"message":"server error"}')
+
+        with mock.patch.object(notion_mod.urllib.request, "urlopen", side_effect=fail_500):
+            with mock.patch.object(notion_mod.time, "sleep") as sleep:
+                with self.assertRaises(NotionError):
+                    notion_mod._request(TOKEN, "PATCH", "/blocks/x/children", {"children": []})
+
+        self.assertEqual(attempts["n"], 1)
+        sleep.assert_not_called()
+
+    def test_network_errors_are_not_retried(self):
+        attempts = {"n": 0}
+
+        def offline(req, timeout=None):
+            attempts["n"] += 1
+            raise urllib.error.URLError("offline")
+
+        with mock.patch.object(notion_mod.urllib.request, "urlopen", side_effect=offline):
+            with self.assertRaises(NotionError):
+                notion_mod._request(TOKEN, "POST", "/pages", {})
+
+        self.assertEqual(attempts["n"], 1)
+
+
 @unittest.skipUnless(
     os.environ.get("NOTION_TOKEN") and os.environ.get("NOTION_TEST_PAGE_ID"),
     "live Notion tests need NOTION_TOKEN and NOTION_TEST_PAGE_ID",
@@ -320,6 +604,19 @@ class LiveNotionTestCase(unittest.TestCase):
         body = self.notes.read_doc(doc_id)
         self.assertIn("first line", body)
         self.assertIn("second line", body)
+
+    def test_chunked_create_over_100_blocks_live(self):
+        # The Phase 1 bug: >100 blocks in one request was HTTP 400. Prove the
+        # chunked path against the real API and read the whole doc back.
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        body = "\n".join(f"chunk test line {i}" for i in range(120))
+        doc_id = self.notes.create_doc("", f"adapter chunk test {stamp}", body)
+        self.assertTrue(doc_id, "create_doc returned no page id")
+        readback = self.notes.read_doc(doc_id)
+        self.assertIn("chunk test line 0", readback)
+        # read_doc fetches the first 100 blocks only (documented V1 limit), so
+        # assert block 99 rather than 119 - the write itself is what is under test.
+        self.assertIn("chunk test line 99", readback)
 
     def test_search_returns_wellformed_hits(self):
         hits = self.notes.search("adapter test", limit=5)

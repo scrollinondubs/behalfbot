@@ -31,7 +31,9 @@ natural-key value, patch if found, create if not.
 
 from __future__ import annotations
 
+import email.utils
 import json
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -51,6 +53,22 @@ NOTION_API_ROOT = "https://api.notion.com/v1"
 # window. Cap the scan so a huge workspace cannot turn one call into an
 # unbounded crawl - 500 pages (5 API calls) covers any sane daily window.
 _LIST_RECENT_SCAN_CAP = 500
+
+# Notion API hard ceilings (https://developers.notion.com/reference/request-limits):
+# at most 100 block children per create/append request, and at most 2000
+# characters per rich_text content field. Exceeding either is an opaque 400.
+_MAX_BLOCKS_PER_REQUEST = 100
+_MAX_RICH_TEXT_CHARS = 2000
+# A block also caps its rich_text array at 100 elements, so one paragraph tops
+# out at 200_000 chars. Lines beyond that are truncated - a single 200k-char
+# line is a pathological input, not a briefing.
+_MAX_RICH_TEXT_PARTS = 100
+
+# 429 handling: Notion averages ~3 requests/second per integration. Retries
+# are bounded and each sleep is capped so a hostile Retry-After header cannot
+# park the process for minutes.
+_MAX_RATE_LIMIT_RETRIES = 5
+_MAX_RETRY_AFTER_SECONDS = 30.0
 
 
 def _to_utc(value: datetime) -> datetime:
@@ -73,27 +91,90 @@ class NotionError(RuntimeError):
     """Raised when Notion API returns a non-2xx response."""
 
 
+class NotionPartialWriteError(NotionError):
+    """A chunked write failed after some chunks already landed.
+
+    Chunked create/append is NOT atomic - Notion has no batch-write
+    transaction, so a failure partway through leaves a half-written page.
+    We deliberately leave the partial content in place rather than trying to
+    roll it back (a rollback delete can itself fail, and for append_to_doc the
+    adapter cannot tell its own blocks from pre-existing ones). The error
+    carries enough state for a non-blind retry: the page id and how many
+    chunks landed out of how many.
+    """
+
+    def __init__(self, doc_id: str, chunks_written: int, chunks_total: int, cause: str) -> None:
+        self.doc_id = doc_id
+        self.chunks_written = chunks_written
+        self.chunks_total = chunks_total
+        super().__init__(
+            f"Notion chunked write to {doc_id} landed {chunks_written} of "
+            f"{chunks_total} chunks (up to {_MAX_BLOCKS_PER_REQUEST} blocks each) "
+            f"before failing: {cause}. The page holds the first {chunks_written} "
+            f"chunks - retry by appending only the remaining content, or delete "
+            f"the page and re-create it. Do not blindly re-send the full body: "
+            f"that duplicates what already landed."
+        )
+
+
+def _retry_after_seconds(exc: urllib.error.HTTPError, attempt: int) -> float:
+    """Delay before retrying a 429. Honours Retry-After (seconds or HTTP-date),
+    falls back to linear backoff, and is always capped."""
+    raw = (exc.headers.get("Retry-After") or "").strip() if exc.headers else ""
+    delay: float | None = None
+    if raw:
+        try:
+            delay = float(raw)
+        except ValueError:
+            try:
+                parsed = email.utils.parsedate_to_datetime(raw)
+                delay = (parsed - datetime.now(timezone.utc)).total_seconds()
+            except (TypeError, ValueError):
+                delay = None
+    if delay is None or delay < 0:
+        delay = float(attempt + 1)
+    return min(delay, _MAX_RETRY_AFTER_SECONDS)
+
+
 def _request(token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    """One Notion API call, with bounded retry on 429 only.
+
+    Retrying a rate-limited request is safe even for non-idempotent writes:
+    a 429 means Notion's limiter rejected the request BEFORE executing it, so
+    a retried append cannot double-write. Network errors and 5xx responses are
+    deliberately NOT retried - there the request may have been applied before
+    the failure surfaced, and a blind retry of an append double-writes.
+    """
     url = NOTION_API_ROOT + path
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Notion-Version": NOTION_API_VERSION,
-            "Content-Type": "application/json",
-        },
-        method=method,
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise NotionError(f"Notion {method} {path} → HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise NotionError(f"Notion {method} {path} request failed: {exc}") from exc
+    for attempt in range(_MAX_RATE_LIMIT_RETRIES + 1):
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Notion-Version": NOTION_API_VERSION,
+                "Content-Type": "application/json",
+            },
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:500]
+            if exc.code == 429:
+                if attempt < _MAX_RATE_LIMIT_RETRIES:
+                    time.sleep(_retry_after_seconds(exc, attempt))
+                    continue
+                raise NotionError(
+                    f"Notion {method} {path} → HTTP 429 (rate limited) after "
+                    f"{_MAX_RATE_LIMIT_RETRIES + 1} attempts, giving up: {detail}"
+                ) from exc
+            raise NotionError(f"Notion {method} {path} → HTTP {exc.code}: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise NotionError(f"Notion {method} {path} request failed: {exc}") from exc
+    raise NotionError(f"Notion {method} {path}: retry loop exited without a response")
 
 
 def _markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
@@ -103,6 +184,9 @@ def _markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
     for briefings + Pacman proposals, which read fine as flat prose. Heading and
     list parsing is a follow-up; the current <v1-reference-install> briefings already render as
     plain prose in SiYuan, so feature-parity is preserved.
+
+    Lines over 2000 chars are split across multiple rich_text parts within the
+    same paragraph (Notion's per-field ceiling) rather than truncated.
     """
     blocks: list[dict[str, Any]] = []
     for line in markdown.splitlines():
@@ -114,11 +198,38 @@ def _markdown_to_blocks(markdown: str) -> list[dict[str, Any]]:
                 "object": "block",
                 "type": "paragraph",
                 "paragraph": {
-                    "rich_text": [{"type": "text", "text": {"content": text[:2000]}}],
+                    "rich_text": _split_rich_text(text),
                 },
             }
         )
     return blocks
+
+
+def _split_rich_text(text: str) -> list[dict[str, Any]]:
+    """Split one line into rich_text parts of at most 2000 chars each.
+
+    Notion renders consecutive parts inside one paragraph with no visible
+    seam, so a long line survives intact instead of being truncated at 2000.
+    Capped at 100 parts (Notion's per-block rich_text ceiling); anything
+    beyond 200k chars in a single line is dropped.
+    """
+    parts = [
+        {"type": "text", "text": {"content": text[i : i + _MAX_RICH_TEXT_CHARS]}}
+        for i in range(0, len(text), _MAX_RICH_TEXT_CHARS)
+    ]
+    return parts[:_MAX_RICH_TEXT_PARTS]
+
+
+def _chunk_blocks(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """Split a block list into request-sized chunks (at most 100 blocks each).
+
+    Notion caps block children at 100 per create/append request; an unchunked
+    briefing-sized document is an opaque HTTP 400.
+    """
+    return [
+        blocks[i : i + _MAX_BLOCKS_PER_REQUEST]
+        for i in range(0, len(blocks), _MAX_BLOCKS_PER_REQUEST)
+    ]
 
 
 def _blocks_to_markdown(blocks: list[dict[str, Any]]) -> str:
@@ -155,6 +266,8 @@ class NotionNotes(NotesAdapter):
 
     def create_doc(self, parent: str, title: str, body: str) -> str:
         parent_id = parent or self._notes_root
+        chunks = _chunk_blocks(_markdown_to_blocks(body))
+        first = chunks[0] if chunks else []
         result = _request(
             self._token,
             "POST",
@@ -164,18 +277,51 @@ class NotionNotes(NotesAdapter):
                 "properties": {
                     "title": [{"type": "text", "text": {"content": title[:200]}}],
                 },
-                "children": _markdown_to_blocks(body),
+                "children": first,
             },
         )
-        return result.get("id", "")
+        page_id = result.get("id", "")
+        if len(chunks) > 1:
+            # Not atomic: the page exists with chunk 1 already in it. A failure
+            # below raises NotionPartialWriteError carrying the page id and the
+            # count of landed chunks - see that class for the retry contract.
+            self._append_chunks(page_id, chunks[1:], chunks_done=1, chunks_total=len(chunks))
+        return page_id
 
     def append_to_doc(self, doc_id: str, content: str) -> None:
-        _request(
-            self._token,
-            "PATCH",
-            f"/blocks/{doc_id}/children",
-            {"children": _markdown_to_blocks(content)},
-        )
+        chunks = _chunk_blocks(_markdown_to_blocks(content))
+        if not chunks:
+            return  # nothing but blank lines - Notion 400s on an empty children array
+        self._append_chunks(doc_id, chunks, chunks_done=0, chunks_total=len(chunks))
+
+    def _append_chunks(
+        self,
+        doc_id: str,
+        chunks: list[list[dict[str, Any]]],
+        chunks_done: int,
+        chunks_total: int,
+    ) -> None:
+        """Append chunks sequentially (order matters - blocks land append-only).
+
+        Sequential on purpose: parallel appends would interleave chunks and
+        scramble the document. On failure, raise with exact progress so the
+        caller's retry is not blind.
+        """
+        for offset, chunk in enumerate(chunks):
+            try:
+                _request(
+                    self._token,
+                    "PATCH",
+                    f"/blocks/{doc_id}/children",
+                    {"children": chunk},
+                )
+            except NotionError as exc:
+                raise NotionPartialWriteError(
+                    doc_id=doc_id,
+                    chunks_written=chunks_done + offset,
+                    chunks_total=chunks_total,
+                    cause=str(exc),
+                ) from exc
 
     def read_doc(self, doc_id: str) -> str:
         children = _request(self._token, "GET", f"/blocks/{doc_id}/children?page_size=100")
