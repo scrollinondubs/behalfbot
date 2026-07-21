@@ -6,12 +6,12 @@
 #   - Android emulator (host process, screen-bound, adb-server on host:5037)
 #   - Playwright + Chromium for the Tinder web flow
 #   - CLIP scorer + taste-refs / negative-refs (ML model cache + host fs)
-#   - ~/Desktop/dating-swipes/seans-picks/{like,super-like,pass}/ feedback loop
+#   - the installer's hand-sorted picks feedback loop (rhl-picks/{like,super-like,pass}/)
 #   - dating-context subagent skill bundle under ${CHASSIS_HOME}/dating-context/
 #
 # Moving the whole stack into the chassis container would require shipping
 # Playwright + Chromium-on-arm64, headless emulator, host bind mounts for
-# Sean's Desktop, and substantial Dockerfile bloat. Today's host-launchd path
+# the installer's home directory, and substantial Dockerfile bloat. Today's host-launchd path
 # matches the V1 pattern + keeps the chassis runtime clean for installers
 # that don't run dating.
 #
@@ -34,7 +34,7 @@
 # Pause flags: the prompt itself reads HARD_PAUSE / SOFT_PAUSE flags from
 # dating-context/, so we don't need to short-circuit here.
 #
-# See: <v1-reference-install>#698 follow-up + Sean's #<primary> decision to run
+# See: <v1-reference-install>#698 follow-up + the installer's #<primary> decision to run
 # dating-stack host-side as a V1-pattern fat-client plugin.
 
 set -uo pipefail

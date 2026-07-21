@@ -9,7 +9,7 @@
 # Why this exists instead of static plists in the plugin: launchd plists
 # embed absolute paths (PATH, WorkingDirectory, ProgramArguments). Those
 # paths are install-specific. Shipping concrete plists in the chassis
-# subtree would either bake one installer's paths in (Sean's) or punt
+# subtree would either bake one installer's paths in or punt
 # the path-resolution to the installer manually. This templater is the
 # clean middle: chassis ships the SHAPE + placeholder names; each
 # installer runs this script once at activation time and the resulting
@@ -46,7 +46,7 @@
 set -uo pipefail
 
 : "${CHASSIS_HOME:?CHASSIS_HOME must be exported (install root)}"
-: "${INSTALLER_LABEL:?INSTALLER_LABEL must be exported (e.g. com.<v1-reference-install>, com.benlakoff, etc.)}"
+: "${INSTALLER_LABEL:?INSTALLER_LABEL must be exported (e.g. com.<v1-reference-install>, com.<installer-name>, etc.)}"
 
 # Auto-detect optional env.
 if [[ -z "${HOMEBREW_PREFIX:-}" ]]; then
@@ -75,9 +75,9 @@ mkdir -p "$LAUNCHAGENTS_DIR"
 DRY_RUN=0
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=1
 
-# Slot-to-hour mapping. Reference install ran 10:00 / 14:00 / 18:00 since
-# Sean's 2026-05-18 directive (#<primary> msg 1506002918736924703). Adjust here
-# if the installer wants different anchors — re-run the script after.
+# Slot-to-hour mapping. Reference install ran 10:00 / 14:00 / 18:00 per the
+# installer's standing directive. Adjust here if the installer wants
+# different anchors - re-run the script after.
 # Plain `case` keeps the script bash-3.2 compatible (macOS default).
 slot_to_hour() {
     case "$1" in

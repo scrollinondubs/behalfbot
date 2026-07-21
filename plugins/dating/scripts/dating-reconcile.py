@@ -10,7 +10,7 @@ to `logs/dating/accuracy.jsonl`.
 Ported from <v1-reference-install> PR #534. Chassis adaptations vs <v1-reference-install> source:
   - CHASSIS_HOME env var used instead of $CHASSIS_HOME hardcoded root
   - RHL picks dir: ${CHASSIS_HOME}/rhl-picks/{like,super-like,pass,no-opinion}/
-    (installer-agnostic; <v1-reference-install> used ~/Desktop/dating-swipes/seans-picks/)
+    (installer-agnostic; the V1 reference install used a hand-sorted folder on the host Desktop)
   - TASTE_CALIBRATE + CLIP_VENV resolved relative to CHASSIS_HOME
 
 Filename contract (set by the swipe subagent at screenshot time):
