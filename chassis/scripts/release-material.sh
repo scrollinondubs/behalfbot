@@ -48,11 +48,24 @@ REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git 
 cd "$REPO_ROOT"
 [[ -f "$VERSION_FILE" ]] || die "no $VERSION_FILE here - run from the chassis repo"
 
-# Emits "<sha> <version>" oldest-first for every commit that CHANGED the
-# VERSION file's contents. A commit that touches the file without changing the
-# string (whitespace, a revert landing on the same value) is not a release and
-# is skipped - otherwise a no-op commit would silently split one release into
-# two, one of them empty.
+# Emits "<sha> <version>" oldest-first for every point on the release branch
+# where the VERSION file's contents CHANGED.
+#
+# Walks --first-parent, which is the correction that matters. Walking all
+# commits finds the commit that edited VERSION *on its feature branch*, which
+# can sit mid-branch - so every PR merged between that branch commit and its
+# own merge commit falls on the wrong side of the boundary. Observed on 0.1.0:
+# the bump lived inside the auto-updater feature branch, so PR #34 - the PR
+# that shipped 0.1.0 - was attributed to 0.1.1.
+#
+# --first-parent asks a different question: when did main start carrying this
+# version. That is the question an operator's updater answers too, since it
+# reads VERSION off main. Boundaries then land on merge commits and a PR is
+# attributed to the release that actually delivered it.
+#
+# A commit that touches the file without changing the string (whitespace, a
+# revert landing on the same value) is skipped - otherwise a no-op commit would
+# split one release into two, one of them empty.
 version_history() {
     local sha prev="" cur
     while read -r sha; do
@@ -62,7 +75,7 @@ version_history() {
             printf '%s %s\n' "$sha" "$cur"
             prev="$cur"
         fi
-    done < <(git log --reverse --format='%H' -- "$VERSION_FILE")
+    done < <(git log --first-parent --reverse --format='%H' -- "$VERSION_FILE")
 }
 
 # A missing or unauthenticated gh must not silently become "everything is
