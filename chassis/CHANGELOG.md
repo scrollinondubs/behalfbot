@@ -16,6 +16,19 @@ Semver:
 - `MINOR` (`0.3.0` → `0.4.0`): new features, optional fields, opt-in behaviors. Backwards-compatible.
 - `PATCH` (`0.3.1` → `0.3.2`): fixes, prompt tweaks, internal refactors. Always backwards-compatible.
 
+## Unreleased
+
+### Fixed
+- **v0.2.0's plugin-root preference never ran.** The Changed entry below ("`CHASSIS_PLUGINS_ROOT` now prefers `$CUSTOMER_HOME/vendored-plugins`") described behaviour that was unreachable in every container: the preference lived in `_env.sh` behind an is-unset guard, but the Dockerfile ENV baked `CHASSIS_PLUGINS_ROOT=/app/plugins` and `docker/entrypoint.sh` defaulted and exported the same value before `_env.sh` could ever run. The fetch worked, `vendored-plugins/` and `plugins.lock` were written, and every install silently kept loading the baked tree. Verified empirically on a live 0.2.0 install (dispatcher env showed `/app/plugins` while a usable fetched tree sat ignored). The "verified in a container both ways" claim in the v0.2.0 notes covered the fetch and the loader's selection logic in isolation, not the boot path that preloads the variable.
+
+### Changed
+- **Plugin root is now an overlay, not a tree swap.** `chassis/scripts/resolve-plugin-root.sh` (new) resolves plugins per plugin NAME: a plugin present in the fetched `vendored-plugins/` tree wins, anything only in the baked tree still loads. This replaces the v0.2.0 wholesale preference, which - had it been reachable - would have shrunk every install from 7 plugins to the 1 currently published in `behalfbot-plugins`. The result is materialised as a composed symlink root at `$CUSTOMER_HOME/state/plugins-root` so every existing single-root consumer (entrypoint `install-plugin`, `smoke-test` enumeration, plugin script paths) works unchanged. Per-plugin safety is kept: a fetched dir without an `openclaw.plugin.json` never shadows the baked copy, and an empty or failed fetch degrades to baked per plugin.
+- `CHASSIS_PLUGINS_ROOT` is no longer baked as Dockerfile ENV or defaulted by the entrypoint. A set value now reliably means an operator set it (compose environment, `docker -e`, or the customer `.env`) and is honoured verbatim with no overlay. The chassis default path is "unset", resolved at boot.
+- Boot now logs the resolved plugin root and writes `$CUSTOMER_HOME/plugins-root.state.json` (mode, source roots, per-plugin provenance). If a usable fetched tree exists but is not active, the resolver exits 5 and the entrypoint logs an unmissable ERROR - the v0.2.0 silent no-op class cannot recur quietly.
+
+### Added
+- `chassis/scripts/test-plugin-root-resolution.sh` + CI job `plugin-root-resolution` in `shell-tests.yml`: behavioural tests asserting the resolved root actually serves the fetched copy when a fetched tree is present. The pre-existing tests and CI were green throughout the period the feature did nothing.
+
 ## v0.2.0 — 2026-07-20
 
 Plugins move from image-baked to fetched-at-boot. This is the release that makes `behalfbot-plugins` real: the chassis now pulls its plugin tree from that repo at a pinned tag+SHA instead of carrying whatever was baked into the image.
