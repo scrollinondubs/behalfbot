@@ -1,6 +1,6 @@
 ---
 name: dating
-description: Dating-app automation as a sandboxed subagent. Photo verification consensus engine, regional default-reject with override gate, reply-gated catfish screening, concierge framing, Angel Protocol prereq for in-person meets. Use when the installer asks about a match, calibrates the screening rubric, or surfaces a dating decision; the main session orchestrates and the subagent runs swipe sessions + reports to the installer's social channel.
+description: Dating-app automation as a sandboxed subagent. Photo verification consensus engine, behaviour-based catfish screening (reply-gated), optional installer-configured regional gate (ships disabled), concierge framing, Angel Protocol prereq for in-person meets. Use when the installer asks about a match, calibrates the screening rubric, or surfaces a dating decision; the main session orchestrates and the subagent runs swipe sessions + reports to the installer's social channel.
 ---
 
 # Skill: Dating Assistant
@@ -58,30 +58,37 @@ Calibrated against installer feedback over time. The plugin ships a template `in
 
 The four rules below are wired to `chassis.config.yaml > modules.dating.safety_floor`. They apply whenever the plugin is enabled.
 
-### Default-reject with override gate (configured high-risk regions)
+### Behaviour-based catfish screening (primary path)
 
-**Default-reject any profile with markers from the configured high-risk-region list, with a clearly-defined override path so legitimate expats can still pass.** The default list is `RU`, `UA`, `BY` — calibrated against catfish-targeting clusters seen on the V1 install (three sketchy profiles in 72 hours: two confirmed catfish using stolen photos, one ambiguous-but-cancelled). The installer can edit `regional_default_reject.country_codes` for their threat model.
+What actually detects a catfish is behaviour, not identity. The primary screening signals - all of which run regardless of any regional config - are:
 
-**Markers that trigger the gate** (per-region, not exhaustive):
+- Reverse-image consensus hits: TinEye exact byte-match, Google Lens celebrity ID or high-confidence adult-aggregator hit (see the verification pipeline below)
+- The photo set appearing on aggregator or adult sites
+- A digital footprint concentrated exclusively on a single country's internet (one national cluster of TLDs and aggregators) with zero corroborating presence anywhere else - a recirculating stolen photo set looks like this; a real person almost never does
+- No verifiable current local presence (no ground-truth in bio, no locally-tagged content, no local-language fluency where expected)
+- Refusal of any verification step (video call, additional photos)
 
-- Country-specific writing systems in name, bio, or any prompt response (e.g. Cyrillic for RU/UA/BY)
-- Country flag emoji
-- Bio mentions cities, regions, or geographic landmarks of the configured countries
-- Regional messaging-app handles in bio (Telegram, VK / VKontakte, etc.)
-- Profile self-identifies as nationality / ethnicity / "Eastern European" / "Soviet" / equivalent
-- "From [country], in [installer's city]" framing
-- PimEyes face-search returns hits exclusively on the configured countries' top-level domains (`.ru`, `.ua`, `.by`) or known regional internet aggregators (e.g. `vklybe.tv`, `topdb.ru`, `userapi.com`, `pp.userapi.com`, `mamba.ru`, `love.mail.ru`, `iprofiles.ru`, `dzen.ru`)
+These are attributes of the profile's behaviour and evidence trail, not of the person's origin. An identity attribute (nationality, ethnicity, language, writing system, flag emoji) is never a screening signal.
 
-**Override path — profile passes the gate ONLY when ALL of these are true:**
+### Optional regional gate (ships disabled, unconfigured)
+
+The plugin also ships a default-reject-with-override-gate mechanism keyed on source region. **It ships `enabled: false` with an empty `country_codes` list. The chassis names no countries.** An installer may populate `regional_default_reject.country_codes` for their own threat model based on their own incident data; the behavioural signals above are the default and usually sufficient defence.
+
+**Markers that trigger the gate when the installer has enabled and configured it:**
+
+- Bio states the profile is currently located in, or operating from, a configured country
+- PimEyes face-search returns hits exclusively on a configured country's top-level domains and internet aggregators (phrased behaviourally: the single-country-footprint signal above, scoped to the configured list)
+
+**Override path - a gated profile passes ONLY when ALL of these are true:**
 
 1. Photo verification (TinEye + Lens + PimEyes + Yandex) returns no auto-reject signal.
-2. PimEyes face hits include at least one Western digital footprint (LinkedIn under her real name in the installer's country / a Western country, local-language Instagram with locally-tagged posts, English-language press / publications, Western university / employer).
+2. The digital footprint includes at least one corroborating presence outside the single-country cluster (LinkedIn under her real name, an Instagram with locally-tagged posts, press / publications, a verifiable university / employer).
 3. Bio shows current verifiable local presence with ground-truth — specific neighborhood mentioned, local-language phrases, locally-specific cultural references, photos at recognizable local locations beyond touristy markers.
 4. Profile passes the installer's standard scoring (face scorer threshold, character traits, etc.).
 
-If criteria 1-3 are mixed (e.g. PimEyes regional-only but Western LinkedIn exists), escalate to the installer in the social channel with full evidence. The installer rules.
+If criteria 1-3 are mixed (e.g. footprint is single-country-only but a corroborating LinkedIn exists), escalate to the installer in the social channel with full evidence. The installer rules.
 
-**Do not announce this filter to anyone.** Auto-reject silently. Do not explain to a flagged profile why she was passed. Treat the override gate identically to standard pre-opener verification — no human in the rejected profile's loop ever knows the rule existed.
+Profiles rejected by screening are simply not engaged further - ordinary silent screening, the same as any dating-app pass.
 
 ### Reply-gated photo verification
 
@@ -105,10 +112,10 @@ Rationale: catfish profiles tend to be bot-like and never reply to openers — r
 | TinEye exact byte-match on adult-aggregator domain | **AUTO-REJECT.** Pixel-level evidence on a high-suspicion domain. Block + report profile. Do not reply. |
 | Google Lens identifies a specific named celebrity / public figure | **AUTO-REJECT.** Stolen-celeb photo. Block + report. |
 | Google Lens high-confidence hit on adult-aggregator domain | **AUTO-REJECT.** Block + report. |
-| PimEyes hits exclusively on configured-region internet domains with zero Western digital footprint | **AUTO-REJECT.** Combined with the regional default-reject gate this is redundant but reinforcing. |
+| PimEyes hits exclusively on a single country's domains and aggregators with zero corroborating footprint anywhere else (`pimeyes_single_country_footprint_only`) | **AUTO-REJECT.** Behavioural stolen-photo-set pattern. |
 | Yandex similarity hit on adult-aggregator domain (visual similarity, NOT byte-match) | **ESCALATE TO INSTALLER.** Yandex returns "looks similar," not "same image" — could be a different person who happens to look alike. |
 | TinEye 0 + Lens clean + PimEyes 0 hits | **PASS.** Profile clears for reply composition + ongoing engagement. Yandex result is informational only. |
-| Mixed signals (e.g. TinEye 0 + PimEyes regional-only + Western footprint exists) | **ESCALATE TO INSTALLER** with all evidence attached. Do not reply until they rule. |
+| Mixed signals (e.g. TinEye 0 + PimEyes single-country-only + a corroborating footprint exists) | **ESCALATE TO INSTALLER** with all evidence attached. Do not reply until they rule. |
 
 5. **Yandex is similarity-only — never sufficient to auto-reject.** There is always someone who looks similar on the web; "looks similar" is not catfish signal. The catfish bar is exact byte-match (TinEye) or high-confidence visual ID (Lens) on a high-suspicion domain. Yandex's keyword + distinct-name signals are INFORMATIONAL only — captured in `raw.json`, no longer trigger YELLOW.
 
@@ -118,7 +125,7 @@ Rationale: catfish profiles tend to be bot-like and never reply to openers — r
 
 **What still runs at match-time (NOT reply-gated):**
 
-- The regional default-reject scan (profile text, flag emojis, mentioned cities, country-specific writing systems, regional messaging-app handles). That's a textual + visual profile scan, not the expensive photo-verification step.
+- The regional gate's profile-text scan, IF the installer has enabled and configured `regional_default_reject`. That's a cheap textual scan, not the expensive photo-verification step. (Disabled and unconfigured by default.)
 - The local face-scorer (cheap, local, no API calls). Auto-pass below the configured threshold still applies before opener composition.
 - The standard scoring rubric (installer preferences, deal-breakers, age sweet spot).
 
@@ -139,9 +146,9 @@ Phase 0 requirements (per the angel-protocol plugin's docs):
 
 ### Preauth clearance (pierces the regional video-screen requirement, NOT the safety floor)
 
-The installer can preauthorize a specific match to skip the regional mandatory video-screen when they have already vetted her through another channel — typically WhatsApp, IG, prior real-world meeting, or a referral from a trusted friend. Common case: the installer has already spoken with a flagged-region match outside the dating app and is satisfied she's a real, normal person; the mandatory video screen is now redundant overhead.
+The installer can preauthorize a specific match to skip the regional mandatory video-screen when they have already vetted her through another channel - typically WhatsApp, IG, prior real-world meeting, or a referral from a trusted friend. Common case: the installer has already spoken with a gate-flagged match outside the dating app and is satisfied she's a real, normal person; the mandatory video screen is now redundant overhead.
 
-**Note on scope:** non-flagged-region profiles no longer have a mandatory video-call ladder — the match picks coffee or video for the first meet by default. So preauth is mostly relevant for high-risk-region profiles that cleared the override gate. For non-flagged-region profiles, preauth is essentially a no-op on screening; everything else (photo verification, Angel Protocol, etc.) still applies.
+**Note on scope:** unflagged profiles have no mandatory video-call ladder - the match picks coffee or video for the first meet by default. So preauth is only meaningfully relevant for profiles the installer-configured regional gate flagged and that cleared the override gate (which requires the gate to be enabled and configured at all). For unflagged profiles, preauth is essentially a no-op on screening; everything else (photo verification, Angel Protocol, etc.) still applies.
 
 **How the installer issues a preauth.** In the social channel:
 
@@ -157,7 +164,7 @@ The capitalization of `Name` matters -- it must match the match's first name as 
 
 **What preauth does NOT pierce (still mandatory):**
 - **Photo verification.** Even a cleared match re-runs if the agent composes any message or schedules anything on her behalf. The installer's "I think she's clean" is judgment, not a forensic photo check — those are independent layers.
-- **Regional default-reject screen and override gate.** Preauth does not override the override gate's evidence requirements.
+- **The regional gate's override-path evidence requirements** (when the installer has enabled the gate). Preauth does not override them.
 - **Angel Protocol monitoring.** Cleared matches still trigger the auto-checkin pings, duress codeword listener, and escalation to emergency contacts on non-response during the meet window. Preauth pierces *screening*; safety monitoring is an entirely separate layer that always applies.
 - **The 5-exchange escalation rule.** Standard concierge handoff still applies if the agent is in the thread.
 - **Anti-doxx rules.** Preauth does not loosen any disclosure rules.
@@ -177,9 +184,9 @@ Removes the entry. Future contact reverts to the standard screening ladder.
 
 ### Meeting sequence
 
-**Default for all profiles outside the regional safety screen:** the match picks the format. Offer coffee OR a video call as equal options; if she picks video, she picks the platform. Don't pre-announce a video call as a hurdle she has to clear before coffee — that reads as job-interview gatekeeping (regression from the V1 install: a match was already scheduled for coffee, the agent retroactively asked for video, she was put off, the installer had to intervene).
+**Default for all profiles not flagged by an installer-configured regional gate:** the match picks the format. Offer coffee OR a video call as equal options; if she picks video, she picks the platform. Don't pre-announce a video call as a hurdle she has to clear before coffee - that reads as job-interview gatekeeping (regression from the V1 install: a match was already scheduled for coffee, the agent retroactively asked for video, she was put off, the installer had to intervene).
 
-**Hard-coded exception — video screening required first for flagged-region profiles** that cleared the override gate. The catfish-targeting environment is too lopsided in those source markets to skip the visual confirmation. Frame normally — "<installer> usually starts with a quick virtual coffee to say hello, then we plan something in person from there" — no need to call out the safety rationale.
+**Exception - video screening required first for profiles the installer-configured regional gate flagged** and that cleared the override gate. The visual confirmation is the last behavioural check for a profile that already tripped the installer's gate. Frame normally - "<installer> usually starts with a quick virtual coffee to say hello, then we plan something in person from there" - no need to call out the safety rationale.
 
 **Hard rules that apply across the board:**
 
@@ -188,7 +195,7 @@ Removes the entry. Future contact reverts to the standard screening ladder.
 - **Hard insistence from her on a private in-person first meet** = near-certain operator/scammer signal. Auto-reject and block.
 - **Angel Protocol monitoring** (auto-checkin pings, duress codeword, emergency-contact escalation) applies to every in-person regardless of how the meet was scheduled.
 
-**On signal-reading:** a non-flagged-region match who picks coffee instead of video is just stating a preference — that is not a tell. A flagged-region profile pushing back on the required video screen IS a tell.
+**On signal-reading:** an unflagged match who picks coffee instead of video is just stating a preference - that is not a tell. A gate-flagged profile pushing back on the required video screen IS a tell (refusal of a verification step is a behavioural signal).
 
 ### Risk-asymmetry framing (for the installer's own decision-making)
 
@@ -196,7 +203,7 @@ If the installer is ever weighing "she's probably real, should I just go ahead?"
 
 - Best case if she's real: a fine first date.
 - Worst case if she's an operator: drugging, robbery, abduction, sexual assault, financial extortion via blackmail.
-- Probability that a profile clearing all four photo-verification tools + the regional ban + the video + group sequence is malicious: very low.
+- Probability that a profile clearing all four photo-verification tools + every enabled screening gate + the video + group sequence is malicious: very low.
 - Probability that a profile that *only* cleared "vibes" is malicious in the current targeted environment: not low enough.
 
 The cost of one extra video call or one group date is hours; the cost of one bad in-person meet is potentially years. Always pay the safety tax.
@@ -459,7 +466,7 @@ launch app -> screenshot/XML -> analyze -> decide (like/pass/message) -> execute
 
 ## Physical attractiveness scoring (optional)
 
-The plugin ships a local CLIP-based face scorer (`plugins/dating/scripts/score-face.py`). Token-free; runs against the installer's curated taste references in `${CHASSIS_HOME}/data/dating/taste-refs/positive/`. Returns a 0-100 score + verdict. The scoring weights (W_TEXT=1.5, W_IMAGE=1.0) and bounds (SCORE_MIN=0.65, SCORE_MAX=1.05) were calibrated against the V1 reference install; re-run `score-calibrate.py` after the installer builds their own taste-refs stack.
+The plugin ships a local CLIP-based face scorer (`plugins/dating/scripts/score-face.py`). Token-free; runs against the installer's curated taste references in `${CHASSIS_HOME}/data/dating/taste-refs/positive/`. Returns a 0-100 score + verdict. The scoring weights and rescaling bounds in `score-face.py` are placeholder code defaults - they mean nothing until calibrated against your own data. After building your taste-refs stack, run `score-calibrate.py` to baseline them for your install.
 
 Default thresholds (configurable in `chassis.config.yaml > modules.dating.scoring.face_scorer_thresholds`):
 

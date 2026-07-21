@@ -1,6 +1,6 @@
 # Plugin: Dating
 
-Dating-app automation as a sandboxed subagent. Photo-verification consensus engine, regional default-reject with override gate, reply-gated catfish screening, concierge framing, Angel Protocol prereq for in-person meets. The plugin is **dormant by default** — opt-in only.
+Dating-app automation as a sandboxed subagent. Photo-verification consensus engine, behaviour-based catfish screening (reply-gated), an optional installer-configured regional gate (ships disabled with an empty country list), concierge framing, Angel Protocol prereq for in-person meets. The plugin is **dormant by default** - opt-in only.
 
 The agent runs in its own subagent context (`claude -p --cwd ${CHASSIS_HOME}/plugins/dating/`), uses its own CLAUDE.md, and is bound to a single Discord channel for output. The split is the whole point: a confused dating subagent that posts to the wrong channel or touches the wrong file is mechanically prevented from doing so.
 
@@ -40,8 +40,8 @@ modules:
       photo_verification:
         mode: reply_gated
       regional_default_reject:
-        enabled: true
-        country_codes: ["RU", "UA", "BY"]
+        enabled: false          # optional gate - ships disabled; populate country_codes
+        country_codes: []       # for your own threat model; the chassis names no countries
       five_exchange_rule: true
       angel_protocol_required_before_in_person: true
       anti_doxx: true
@@ -130,7 +130,7 @@ Three layers of separation:
 2. **Channel binding.** The dating subagent is hard-coded to one Discord channel (the social channel). All escalations, photo-verification verdicts, and session reports go there. Every other channel is off-limits — the CLAUDE.md states this explicitly and refusal is the model's job.
 
 3. **Safety floor.** Four non-negotiable rules wired to `chassis.config.yaml > modules.dating.safety_floor`:
-   - **Default-reject** for configured high-risk regions, with a clearly-defined override gate so legitimate expats can still pass.
+   - **Behaviour-based catfish screening** (reverse-image consensus, single-country-footprint detection, verifiable local presence, refusal-of-verification signals), plus an optional regional default-reject gate the installer may enable and configure for their own threat model. The gate ships disabled with an empty country list, and its override path is clearly defined so legitimate expats can still pass.
    - **Reply-gated photo verification** — the four-engine consensus (TinEye + Google Lens + PimEyes + Yandex) runs only after the match replies to the opener, minimizing wasted cycles on bot profiles.
    - **Angel Protocol Phase 0 required before any in-person meet** — until the angel-protocol plugin is enabled and Phase 0 is live, all in-person counter-proposals deflect to video.
    - **Preauth clearance pierces the regional video-screen, NOT the safety floor.** The installer can vouch for a specific match out-of-band (WhatsApp, IG, real life), but photo verification, override-gate evidence, and Angel Protocol monitoring all still apply.
@@ -143,7 +143,7 @@ Three layers of separation:
 |---|---|---|
 | **TinEye** | Exact-pixel byte-match | Hit on adult-aggregator domain → RED |
 | **Google Lens** | Visual match + celebrity ID + AI labels | Identifies named celebrity OR high-confidence hit on adult-aggregator domain → RED |
-| **PimEyes** | Face-geometry recognition | Hits exclusively on configured high-risk-region domains with zero Western footprint → RED |
+| **PimEyes** | Face-geometry recognition | Footprint concentrated exclusively on a single country's domains and aggregators with zero corroborating presence anywhere else → RED |
 | **Yandex** | Visual similarity (NOT byte-match) | Demoted to YELLOW max — informational only, never sufficient to auto-reject |
 
 Yandex is similarity-only — there is always someone who looks similar on the web. The catfish bar is exact byte-match (TinEye) or high-confidence visual (Lens) on a high-suspicion domain.
