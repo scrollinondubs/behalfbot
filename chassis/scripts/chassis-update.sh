@@ -5,13 +5,17 @@
 #
 # Idempotent script that updates the chassis to upstream main:
 #   1. Pre-flight (clean working tree)
-#   2. Snapshot pre-update state
+#   2. Snapshot pre-update state + effective compose config
 #   3. Drain in-flight heartbeats (state file lock)
 #   4. Pull upstream (canonical-clone mode: git pull; vendored mode: git subtree pull)
-#   5. Docker compose pull + up -d
+#   5. Compose pull + up -d THROUGH compose.sh so the per-install override
+#      applies (behalfbot#100) - bare compose only when the install has none
 #   6. Healthcheck poll (60s)
-#   7. Run migration script if present for the new version
-#   8. Post success / failure to the alerts channel
+#   7. Verify the merged compose config is actually running (ports published,
+#      scaled-to-0 services down, override in the container's config_files
+#      label) and report a config diff across the update
+#   8. Run migration script if present for the new version
+#   9. Post success / failure to the alerts channel
 #
 # Usage:
 #   chassis-update.sh                # apply non-breaking update
@@ -34,6 +38,14 @@ LOCAL_VERSION_FILE="${SCRIPT_DIR}/../VERSION"
 # healthcheck logic is testable without running a real update.
 # shellcheck source=chassis/scripts/_chassis-update-health.sh
 source "${SCRIPT_DIR}/_chassis-update-health.sh"
+# Merged-config verification helpers (behalfbot#100). Ships alongside this
+# script; a missing copy means a torn tree, and proceeding without it would
+# re-open the silent-override-revert hole, so fail loudly (no `set -e` here).
+# shellcheck source=chassis/scripts/_compose-verify.sh
+source "${SCRIPT_DIR}/_compose-verify.sh" || {
+    echo "[chassis-update] FATAL: ${SCRIPT_DIR}/_compose-verify.sh missing - it ships with this script" >&2
+    exit 1
+}
 UPSTREAM_REMOTE_URL="${CHASSIS_UPDATE_REMOTE:-https://github.com/scrollinondubs/behalfbot.git}"
 UPSTREAM_REMOTE_NAME="chassis"
 UPSTREAM_BRANCH="main"
@@ -87,6 +99,80 @@ dry_or_run_soft() {
     eval "$@" || { log "WARN: command failed (continuing recovery): $*"; return 1; }
 }
 
+# --- Compose invocation strategy (behalfbot#100) ---
+#
+# This script used to bring the stack back with bare `docker compose pull` +
+# `docker compose up -d`. Bare compose knows nothing about the per-install
+# override ($CUSTOMER_HOME/chassis-compose.override.yml - image pins,
+# published ports, env_file, scaled-to-0 services), so every update silently
+# reverted the customer's compose configuration and then reported success.
+# compose.sh is the chassis's one supported way to invoke compose - it layers
+# the override and hard-errors when the file it was told to use is missing.
+#
+# Strategy, decided ONCE up front:
+#   - CHASSIS_COMPOSE_OVERRIDE set (even to "") or the default override file
+#     present  -> every compose call goes through compose.sh. `${VAR-}` (no
+#     colon) mirrors compose.sh: set-but-empty means "deliberately no
+#     override" (chassis dev / smoke-test), unset means "use the default path".
+#   - neither -> a plain default install that never had an override. Keep the
+#     exact legacy bare invocation, with a WARN: forcing compose.sh here would
+#     turn its missing-override guard into a failed update for installs that
+#     were never broken. We do NOT create an override to satisfy the guard.
+#
+# Old-copy-of-this-script note: the process applying an update is the OLD
+# updater; the step-5 pull writes the NEW tree (including compose.sh, which
+# first shipped in v0.2.0) to disk before step 6 runs. So by the time compose
+# is invoked, ${SCRIPT_DIR}/compose.sh exists even when updating FROM a
+# pre-v0.2.0 tree - and if it somehow does not, that is a torn pull and we
+# die rather than fall back to the bare invocation this fix removes.
+# Installs whose OLD updater predates this fix still run one last bare-compose
+# update; chassis-migrations/v0.3.0.sh repairs those at the end of that run.
+COMPOSE_SH="${SCRIPT_DIR}/compose.sh"
+COMPOSE_DIR="$CHASSIS_HOME"
+OVERRIDE_FILE="${CHASSIS_COMPOSE_OVERRIDE-${CUSTOMER_HOME}/chassis-compose.override.yml}"
+if [[ -n "${CHASSIS_COMPOSE_OVERRIDE+x}" || -f "$OVERRIDE_FILE" ]]; then
+    USE_COMPOSE_SH=1
+else
+    USE_COMPOSE_SH=0
+fi
+
+# Print the shell command that runs `docker compose $*` for this install.
+# compose.sh resolves its compose files, project name and --env-file from its
+# own location + CUSTOMER_HOME, independent of the caller's cwd.
+compose_invoke() {
+    if [[ $USE_COMPOSE_SH -eq 1 ]]; then
+        echo "CUSTOMER_HOME='$CUSTOMER_HOME' bash '$COMPOSE_SH' $*"
+    else
+        echo "cd '$COMPOSE_DIR' && docker compose $*"
+    fi
+}
+
+# Best-effort snapshot of the effective (merged) compose config, so a diff
+# exists as evidence when the update changes the stack underneath an operator.
+# Soft on purpose: a broken pre-update tree must not block the update - the
+# step-7 verification after `up -d` is the hard gate. Output can contain
+# interpolated secrets from .env.baked, hence chmod 600 and STATE_DIR only.
+snapshot_config() {
+    local out="$1"
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log "DRY-RUN: snapshot effective compose config -> $out"
+        return 0
+    fi
+    local cmd
+    cmd=$(compose_invoke "config")
+    if eval "$cmd" > "$out" 2>/dev/null && [[ -s "$out" ]]; then
+        chmod 600 "$out"
+        log "Effective compose config snapshot: $out"
+    else
+        rm -f "$out"
+        log "WARN: could not snapshot effective compose config to $out (continuing)"
+    fi
+}
+
+CONFIG_PRE="${STATE_DIR}/compose-config-pre.yaml"
+CONFIG_POST="${STATE_DIR}/compose-config-post.yaml"
+CONFIG_DIFF="${STATE_DIR}/compose-config.diff"
+
 # --- Mode detection ---
 # canonical_clone: CHASSIS_HOME's git origin is scrollinondubs/behalfbot itself.
 #                  Update with `git pull --ff-only`.
@@ -129,14 +215,31 @@ restore_snapshot() {
     if [[ -s "$image_sidecar" ]]; then
         pinned_image=$(tr -d '[:space:]' < "$image_sidecar")
     fi
+    # Same rule as step 5 (behalfbot#100): the recovery `up -d` must not
+    # silently strip the per-install override either. compose.sh may be
+    # missing here when the snapshot restored a pre-v0.2.0 tree over it, so
+    # fall back to bare compose with a warning rather than dying mid-recovery.
+    local up_prefix="cd '$compose_dir' &&"
+    local up_cmd="docker compose"
+    if [[ $USE_COMPOSE_SH -eq 1 ]]; then
+        if [[ -f "$COMPOSE_SH" ]]; then
+            up_prefix="CUSTOMER_HOME='$CUSTOMER_HOME'"
+            up_cmd="bash '$COMPOSE_SH'"
+        else
+            log "WARN: $COMPOSE_SH not present after restore; recovering with bare"
+            log "WARN: docker compose - the per-install override will NOT apply."
+            log "WARN: re-assert it once healthy: bash chassis/scripts/compose.sh up -d"
+        fi
+    fi
+
     if [[ -n "$pinned_image" ]]; then
         log "Pinning container back to pre-update image: $pinned_image"
-        dry_or_run_soft "cd '$compose_dir' && CHASSIS_IMAGE='$pinned_image' docker compose up -d --force-recreate"
+        dry_or_run_soft "$up_prefix CHASSIS_IMAGE='$pinned_image' $up_cmd up -d --force-recreate"
     else
         log "WARN: no pre-update image recorded for this snapshot. The disk tree is"
         log "WARN: restored but the container will come back up on whatever"
         log "WARN: CHASSIS_IMAGE currently resolves to. Verify the running version by hand."
-        dry_or_run_soft "cd '$compose_dir' && docker compose up -d"
+        dry_or_run_soft "$up_prefix $up_cmd up -d"
     fi
 }
 
@@ -177,6 +280,37 @@ Resolve by upstreaming the change or stashing it:
   git -C "$CHASSIS_HOME" stash push -- chassis/
 EOF
     exit 1
+fi
+
+# --- Step 1.5: pre-flight - a missing override is not a default install ---
+#
+# When no override is on disk and none is configured, this is EITHER a plain
+# default install (fine - proceed bare, exactly as before) OR an install whose
+# override has gone missing, where proceeding would silently revert the
+# customer's compose configuration: the exact #100 failure. The two are
+# distinguishable, because the docker engine records the -f files a stack was
+# built with on its containers. If the running chassis container was built
+# WITH an override that no longer exists, refuse - loudly, and BEFORE the
+# pull mutates the tree. We deliberately do not create an override to make
+# the problem disappear. Applies to --dry-run too: it is a truthful prediction
+# that the real run would be refused.
+if [[ $USE_COMPOSE_SH -eq 0 && -f "${COMPOSE_DIR}/docker-compose.yml" ]] && command -v docker >/dev/null 2>&1; then
+    existing_container=$(chassis_find_container "$COMPOSE_DIR")
+    if [[ -n "$existing_container" ]]; then
+        built_with=$(docker inspect "$existing_container" \
+            --format '{{ index .Config.Labels "com.docker.compose.project.config_files" }}' 2>/dev/null)
+        if [[ "$built_with" == *"chassis-compose.override"* ]]; then
+            log "FATAL: the running stack was built with a compose override:"
+            log "FATAL:   $built_with"
+            log "FATAL: but no override exists at $OVERRIDE_FILE now. Proceeding would"
+            log "FATAL: silently revert this install's compose configuration (published"
+            log "FATAL: ports, image pins, scaled-to-0 services) - behalfbot#100."
+            log "FATAL: Restore the override file, or point CHASSIS_COMPOSE_OVERRIDE at its"
+            log "FATAL: location, or set CHASSIS_COMPOSE_OVERRIDE= (empty) if running"
+            log "FATAL: override-less is genuinely intended. Not creating one for you."
+            die "refusing to update: compose override missing but the running stack was built with one"
+        fi
+    fi
 fi
 
 # --- Step 2: BREAKING CHANGES gate ---
@@ -236,6 +370,13 @@ if [[ $DRY_RUN -eq 0 ]]; then
     fi
 fi
 
+# --- Step 4.5: snapshot the effective compose config before the pull ---
+# Evidence for the operator: what the stack's merged config looked like BEFORE
+# this update touched anything. Diffed against the post-up snapshot in step 7.
+if [[ -f "${COMPOSE_DIR}/docker-compose.yml" ]]; then
+    snapshot_config "$CONFIG_PRE"
+fi
+
 # --- Step 5: pull upstream ---
 case "$MODE" in
     canonical_clone)
@@ -253,13 +394,26 @@ case "$MODE" in
         ;;
 esac
 
-# --- Step 6: docker compose pull + up ---
-COMPOSE_DIR="$CHASSIS_HOME"
+# --- Step 6: docker compose pull + up (through compose.sh, behalfbot#100) ---
 if [[ ! -f "${COMPOSE_DIR}/docker-compose.yml" ]]; then
     log "No docker-compose.yml at $COMPOSE_DIR; skipping container refresh"
 else
-    dry_or_run "cd '$COMPOSE_DIR' && docker compose pull"
-    dry_or_run "cd '$COMPOSE_DIR' && docker compose up -d"
+    if [[ $USE_COMPOSE_SH -eq 1 ]]; then
+        # The step-5 pull delivers compose.sh when updating from a pre-v0.2.0
+        # tree, so in a real run it must exist by now. Never fall back to bare
+        # compose - that IS the bug this step replaces. The dry-run path never
+        # pulled, so it only reports the plan.
+        if [[ $DRY_RUN -eq 0 && ! -f "$COMPOSE_SH" ]]; then
+            die "compose.sh not found at $COMPOSE_SH after the upstream pull - refusing to fall back to bare docker compose (behalfbot#100)"
+        fi
+        log "Compose override in effect: ${OVERRIDE_FILE:-<none - explicitly disabled via CHASSIS_COMPOSE_OVERRIDE>}"
+    else
+        log "WARN: no compose override at $OVERRIDE_FILE - bringing the stack up on chassis defaults."
+        log "WARN: real installs carry an override (env_file, image pins, published ports);"
+        log "WARN: see docs/per-customer-repo-pattern.md. Not creating one on your behalf."
+    fi
+    dry_or_run "$(compose_invoke "pull")"
+    dry_or_run "$(compose_invoke "up -d")"
 fi
 
 # --- Step 7: healthcheck ---
@@ -318,16 +472,96 @@ if [[ $DRY_RUN -eq 0 ]]; then
     fi
 fi
 
+# --- Step 7.5: verify the merged compose config is actually running ---
+#
+# behalfbot#100: the version healthcheck above proves the chassis container is
+# up on the new code - over the INTERNAL compose network. It is structurally
+# blind to the things the per-install override changes: published host ports,
+# scaled-to-0 services, image pins. On the install that motivated this, the
+# update dropped the override, postgres stopped publishing 127.0.0.1:5432,
+# every host-side consumer broke, a watchdog bounced the whole VM - and the
+# healthcheck reported green throughout. So: render the merged config the
+# stack SHOULD be running and check the docker engine against it.
+#
+# With an override in play a mismatch is a failed update (rollback + die) -
+# reverting a customer's compose configuration is not a warning-level event.
+# Without one (plain default install) the check still runs but only warns,
+# preserving the no-override contract exactly.
+if [[ $DRY_RUN -eq 0 && "$HEALTHCHECK_MODE" == "container" ]]; then
+    verify_failed=0
+    verify_msgs=""
+    CONFIG_POST_JSON="${STATE_DIR}/compose-config-post.json"
+
+    if eval "$(compose_invoke "config --format json")" > "$CONFIG_POST_JSON" 2>"${CONFIG_POST_JSON}.err" && [[ -s "$CONFIG_POST_JSON" ]]; then
+        chmod 600 "$CONFIG_POST_JSON"
+        rm -f "${CONFIG_POST_JSON}.err"
+        MERGED_PROJECT=$(jq -r '.name // empty' "$CONFIG_POST_JSON")
+
+        verify_msgs=$(compose_verify_running_config "$CONFIG_POST_JSON") || verify_failed=1
+
+        # Direct evidence the engine built the stack WITH the override: the
+        # compose config_files label on the chassis container.
+        if [[ $USE_COMPOSE_SH -eq 1 && -n "$OVERRIDE_FILE" ]]; then
+            compose_override_in_config_files "$MERGED_PROJECT" "$OVERRIDE_FILE"
+            case $? in
+                1)
+                    verify_msgs="${verify_msgs}${verify_msgs:+$'\n'}VERIFY-FAIL: chassis container's compose config_files label does not include $OVERRIDE_FILE - the stack was brought up without the per-install override"
+                    verify_failed=1
+                    ;;
+                2)
+                    verify_msgs="${verify_msgs}${verify_msgs:+$'\n'}VERIFY-FAIL: no running chassis container found in project '$MERGED_PROJECT' to inspect for the override"
+                    verify_failed=1
+                    ;;
+            esac
+        fi
+    else
+        verify_msgs="VERIFY-FAIL: could not render the merged compose config ($(head -c 300 "${CONFIG_POST_JSON}.err" 2>/dev/null | tr '\n' ' '))"
+        verify_failed=1
+    fi
+
+    if [[ $verify_failed -eq 1 ]]; then
+        while IFS= read -r line; do log "$line"; done <<<"$verify_msgs"
+        if [[ $USE_COMPOSE_SH -eq 1 ]]; then
+            log "FAIL: the running stack does not match the merged compose config - the"
+            log "FAIL: per-install override was not (fully) applied. Rolling back."
+            restore_snapshot "$SNAPSHOT" "$COMPOSE_DIR"
+            die "update failed config verification and was rolled back (behalfbot#100)"
+        fi
+        log "WARN: running stack does not match the compose config (no override install;"
+        log "WARN: not failing the update). Review the lines above."
+    else
+        log "Config verification passed: declared ports published, scaled-to-0 services down."
+    fi
+
+    # Operator-facing evidence: did the effective config change across the
+    # update? Snapshot post-up and diff against the pre-pull snapshot. The
+    # diff content can carry interpolated secrets, so it stays in STATE_DIR -
+    # only the fact of drift and the path are logged.
+    snapshot_config "$CONFIG_POST"
+    if [[ -f "$CONFIG_PRE" && -f "$CONFIG_POST" ]]; then
+        if diff -u "$CONFIG_PRE" "$CONFIG_POST" > "$CONFIG_DIFF" 2>/dev/null; then
+            log "Effective compose config unchanged across the update."
+            rm -f "$CONFIG_DIFF"
+        else
+            chmod 600 "$CONFIG_DIFF"
+            log "NOTICE: effective compose config CHANGED across the update ($(grep -c '^[+-]' "$CONFIG_DIFF") diff lines)."
+            log "NOTICE: review: $CONFIG_DIFF"
+        fi
+    fi
+fi
+
 # --- Step 8: run migration script if present ---
 # Migrations are strictly automated shell scripts. Judgment-heavy migrations
 # would have been flagged BREAKING CHANGES and gated behind --force above.
 #
-# chassis/scripts/chassis-migrations/ does not exist in the repo yet - no
-# release has needed a state migration. That is fine and deliberate: the `-f`
-# test below is false for a path under a missing directory just as it is for a
-# missing file, so the step no-ops. The directory gets created by whichever
-# release first ships a migration. Do not pre-create it empty.
-MIGRATION_SCRIPT="${CHASSIS_HOME}/chassis/scripts/chassis-migrations/v${UPSTREAM_VERSION}.sh"
+# The `-f` test below is false for a path under a missing directory just as
+# it is for a missing file, so versions without a migration no-op here. First
+# shipped migration: v0.3.0.sh (behalfbot#100 override repair).
+# Resolved relative to this script (like LOCAL_VERSION_FILE), not
+# ${CHASSIS_HOME}/chassis/scripts/...: that literal path only exists in
+# canonical-clone mode. In vendored-subtree mode the pulled repo root lands
+# UNDER chassis/, so the old path silently skipped every migration there.
+MIGRATION_SCRIPT="${SCRIPT_DIR}/chassis-migrations/v${UPSTREAM_VERSION}.sh"
 if [[ -f "$MIGRATION_SCRIPT" ]]; then
     log "Running migration: $MIGRATION_SCRIPT"
     dry_or_run "bash '$MIGRATION_SCRIPT'"

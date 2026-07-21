@@ -16,6 +16,19 @@ Semver:
 - `MINOR` (`0.3.0` → `0.4.0`): new features, optional fields, opt-in behaviors. Backwards-compatible.
 - `PATCH` (`0.3.1` → `0.3.2`): fixes, prompt tweaks, internal refactors. Always backwards-compatible.
 
+## Unreleased
+
+### Fixed
+
+- **`chassis-update.sh` no longer silently reverts customer compose overrides (#100).** The updater brought the stack back with bare `docker compose pull` + `docker compose up -d`, dropping the per-install override (published ports, image pins, env_file, scaled-to-0 services) and then reporting success - its healthcheck polls the chassis container over the internal network and cannot see published ports. On the install that surfaced this, the update unpublished postgres's `127.0.0.1:5432` (breaking every host-side consumer and triggering a watchdog VM bounce mid-update) and created a fresh empty Vaultwarden the override scales to 0. Now:
+  - All updater compose calls (`pull`, `up -d`, and the rollback path's recovery `up`) route through `compose.sh`, which layers the override and hard-errors when the file it was told to use is missing. Installs that never had an override keep the exact legacy bare invocation, with a warning; the updater never creates an override on its own.
+  - Pre-flight refuses to update when the running stack's containers were built with an override that no longer exists on disk (read from the engine's `com.docker.compose.project.config_files` label), before the pull mutates anything.
+  - A new post-update verification step (`_compose-verify.sh`, exercised by `test-compose-verify.sh` against real containers) checks the docker engine against the merged `docker compose config`: every declared published port must be bound, every scaled-to-0 service must be down, and the chassis container's `config_files` label must include the override. With an override in play, a mismatch fails the update and rolls back; container-healthy is no longer treated as install-healthy.
+  - The effective merged config is snapshotted before and after the update (`state/chassis-update/compose-config-{pre,post}.yaml`, chmod 600 - it contains interpolated secrets) and a diff is reported when it changes, so drift leaves evidence.
+  - Migration scripts now resolve relative to the running script like `VERSION` does; the old `${CHASSIS_HOME}/chassis/scripts/...` literal only existed in canonical-clone mode, so vendored-subtree installs silently skipped every migration.
+
+**Migration:** `scripts/chassis-migrations/v0.3.0.sh`. Deliberately keyed to v0.3.0: an install upgrading TO v0.3.0 executes its OLD, pre-fix copy of the updater, whose bare `up -d` strips the override one last time. The old updater then runs this migration from the freshly pulled tree; it re-runs the stack through `compose.sh` and verifies published ports and scaled-to-0 services, repairing the stack within the same update run. No-override and host-mode installs: no-op.
+
 ## v0.3.0 - 2026-07-21
 
 The release that makes v0.2.0 real. The plugin fetcher shipped in v0.2.0 downloaded and verified a plugin tree that the chassis then never used; this release makes the fetched tree actually take effect, as an overlay rather than a swap. Also hardens the Notion and Obsidian second-brain adapters to the point where full-length documents survive a round trip, and removes nationality-based screening from the public dating plugin.
