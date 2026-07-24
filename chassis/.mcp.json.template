@@ -91,6 +91,16 @@
       }
     },
 
+    "gmail-monitor": {
+      "_role": "optional - headless, DRAFT-ONLY Gmail surface for the gmail-monitor heartbeat. A stdlib-only stdio MCP (chassis/scripts/gmail-monitor-mcp.py) that wraps the Gmail REST API with a GMAIL_MONITOR_* refresh token, so a headless `claude -p` dispatcher gets Gmail tools a hosted/interactive connector cannot provide over SSH. Distinct from the `gmail` entry above: that is the full @gongrzhe autoauth server (includes send) keyed on modules.google.gmail; this is a purpose-built triage server with NO send tool. Enable at most ONE of the two - they would both claim the same MCP tool namespace if co-registered.",
+      "_enable_when": "chassis.config.yaml.modules.google.gmail_monitor == true",
+      "_tools_note": "search_threads, get_thread, list_labels, modify_thread (archive + label), create_draft. There is deliberately no send tool - the heartbeat drafts, the principal sends. Draft From is GMAIL_MONITOR_SENDER when set, else the token's own consented account.",
+      "_no_env_note": "There is intentionally NO env block. The server self-sources GMAIL_MONITOR_CLIENT_ID / _CLIENT_SECRET / _REFRESH_TOKEN (and optional GMAIL_MONITOR_SENDER) from the install's .env.baked / .env at runtime. Do NOT add a `${VAR}` env block here: the hydrator only substitutes <ANGLE_BRACKET> placeholders, so a `${VAR}` form survives literally into .mcp.json and a literal-token credential becomes a bearer string that 401s on every call. Keeping the block absent is the fix, not an omission.",
+      "_launch_note": "Launched via `sh -c` so the shell expands CHASSIS_ROOT deterministically at spawn (Claude Code's own placeholder pass only handles <ANGLE_BRACKET> forms - see the memory-MCP mount-path fix in behalfbot #112). CHASSIS_ROOT is /app/chassis inside the container, which is the only context that runs this server (the dispatcher). A host session reaches Gmail through its interactive connector and never launches this.",
+      "command": "sh",
+      "args": ["-c", "exec python3 \"${CHASSIS_ROOT:-/app/chassis}/scripts/gmail-monitor-mcp.py\""]
+    },
+
     "google-calendar": {
       "_role": "optional - Google Calendar over an on-disk OAuth token. Ben's install has never had Calendar at all; this is the first time the chassis ships one.",
       "_enable_when": "chassis.config.yaml.modules.google.calendar == true",
