@@ -189,7 +189,14 @@ fi
 # new-jaxity#49 for context. The strip step still does that work; only the
 # re-append for the three container-overridden keys is removed.
 PATH_KEYS_REGEX='^(CUSTOMER_HOME|CHASSIS_HOME|REPO|MANIFEST|CUSTOMER_CLAUDE_DIR)='
-PATH_ORIGINALS=$(echo "$APP_VARS" | grep -E "$PATH_KEYS_REGEX" | sort -u)
+# `|| true` guards the no-match case: when none of the new vars are host-path
+# keys, grep exits 1, and under `set -o pipefail` (see `set -euo pipefail` at
+# the top) that non-zero propagates through the pipeline and `set -e` aborts
+# the whole bake. This bit whenever bake ran from a shell that had already
+# sourced `.env` (so the path keys were pre-env and got subtracted out). Every
+# sibling grep in this script (TOXIC_PRESENT, APP_VARS) already carries the
+# same guard.
+PATH_ORIGINALS=$(echo "$APP_VARS" | grep -E "$PATH_KEYS_REGEX" | sort -u || true)
 if [[ -n "$PATH_ORIGINALS" ]]; then
     while IFS= read -r line; do
         key="${line%%=*}"
