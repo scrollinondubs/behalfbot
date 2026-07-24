@@ -194,6 +194,44 @@ Wireframe / mockup generation. No auth required for stdio mode.
 
 ---
 
+## Drift detection + reconcile (`reconcile-mcp-config.py`)
+
+A live `.mcp.json` can drift from what `chassis.config.yaml` + the template would hydrate today. When it does, a `--force` re-hydrate (or any regen) **silently drops** every server that is present in the live file but not enabled in config - no error, no warning, working MCP integrations just vanish. Real case: a live file running 15 servers where the config only enables 6; a `--force` there would drop the other 9.
+
+[`chassis/scripts/reconcile-mcp-config.py`](../chassis/scripts/reconcile-mcp-config.py) detects that gap before it bites, and can write the missing flags back into `chassis.config.yaml`. It reuses the hydrator's own gating logic, so its answer matches what a real hydrate would produce. It is **read-only on `.mcp.json`** - `--fix` only ever edits `chassis.config.yaml`, after backing it up.
+
+```bash
+# Report drift (default). Exit 0 = clean, exit 1 = drift, exit 2 = bad input.
+python3 chassis/scripts/reconcile-mcp-config.py --check
+
+# Same, machine-readable (used by smoke-test.sh + the bootstrap --force guard):
+python3 chassis/scripts/reconcile-mcp-config.py --json
+
+# Write the preserving flags into chassis.config.yaml (idempotent, backs up first):
+python3 chassis/scripts/reconcile-mcp-config.py --fix
+```
+
+Paths default from `$CUSTOMER_HOME` / `$CHASSIS_HOME`; override with `--config`, `--template`, `--mcp`, `--env`.
+
+### The three sets
+
+| Set | Meaning | Action |
+|---|---|---|
+| **PRESENT_BUT_WOULD_DROP** | Live now, but a re-hydrate would NOT emit it (config never enabled it). The dangerous set. | `--fix` adds the exact `_enable_when` flag that preserves each one. |
+| **WOULD_EMIT_BUT_MISSING** | Config enables it but the live file lacks it. Under-provisioned; a re-hydrate would ADD it. | Info only. Re-hydrate when convenient. |
+| **CONSISTENT** | Present in both. | None. |
+
+Two extra checks ride along: every server that WOULD emit is verified against `.env` for the `<PLACEHOLDER>` tokens it needs (so a later hydrate does not produce placeholder-broken entries - same condition the hydrator exits 2 on), and host-vs-container **path-model mismatches** are flagged where detectable (a live entry carrying a host absolute path where the template renders a container path like `${CHASSIS_ROOT:-/app/chassis}/...`).
+
+`--fix` only auto-applies `==`-gated flags. The second-brain servers gate on `mode != 'adapter'`; "fixing" one by flipping mode would drop the adapter server instead, so those are surfaced with a note and left to a human.
+
+### Integration points
+
+- **`smoke-test.sh`** runs the check as `mcp_config_drift`. It FAILs only on PRESENT_BUT_WOULD_DROP (the destructive set); the info sets do not fail the smoke run.
+- **`bootstrap-mcp-config.sh --force`** runs the check before overwriting an existing `.mcp.json`. If PRESENT_BUT_WOULD_DROP is non-empty it **refuses** (exit 3) and points at `reconcile-mcp-config.py --fix`. Legit token-rotation `--force` runs are unaffected - a consistent install has an empty drop set and the guard passes silently. Pass `--allow-drop` to overwrite and accept the loss on purpose.
+
+---
+
 ## Lessons baked in
 
 - **#6** — agent-side accounts for every credential. Don't reuse personal identity.

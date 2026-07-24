@@ -10,6 +10,7 @@ on:
     paths:
       - 'chassis/second_brain/**'
       - 'chassis/scripts/hydrate-mcp-json.py'
+      - 'chassis/scripts/reconcile-mcp-config.py'
       - 'chassis/scripts/gmail-attachment.py'
       - 'chassis/scripts/tests/**'
       - 'chassis/.mcp.json.template'
@@ -21,6 +22,7 @@ on:
     paths:
       - 'chassis/second_brain/**'
       - 'chassis/scripts/hydrate-mcp-json.py'
+      - 'chassis/scripts/reconcile-mcp-config.py'
       - 'chassis/scripts/gmail-attachment.py'
       - 'chassis/scripts/tests/**'
       - 'chassis/.mcp.json.template'

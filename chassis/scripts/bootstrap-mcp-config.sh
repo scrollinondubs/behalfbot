@@ -42,6 +42,10 @@
 #   --force. The use case is install-time bootstrap, NOT routine refresh.
 #   If you need to rotate a token, edit `.mcp.json` directly or rotate in
 #   Vaultwarden + re-run with --force.
+# - Even with --force, refuses if a re-hydrate would DROP a server that is live
+#   in the existing `.mcp.json` but not enabled in chassis.config.yaml (checked
+#   via reconcile-mcp-config.py). Run `reconcile-mcp-config.py --fix` to add the
+#   preserving flags, or pass --allow-drop to overwrite and accept the loss.
 # - Never logs token values. The hydrator names only the placeholders it could
 #   NOT resolve, and the env keys it dropped for that reason.
 # - File written with `umask 077` to land at 0600.
@@ -49,7 +53,8 @@
 # Usage
 # =====
 #   bash chassis/scripts/bootstrap-mcp-config.sh              # idempotent - skips if file exists
-#   bash chassis/scripts/bootstrap-mcp-config.sh --force      # rewrite even if file exists
+#   bash chassis/scripts/bootstrap-mcp-config.sh --force      # rewrite even if file exists (guarded)
+#   bash chassis/scripts/bootstrap-mcp-config.sh --force --allow-drop  # rewrite even if it drops live servers
 #   bash chassis/scripts/bootstrap-mcp-config.sh --dry-run    # print result to stdout, don't write
 #
 # Related
@@ -81,10 +86,12 @@ ENV_FILE="$CUSTOMER_HOME/.env"
 
 FORCE=0
 DRY_RUN=0
+ALLOW_DROP=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --force) FORCE=1; shift ;;
         --dry-run) DRY_RUN=1; shift ;;
+        --allow-drop) ALLOW_DROP=1; shift ;;
         -h|--help)
             grep -E "^# (Usage|  bash)" "$0" | sed 's/^# //'
             exit 0
@@ -146,6 +153,39 @@ fi
 if [[ -f "$TARGET" && $FORCE -eq 0 ]]; then
     echo "skip: $TARGET already exists; pass --force to overwrite" >&2
     exit 0
+fi
+
+# --force destructive-drift guard.
+# A --force re-hydrate rebuilds .mcp.json from config + template, which SILENTLY
+# drops any server present in the live file but not enabled in config. Before
+# overwriting an existing file, ask reconcile-mcp-config.py whether that would
+# drop anything. If it would, refuse and point at the fix. Legit token-rotation
+# --force runs are unaffected: a consistent install has an empty drop set and
+# the guard passes silently. Bypass with --allow-drop when the drop is intended.
+RECONCILER="$SCRIPT_DIR/reconcile-mcp-config.py"
+if [[ -f "$TARGET" && $FORCE -eq 1 && $ALLOW_DROP -eq 0 && -f "$RECONCILER" ]]; then
+    reconciler_args=(--config "$CONFIG" --template "$TEMPLATE" --mcp "$TARGET" --json)
+    [[ -f "$ENV_FILE" ]] && reconciler_args+=(--env "$ENV_FILE")
+    # The reconciler exits 1 when it finds drift, which under `set -e` would
+    # abort this script. Swallow its exit code here - the drop set is read from
+    # the JSON body, not the exit code.
+    reconciler_json=$(python3 "$RECONCILER" "${reconciler_args[@]}" 2>/dev/null || true)
+    would_drop=$(printf '%s' "$reconciler_json" | python3 -c '
+import json, sys
+try:
+    r = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+print(",".join(i["server"] for i in r.get("present_but_would_drop", [])))
+' 2>/dev/null || true)
+    if [[ -n "$would_drop" ]]; then
+        echo "REFUSING --force: a re-hydrate would DROP live MCP servers: $would_drop" >&2
+        echo "  They are present in $TARGET but chassis.config.yaml does not enable them." >&2
+        echo "  Preserve them: python3 $RECONCILER --fix" >&2
+        echo "  (writes the enabling flags into chassis.config.yaml, then re-run this with --force)" >&2
+        echo "  To overwrite and accept the drop anyway, pass --allow-drop." >&2
+        exit 3
+    fi
 fi
 
 rc=0

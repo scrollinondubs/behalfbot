@@ -185,6 +185,58 @@ check_mcp_json_present() {
     fi
 }
 
+check_mcp_config_drift() {
+    # Destructive-drift guard. reconcile-mcp-config.py compares the live
+    # .mcp.json against the set the hydrator WOULD emit from chassis.config.yaml
+    # + the template. The failure worth catching here is PRESENT_BUT_WOULD_DROP:
+    # servers running live that a --force re-hydrate would silently drop because
+    # config never enabled them. That is a landmine, not a cosmetic diff, so it
+    # FAILs. WOULD_EMIT_BUT_MISSING and placeholder gaps are benign here and do
+    # not fail the check.
+    local reconciler="$CHASSIS_ROOT/scripts/reconcile-mcp-config.py"
+    local config="$CHASSIS_HOME/chassis.config.yaml"
+    local template="$CHASSIS_ROOT/.mcp.json.template"
+    local mcp="$CHASSIS_HOME/.mcp.json"
+    local envf="$CHASSIS_HOME/.env"
+    if [[ ! -f "$reconciler" ]]; then
+        record SKIP mcp_config_drift "reconcile-mcp-config.py not found"
+        return
+    fi
+    if [[ ! -f "$mcp" || ! -f "$template" ]]; then
+        record SKIP mcp_config_drift ".mcp.json or template missing - nothing to compare"
+        return
+    fi
+    local args=(--config "$config" --template "$template" --mcp "$mcp" --json)
+    [[ -f "$envf" ]] && args+=(--env "$envf")
+    local out
+    out=$(python3 "$reconciler" "${args[@]}" 2>/dev/null)
+    if [[ -z "$out" ]]; then
+        record FAIL mcp_config_drift "reconcile-mcp-config.py produced no output"
+        return
+    fi
+    local summary
+    summary=$(printf '%s' "$out" | python3 -c '
+import json, sys
+try:
+    r = json.load(sys.stdin)
+except Exception:
+    print("")
+    sys.exit()
+drop = [i["server"] for i in r.get("present_but_would_drop", [])]
+if drop:
+    print("FAIL|a re-hydrate would DROP: %s - run reconcile-mcp-config.py --fix"
+          % ", ".join(drop))
+else:
+    print("PASS|no destructive drift; live .mcp.json survives a re-hydrate")
+' 2>/dev/null)
+    if [[ -z "$summary" ]]; then
+        record FAIL mcp_config_drift "could not parse reconciler output"
+        return
+    fi
+    local status="${summary%%|*}" msg="${summary#*|}"
+    record "$status" mcp_config_drift "$msg"
+}
+
 check_briefings_dispatch_helper() {
     if [[ ! -x "$CHASSIS_ROOT/scripts/post-to-channel.sh" ]]; then
         record FAIL briefings_dispatch "$CHASSIS_ROOT/scripts/post-to-channel.sh not executable"
@@ -295,6 +347,7 @@ run_core_checks() {
     check_heartbeat_dispatcher_script
     check_heartbeats_md_present
     check_mcp_json_present
+    check_mcp_config_drift
     check_briefings_dispatch_helper
     check_telegram_intake_helper
     check_slack_intake_helper
