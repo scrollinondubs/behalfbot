@@ -157,6 +157,75 @@ setup.
 
 ---
 
+## chassis-root-health (chassis-shipped, default-on)
+
+Every-30m verification that the boot-time chassis-root resolution (#118,
+`resolve-chassis-root.sh`) is still healthy. #118 resolves the effective
+chassis tree once, at container boot, and records the outcome in
+`$CUSTOMER_HOME/chassis-root.state.json`; nothing re-checks it on a schedule,
+so two failure modes can go dark for days (same class as the "SiYuan MCP
+stale-config, silent, no alert" incident):
+
+1. **Silent staleness** - the runtime resolved `baked` while a usable live
+   tree exists at `$CUSTOMER_HOME/chassis/chassis` (mount dropped at boot then
+   restored). The install is silently on stale chassis - the exact drift #118
+   exists to prevent.
+2. **Loud-fail / assertion** - the resolver hit an exit-5 path (torn live
+   tree, MAJOR skew, symlink failure), recorded in the state file's `error`.
+
+Near-free (a file read + a live-tree usability probe, no docker, no network).
+Silent on a healthy install and on any pre-#118 install (no state file =
+nothing resolved yet). Soft-depends on #118 having shipped
+`resolve-chassis-root.sh`; degrades to a clean no-op before then.
+
+Issue: scrollinondubs/behalfbot#119.
+
+```yaml
+schedule: every 30m
+gather: ${CHASSIS_HOME}/chassis/scripts/gather-chassis-root-health.sh
+condition: threshold count > 0
+prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/chassis-root-health-prompt.md
+model: sonnet
+budget: 1
+criticality: critical
+```
+
+---
+
+## container-liveness (chassis-shipped, opt-in - needs docker socket)
+
+Every-15m `docker inspect` of the core chassis containers, catching the case
+an HTTP probe (`gather-service-health.sh`) never can: a container DOWN,
+restart-looping, or unhealthy - not serving because it is not running. #118
+introduces a real boot-failure mode (an exit-5 assertion aborts the
+entrypoint -> crash-loop), so an unmonitored loop is a live risk.
+
+Set `CHASSIS_LIVENESS_CONTAINERS` in the install's environment to the full
+stack (default `behalfbot,behalfbot-postgres`). Requires the docker socket
+bind-mount (same one `docker-prune` uses); docker-unreachable is a deliberate
+no-op so socket-less installs never false-alarm.
+
+**Structural caveat:** the dispatcher runs INSIDE `behalfbot`, so this
+in-container heartbeat cannot catch a `behalfbot` that never completes a tick
+(fully dead). It catches sibling-down + `behalfbot` restart-loops. For the
+fully-dead case, run the SAME location-agnostic script from a host LaunchAgent
+/ systemd timer against the host docker daemon - see the prompt file for the
+host-side wiring.
+
+Issue: scrollinondubs/behalfbot#119.
+
+```yaml
+schedule: every 15m
+gather: ${CHASSIS_HOME}/chassis/scripts/gather-container-liveness.sh
+condition: threshold count > 0
+prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/container-liveness-prompt.md
+model: sonnet
+budget: 1
+criticality: critical
+```
+
+---
+
 ## Active heartbeats
 
 <!--
