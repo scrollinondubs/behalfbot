@@ -28,10 +28,15 @@
 set -uo pipefail
 
 : "${CHASSIS_HOME:?CHASSIS_HOME must be set}"
-: "${CHASSIS_ROOT:=/app/chassis}"
-# Entrypoint-launched runs inherit the resolved overlay root. Standalone runs
+SMOKE_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Entrypoint-launched runs inherit the resolved chassis root. Standalone runs
 # (docker exec, host shell) resolve it the same way instead of assuming the
-# baked tree, so both paths test the plugin set that is actually live.
+# baked tree, so both paths test the tree that is actually live.
+if [[ -z "${CHASSIS_ROOT:-}" && -x "$SMOKE_SCRIPT_DIR/resolve-chassis-root.sh" ]]; then
+    CHASSIS_ROOT="$(bash "$SMOKE_SCRIPT_DIR/resolve-chassis-root.sh" 2>/dev/null)" || true
+fi
+: "${CHASSIS_ROOT:=/app/chassis}"
+# Same for the plugin overlay root.
 if [[ -z "${CHASSIS_PLUGINS_ROOT:-}" && -x "$CHASSIS_ROOT/scripts/resolve-plugin-root.sh" ]]; then
     CHASSIS_PLUGINS_ROOT="$(bash "$CHASSIS_ROOT/scripts/resolve-plugin-root.sh" 2>/dev/null)" || true
 fi
@@ -90,6 +95,36 @@ check_filesystem_layout() {
         record FAIL filesystem_layout "missing: ${missing[*]}"
     else
         record PASS filesystem_layout "all expected dirs under \$CHASSIS_HOME present"
+    fi
+}
+
+check_chassis_root_resolution() {
+    # Stale-baked-chassis drift guard. The failure this catches: an operator's
+    # live chassis tree (bind-mounted clone or vendored subtree at
+    # $CUSTOMER_HOME/chassis/chassis) is present and usable, but the runtime
+    # is executing a DIFFERENT tree - i.e. `git pull` updated the disk and the
+    # container kept running the stale image-baked copy. That exact state shipped
+    # broken .mcp.json re-hydrates on the reference install: the baked template
+    # predated the live tree by two releases and nothing said a word.
+    local live="${CHASSIS_LIVE_TREE_ROOT:-${CUSTOMER_HOME:-$CHASSIS_HOME}/chassis/chassis}"
+    local resolved_real live_real resolved_version live_version
+    resolved_real="$(cd "$CHASSIS_ROOT" 2>/dev/null && pwd -P)"
+    resolved_version="$(tr -d '[:space:]' < "$CHASSIS_ROOT/VERSION" 2>/dev/null || true)"
+    if [[ -z "$resolved_real" || -z "$resolved_version" ]]; then
+        record FAIL chassis_root_resolution "CHASSIS_ROOT=$CHASSIS_ROOT is not a readable chassis tree (no VERSION)"
+        return
+    fi
+    if [[ ! -s "$live/VERSION" || ! -d "$live/scripts" ]]; then
+        # No live tree mounted - baked-only install, nothing to drift against.
+        record PASS chassis_root_resolution "running $resolved_real (v$resolved_version); no live tree mounted"
+        return
+    fi
+    live_real="$(cd "$live" 2>/dev/null && pwd -P)"
+    live_version="$(tr -d '[:space:]' < "$live/VERSION" 2>/dev/null || true)"
+    if [[ "$resolved_real" == "$live_real" ]]; then
+        record PASS chassis_root_resolution "live tree active: $live_real (v$resolved_version)"
+    else
+        record FAIL chassis_root_resolution "STALE CHASSIS: running $resolved_real (v$resolved_version) while a usable live tree sits at $live_real (v${live_version:-unknown}) - restart the container so resolve-chassis-root.sh activates it, or clear the CHASSIS_ROOT override"
     fi
 }
 
@@ -341,6 +376,7 @@ check_discord_webhook_reachable() {
 
 run_core_checks() {
     check_filesystem_layout
+    check_chassis_root_resolution
     check_env_loaded
     check_anthropic_api_key_unset
     check_claude_cli

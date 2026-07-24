@@ -127,8 +127,28 @@ check "find/nothing-running-is-empty" "" "$(chassis_find_container "$COMPOSE_DIR
 # ---------------------------------------------------------------------------
 # chassis_container_version
 # ---------------------------------------------------------------------------
+# The resolved-root symlink is the most truthful probe: when the entrypoint's
+# resolve-chassis-root.sh picked the live mounted tree, the baked ENV (which a
+# docker exec printenv still reports on pre-fix images) is a LIE about what is
+# running. The symlink read must win over the printenv path.
+stub_docker '
+if [[ "$1" == "exec" ]]; then
+    shift; container="$1"; shift
+    if [[ "$1" == "cat" && "$2" == "/app/customer/state/chassis-root/VERSION" ]]; then
+        echo "0.3.0"; exit 0
+    fi
+    if [[ "$1" == "printenv" ]]; then echo "/app/chassis"; exit 0; fi
+    if [[ "$1" == "cat" ]]; then
+        [[ "$2" == "/app/chassis/VERSION" ]] && { echo "0.2.0"; exit 0; }
+        exit 1
+    fi
+fi
+exit 1'
+check "version/resolved-symlink-wins-over-baked-env" "0.3.0" "$(chassis_container_version behalfbot)"
+
 # The image puts the tree at /app/chassis and exports CHASSIS_ROOT. Reading the
-# old hardcoded /chassis/VERSION must NOT be what happens.
+# old hardcoded /chassis/VERSION must NOT be what happens. (Pre-fix images have
+# no chassis-root symlink, so that probe misses and the env path answers.)
 stub_docker '
 if [[ "$1" == "exec" ]]; then
     shift; container="$1"; shift

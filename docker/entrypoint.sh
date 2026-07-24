@@ -19,21 +19,22 @@
 
 set -euo pipefail
 
-: "${CHASSIS_ROOT:=/app/chassis}"
-# CHASSIS_PLUGINS_ROOT is deliberately NOT defaulted here (or in the
-# Dockerfile ENV). resolve_plugin_root() sets it after source_env, so a value
-# that is already present reliably means an operator set it (compose
-# environment, docker -e, or the customer .env). Defaulting it up here is
-# exactly what made the v0.2.0 fetched-tree preference in _env.sh unreachable.
+# CHASSIS_ROOT and CHASSIS_PLUGINS_ROOT are deliberately NOT defaulted here
+# (or in the Dockerfile ENV). resolve_chassis_root() / resolve_plugin_root()
+# set them after source_env, so a value that is already present reliably
+# means an operator set it (compose environment, docker -e, or the customer
+# .env). Defaulting either up here is exactly what made the v0.2.0
+# fetched-plugin-tree preference in _env.sh unreachable - and, for
+# CHASSIS_ROOT, what kept every install running the stale image-baked
+# chassis tree while the operator's mounted clone sat updated and ignored.
 # Issue #6 customer-state split. CUSTOMER_HOME is the canonical name for the
 # customer-state mount inside the container; CHASSIS_HOME is kept as an alias
 # pointing at the SAME path so legacy chassis scripts (which read
 # $CHASSIS_HOME/.env, $CHASSIS_HOME/briefings, etc.) keep working untouched.
 : "${CUSTOMER_HOME:=/app/customer}"
 : "${CHASSIS_HOME:=$CUSTOMER_HOME}"
-export CUSTOMER_HOME CHASSIS_HOME CHASSIS_ROOT
+export CUSTOMER_HOME CHASSIS_HOME
 : "${DISPATCHER_INTERVAL_SECONDS:=900}"
-: "${DISPATCHER_SCRIPT:=$CHASSIS_ROOT/scheduled-tasks/heartbeat-dispatcher.sh}"
 
 MODE="${1:-dispatcher}"
 shift || true
@@ -70,6 +71,43 @@ source_env() {
     # billing, not PAYG. Matches the rationale in
     # chassis/scheduled-tasks/heartbeat-dispatcher.sh lines 67-80.
     unset ANTHROPIC_API_KEY || true
+}
+
+resolve_chassis_root() {
+    # Stale-baked-chassis fix: prefer the operator's live (mounted / vendored)
+    # chassis tree over the image-baked copy, so `git pull` on the host is
+    # actually in effect on the next boot instead of silently ignored. Runs
+    # AFTER source_env so a CHASSIS_ROOT from the customer .env or the compose
+    # environment counts as an operator override (the resolver honours it
+    # verbatim). Must run BEFORE anything dereferences $CHASSIS_ROOT -
+    # run_plugin_fetch, resolve_plugin_root, migrations, the dispatcher.
+    #
+    # Bootstrapping rule: run the LIVE tree's copy of the resolver when one is
+    # present - it is newer code, and preferring it is the same semantic the
+    # resolver itself implements. The baked copy is the fallback.
+    local live_candidate="${CHASSIS_LIVE_TREE_ROOT:-$CUSTOMER_HOME/chassis/chassis}"
+    local resolver="$live_candidate/scripts/resolve-chassis-root.sh"
+    [[ -f "$resolver" ]] || resolver="/app/chassis/scripts/resolve-chassis-root.sh"
+    if [[ ! -f "$resolver" ]]; then
+        export CHASSIS_ROOT="${CHASSIS_ROOT:-/app/chassis}"
+        log "WARN: chassis-root resolver missing - using $CHASSIS_ROOT"
+    else
+        local resolved rc=0
+        resolved="$(bash "$resolver")" || rc=$?
+        if [[ -n "$resolved" ]]; then
+            export CHASSIS_ROOT="$resolved"
+        else
+            export CHASSIS_ROOT="${CHASSIS_ROOT:-/app/chassis}"
+        fi
+        if [[ "$rc" -ne 0 ]]; then
+            log "ERROR: CHASSIS ROOT ASSERTION FAILED (rc=$rc) - a live chassis tree exists but is NOT (fully) active."
+            log "ERROR: running on $CHASSIS_ROOT - see $CUSTOMER_HOME/chassis-root.state.json for the resolution record."
+        else
+            log "chassis root: $CHASSIS_ROOT ($(tr -d '[:space:]' < "$CHASSIS_ROOT/VERSION" 2>/dev/null || echo 'VERSION unreadable'))"
+        fi
+    fi
+    : "${DISPATCHER_SCRIPT:=$CHASSIS_ROOT/scheduled-tasks/heartbeat-dispatcher.sh}"
+    export DISPATCHER_SCRIPT
 }
 
 resolve_plugin_root() {
@@ -143,19 +181,24 @@ run_chassis_migrations() {
     # install with no Postgres still gets a dispatcher, it just gets a Pacman
     # queue that fails loudly when touched (which is the intended behaviour -
     # see chassis/db/connection.py).
-    (cd /app && python3 -m chassis.db.migrate) || \
+    #
+    # cd to the RESOLVED tree's parent (not a hardcoded /app) so `python3 -m
+    # chassis.db.migrate` imports the chassis package that is actually active.
+    (cd "$(dirname "$CHASSIS_ROOT")" && python3 -m chassis.db.migrate) || \
         log "WARN: chassis migrations did not apply - Postgres-backed features will fail loudly until they do"
 }
 
 cmd_migrate() {
     ensure_customer_layout
     source_env
-    (cd /app && exec python3 -m chassis.db.migrate "$@")
+    resolve_chassis_root
+    (cd "$(dirname "$CHASSIS_ROOT")" && exec python3 -m chassis.db.migrate "$@")
 }
 
 cmd_dispatcher() {
     ensure_customer_layout
     source_env
+    resolve_chassis_root
     run_plugin_fetch
     resolve_plugin_root
     run_chassis_migrations
@@ -175,17 +218,24 @@ cmd_dispatcher() {
 cmd_bootstrap() {
     ensure_customer_layout
     source_env
+    resolve_chassis_root
     run_plugin_fetch
     resolve_plugin_root
     run_chassis_migrations
-    log "running bootstrap.sh against CHASSIS_HOME=$CHASSIS_HOME"
-    CHASSIS_HOME="$CHASSIS_HOME" bash /app/bootstrap.sh "$@"
+    # bootstrap.sh sits at the repo root, one level above the chassis tree -
+    # run the copy that belongs to the RESOLVED tree so a mounted-clone
+    # install bootstraps with current code, not the baked snapshot.
+    local bootstrap_script="$(dirname "$CHASSIS_ROOT")/bootstrap.sh"
+    [[ -f "$bootstrap_script" ]] || bootstrap_script="/app/bootstrap.sh"
+    log "running $bootstrap_script against CHASSIS_HOME=$CHASSIS_HOME"
+    CHASSIS_HOME="$CHASSIS_HOME" bash "$bootstrap_script" "$@"
 }
 
 cmd_install_plugin() {
     local name="${1:?install-plugin requires a plugin name}"
     ensure_customer_layout
     source_env
+    resolve_chassis_root
     resolve_plugin_root
     local installer="$CHASSIS_PLUGINS_ROOT/$name/install.sh"
     if [[ ! -x "$installer" ]]; then
@@ -203,6 +253,7 @@ cmd_install_plugin() {
 
 cmd_hydrate_env() {
     ensure_customer_layout
+    resolve_chassis_root
     if ! command -v rbw >/dev/null 2>&1; then
         log "FATAL: rbw not installed in image"
         exit 2
@@ -217,6 +268,7 @@ cmd_hydrate_env() {
 cmd_smoke_test() {
     ensure_customer_layout
     source_env
+    resolve_chassis_root
     resolve_plugin_root
     log "running chassis smoke tests"
     CHASSIS_HOME="$CHASSIS_HOME" bash "$CHASSIS_ROOT/scripts/smoke-test.sh" "$@"
@@ -225,6 +277,7 @@ cmd_smoke_test() {
 cmd_claude() {
     ensure_customer_layout
     source_env
+    resolve_chassis_root
     resolve_plugin_root
     exec claude "$@"
 }
@@ -232,6 +285,7 @@ cmd_claude() {
 cmd_shell() {
     ensure_customer_layout
     source_env
+    resolve_chassis_root
     resolve_plugin_root
     exec /usr/bin/zsh
 }

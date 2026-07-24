@@ -17,6 +17,8 @@ on:
       - 'chassis/scripts/_env.sh'
       - 'chassis/scripts/resolve-plugin-root.sh'
       - 'chassis/scripts/test-plugin-root-resolution.sh'
+      - 'chassis/scripts/resolve-chassis-root.sh'
+      - 'chassis/scripts/test-chassis-root-resolution.sh'
       - 'docker/entrypoint.sh'
       - 'plugins/dating/scripts/emulator-state.sh'
       - 'plugins/dating/scripts/gather-dating-swipe.sh'
@@ -32,6 +34,8 @@ on:
       - 'chassis/scripts/_env.sh'
       - 'chassis/scripts/resolve-plugin-root.sh'
       - 'chassis/scripts/test-plugin-root-resolution.sh'
+      - 'chassis/scripts/resolve-chassis-root.sh'
+      - 'chassis/scripts/test-chassis-root-resolution.sh'
       - 'docker/entrypoint.sh'
       - 'plugins/dating/scripts/emulator-state.sh'
       - 'plugins/dating/scripts/gather-dating-swipe.sh'
@@ -56,6 +60,17 @@ jobs:
       # resolved plugin root actually serves fetched plugins when a fetched
       # tree is present. No docker daemon, runs against temp dirs.
       - run: bash chassis/scripts/test-plugin-root-resolution.sh
+
+  chassis-root-resolution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for stale-baked-chassis drift: asserts a usable
+      # live (mounted/vendored) chassis tree actually becomes the resolved
+      # root, torn or cross-MAJOR trees force baked LOUDLY (exit 5), and
+      # _env.sh resolves docker-exec sessions through the state symlink.
+      # No docker daemon, runs against temp dirs.
+      - run: bash chassis/scripts/test-chassis-root-resolution.sh
 
   dating-emulator-state:
     runs-on: ubuntu-latest
