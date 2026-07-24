@@ -4,12 +4,10 @@
   "mcpServers": {
 
     "memory": {
-      "_role": "default-on, no auth — knowledge graph",
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
-      "env": {
-        "MEMORY_FILE_PATH": "${CHASSIS_HOME}/memory/memory.jsonl"
-      }
+      "_role": "default-on, no auth - knowledge graph",
+      "_note": "MEMORY_FILE_PATH resolves from the launch cwd (the customer root) at spawn time - it is NOT baked as an absolute path. .mcp.json is bind-mount-shared between the host and the chassis container, which see the same directory at different absolute paths (the host customer path vs /app/customer). A single baked absolute path is therefore valid in only one of the two namespaces. Claude Code spawns this stdio server with cwd = the customer root in both, so $(pwd)/memory/memory.jsonl points at the one shared file either way. The previous ${CHASSIS_HOME} token was never substituted by hydrate-mcp-json.py (it only handles <ANGLE_BRACKET> placeholders), so a fresh render emitted the literal string and any legacy render baked a host-only absolute path.",
+      "command": "sh",
+      "args": ["-c", "export MEMORY_FILE_PATH=\"$(pwd)/memory/memory.jsonl\"; exec npx -y @modelcontextprotocol/server-memory"]
     },
 
     "playwright": {
