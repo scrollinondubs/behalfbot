@@ -21,6 +21,8 @@ on:
       - 'chassis/scripts/test-chassis-root-health.sh'
       - 'chassis/scripts/gather-container-liveness.sh'
       - 'chassis/scripts/test-container-liveness.sh'
+      - 'chassis/scripts/resolve-chassis-root.sh'
+      - 'chassis/scripts/test-chassis-root-resolution.sh'
       - 'docker/entrypoint.sh'
       - 'plugins/dating/scripts/emulator-state.sh'
       - 'plugins/dating/scripts/gather-dating-swipe.sh'
@@ -40,6 +42,8 @@ on:
       - 'chassis/scripts/test-chassis-root-health.sh'
       - 'chassis/scripts/gather-container-liveness.sh'
       - 'chassis/scripts/test-container-liveness.sh'
+      - 'chassis/scripts/resolve-chassis-root.sh'
+      - 'chassis/scripts/test-chassis-root-resolution.sh'
       - 'docker/entrypoint.sh'
       - 'plugins/dating/scripts/emulator-state.sh'
       - 'plugins/dating/scripts/gather-dating-swipe.sh'
@@ -85,6 +89,16 @@ jobs:
       # exited / restarting / restart-looping / absent, and no-ops when the
       # docker socket is unreachable. No docker daemon needed.
       - run: bash chassis/scripts/test-container-liveness.sh
+  chassis-root-resolution:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for stale-baked-chassis drift: asserts a usable
+      # live (mounted/vendored) chassis tree actually becomes the resolved
+      # root, torn or cross-MAJOR trees force baked LOUDLY (exit 5), and
+      # _env.sh resolves docker-exec sessions through the state symlink.
+      # No docker daemon, runs against temp dirs.
+      - run: bash chassis/scripts/test-chassis-root-resolution.sh
 
   dating-emulator-state:
     runs-on: ubuntu-latest

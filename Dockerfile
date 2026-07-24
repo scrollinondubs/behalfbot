@@ -71,17 +71,22 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    CHASSIS_ROOT=/app/chassis \
     CUSTOMER_HOME=/app/customer \
     CHASSIS_HOME=/app/customer \
     HOME=/home/chassis \
     PATH=/home/chassis/.local/bin:/home/chassis/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# CHASSIS_PLUGINS_ROOT is deliberately NOT baked as ENV. The entrypoint
-# resolves it at boot via chassis/scripts/resolve-plugin-root.sh, overlaying
-# $CUSTOMER_HOME/vendored-plugins over /app/plugins per plugin name. A baked
-# ENV value is indistinguishable from an operator override and is exactly what
-# made the v0.2.0 fetched-tree preference in _env.sh unreachable.
+# CHASSIS_PLUGINS_ROOT and CHASSIS_ROOT are deliberately NOT baked as ENV.
+# The entrypoint resolves both at boot: plugins via resolve-plugin-root.sh
+# (overlay of $CUSTOMER_HOME/vendored-plugins over /app/plugins per plugin
+# name), the chassis root via resolve-chassis-root.sh (live mounted/vendored
+# tree at $CUSTOMER_HOME/chassis/chassis wins over the baked /app/chassis).
+# A baked ENV value is indistinguishable from an operator override and is
+# exactly what made the v0.2.0 fetched-plugin-tree preference in _env.sh
+# unreachable - and what kept installs running a stale baked chassis after
+# every `git pull`. docker exec sessions (which never pass through the
+# entrypoint) discover the resolved root via the
+# $CUSTOMER_HOME/state/chassis-root symlink consulted by _env.sh.
 
 # System dependencies. Note: NO bw CLI; rbw is the Vaultwarden client (HTTPS
 # enforcement bypass per V1 install lesson). NO cron daemon; entrypoint

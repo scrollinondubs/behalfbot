@@ -62,14 +62,31 @@ if [[ -z "${CHASSIS_HOME:-}" ]]; then
     fi
 fi
 
-# Chassis source root. On host this lives under the chassis git tree; in
-# container it's baked at /app/chassis. Allow override via existing env.
+# Chassis source root. Allow override via existing env (post-fix images no
+# longer bake CHASSIS_ROOT as ENV, so "set" means an operator or the
+# entrypoint's resolver set it).
+#
+# Preference order for the unset case:
+#   1. $CUSTOMER_HOME/state/chassis-root - the symlink the entrypoint's
+#      resolve-chassis-root.sh materialises at boot. This is what makes
+#      docker exec sessions (which never inherit the entrypoint's exports)
+#      see the SAME tree the dispatcher runs, instead of silently falling
+#      back to the stale baked copy.
+#   2. /app/chassis - the image-baked tree (container, no resolution yet).
+#   3. $CHASSIS_HOME/chassis - host-side chassis git tree layout.
+# The symlink's guards double as a dangling-link check: on the host the
+# bind-mounted state dir can carry a symlink whose target only exists inside
+# the container, and -s/-d fail through to the host layouts.
 if [[ -z "${CHASSIS_ROOT:-}" ]]; then
-    if [[ -d "/app/chassis" ]]; then
+    _crr="${CUSTOMER_HOME:-/app/customer}/state/chassis-root"
+    if [[ -s "$_crr/VERSION" && -d "$_crr/scripts" ]]; then
+        export CHASSIS_ROOT="$_crr"
+    elif [[ -d "/app/chassis" ]]; then
         export CHASSIS_ROOT="/app/chassis"
     elif [[ -n "${CHASSIS_HOME:-}" && -d "$CHASSIS_HOME/chassis" ]]; then
         export CHASSIS_ROOT="$CHASSIS_HOME/chassis"
     fi
+    unset _crr
 fi
 
 # Plugin root resolution (behalfbot#82).

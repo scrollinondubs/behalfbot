@@ -66,19 +66,30 @@ chassis_find_container() {
 # and prints nothing when the read fails, so callers can tell "container says
 # 0.1.1" apart from "could not ask the container".
 #
-# CHASSIS_ROOT is read from the container rather than hardcoded. That way a
-# future image that relocates the tree stays correct without another silent
-# path drift like the /chassis one this replaces.
+# Probe order, most truthful first:
+#   1. /app/customer/state/chassis-root/VERSION - the symlink the entrypoint's
+#      resolve-chassis-root.sh materialises at boot. It records which tree the
+#      dispatcher is ACTUALLY running (live mounted clone vs baked image copy).
+#      `docker exec` cannot see the entrypoint's exported CHASSIS_ROOT (exec
+#      sessions get only the image/compose ENV), so the symlink is the only
+#      honest cross-process channel. The symlink is dereferenced inside the
+#      container, so container-internal targets resolve correctly.
+#   2. printenv CHASSIS_ROOT - pre-fix images (which baked the ENV) and
+#      installs that override it via compose environment / docker -e. For a
+#      pre-fix image this reads the baked tree, which IS what it runs.
+#   3. /app/chassis - the historical default.
 chassis_container_version() {
     local container="$1"
     local root version
 
     [[ -z "$container" ]] && return 1
 
-    root=$(docker exec "$container" printenv CHASSIS_ROOT 2>/dev/null | tr -d '[:space:]')
-    [[ -z "$root" ]] && root="$CHASSIS_CONTAINER_ROOT_DEFAULT"
-
-    version=$(docker exec "$container" cat "${root}/VERSION" 2>/dev/null | tr -d '[:space:]')
+    version=$(docker exec "$container" cat /app/customer/state/chassis-root/VERSION 2>/dev/null | tr -d '[:space:]')
+    if [[ -z "$version" ]]; then
+        root=$(docker exec "$container" printenv CHASSIS_ROOT 2>/dev/null | tr -d '[:space:]')
+        [[ -z "$root" ]] && root="$CHASSIS_CONTAINER_ROOT_DEFAULT"
+        version=$(docker exec "$container" cat "${root}/VERSION" 2>/dev/null | tr -d '[:space:]')
+    fi
     [[ -z "$version" ]] && return 1
 
     printf '%s' "$version"

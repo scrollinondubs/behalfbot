@@ -129,6 +129,25 @@ Installs that still carry the pre-#136 vendored subtree keep working: the wrappe
 
 > **Writing an override:** compose resolves relative paths inside a compose file against the **project directory**, which is the directory of the first `-f` file - the chassis repo, not `$CUSTOMER_HOME`. An override saying `env_file: [.env.baked]` therefore looks for it next to `docker-compose.yml` in the chassis repo and dies with `env file ... not found`. Always use absolute or interpolated paths: `env_file: [{path: ${HOME}/.behalfbot/.env.baked, required: true}]`.
 
+## Chassis root resolution - the live tree wins
+
+The image bakes a chassis tree at `/app/chassis`, but that copy is only a fallback. At boot, `docker/entrypoint.sh` runs `chassis/scripts/resolve-chassis-root.sh`, which resolves the EFFECTIVE `CHASSIS_ROOT`:
+
+1. A pre-set `CHASSIS_ROOT` (compose `environment:`, `docker -e`, or the customer `.env`) is an operator override, honoured verbatim. The Dockerfile deliberately does not bake the variable - "set" reliably means an operator set it, the same contract `CHASSIS_PLUGINS_ROOT` uses.
+2. A usable live tree at `$CUSTOMER_HOME/chassis/chassis` wins. That path is where both supported layouts put the operator's real chassis code: a bind-mounted canonical clone (`- ${HOME}/behalfbot:/app/customer/chassis:ro` in the per-install override) and a vendored `git subtree` both nest the tree one level down, because the repo root contains `chassis/`. This is the tree `git pull` and `chassis-update.sh` actually mutate - so an update is in effect on the next container restart, without waiting for a GHCR image rebuild. A live tree OLDER than the baked one still wins (that is what a rollback looks like) and logs a WARN.
+3. `/app/chassis` otherwise - installs that do not mount a chassis tree behave exactly as before.
+
+**Recommended default: mount the operator's clone at `$CUSTOMER_HOME/chassis`.** Now that the runtime honours the live tree (`- ${HOME}/behalfbot:/app/customer/chassis:ro` in the per-install override, nesting the tree at `$CUSTOMER_HOME/chassis/chassis`), a host-side `git pull` is in effect on the next `compose.sh up -d --force-recreate chassis` without waiting for a GHCR image rebuild. New installs should adopt this layout by default; baked-only installs still work but ship fixes only on an image pull.
+
+Guards, because this whole class of bug is "the command ran but did nothing": a live tree that exists but is torn (missing `VERSION`, `scripts/`, or `scheduled-tasks/heartbeat-dispatcher.sh`), or whose MAJOR version differs from the baked tree's (MAJOR is reserved for image-contract changes - refresh the image instead), forces the baked tree LOUDLY: resolver exit 5, `ERROR: CHASSIS ROOT ASSERTION FAILED` in the boot log, and the error recorded in `$CUSTOMER_HOME/chassis-root.state.json`.
+
+Out-of-band visibility: the resolved root is materialised as a symlink at `$CUSTOMER_HOME/state/chassis-root`. `docker exec` sessions never inherit the entrypoint's exports (they get only image/compose ENV), so `_env.sh` consults that symlink first when `CHASSIS_ROOT` is unset, and `chassis-update.sh`'s post-update healthcheck reads the running version through it. `smoke-test.sh check_chassis_root_resolution` FAILs whenever a usable live tree is present but the runtime is executing a different one.
+
+Two things to remember:
+
+- **Restart to activate.** Resolution happens at entrypoint time. After `git pull` on the host clone, `bash chassis/scripts/compose.sh up -d --force-recreate chassis` (or a plain restart) is what makes the new tree live. Until then the smoke test's drift check is the tripwire.
+- **Code newer than the image.** The live tree runs on the baked image's interpreters and pip packages. Chassis changes that need new image-level dependencies must bump `requirements.txt`/Dockerfile in a discrete PR and be flagged in the CHANGELOG; the MAJOR-skew guard is the backstop, not a substitute for that discipline.
+
 ## installer-2 install runbook (TLDR)
 
 1. SSH into installer-2's box. Install Docker + Compose plugin (one-liner from get.docker.com).
