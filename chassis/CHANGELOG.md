@@ -18,6 +18,8 @@ Semver:
 
 ## Unreleased
 
+## v0.4.0 - 2026-07-28
+
 ### Added
 
 - **The boot-time chassis-root resolution (#118) is now monitored on a schedule, and a `behalfbot` container that is DOWN or restart-looping now pages (#119).** #118 resolves the effective chassis tree once at container boot and records the outcome in `$CUSTOMER_HOME/chassis-root.state.json`, but nothing re-checked it - the same "a check that exists but never fires is not monitoring" defect class as the SiYuan MCP stale-config incident. Two new chassis-generic, default-on heartbeats close the gap:
