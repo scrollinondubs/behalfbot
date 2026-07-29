@@ -147,3 +147,5 @@ Pull requests welcome. A few things to know before opening one:
 - **Architectural changes:** open an issue first to discuss the shape. The chassis prizes "boring + portable" over "clever"; novel patterns need to argue their case against the existing lessons in [`docs/LESSONS_FROM_V1.md`](docs/LESSONS_FROM_V1.md) + [`docs/architectural-anti-patterns.md`](docs/architectural-anti-patterns.md).
 - **Plugin contributions:** new plugins live in `plugins/`. Follow the OpenClaw manifest spec (`openclaw.plugin.json`); see existing plugins for shape. Plugins that publish to ClawHub.ai can be vendored back into this repo as references with author attribution.
 - **Anti-patterns:** [`docs/architectural-anti-patterns.md`](docs/architectural-anti-patterns.md) is the running list of "we tried this; here's why it broke." Read it before introducing a workaround — most workarounds have a documented anti-pattern equivalent.
+
+<!-- deadlock verification 2026-07-29 - this branch is never merged -->
