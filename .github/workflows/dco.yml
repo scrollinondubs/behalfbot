@@ -1,0 +1,47 @@
+name: DCO
+
+# NO `paths:` filter, deliberately. Every commit needs a sign-off regardless of
+# what it touches, and a path-filtered check that might one day be made
+# required would deadlock any PR outside its paths - see the 2026-07-29 fix
+# where three required checks were filtered and blocked docs-only PRs forever
+# on "Expected — Waiting for status to be reported".
+#
+# `pull_request`, never `pull_request_target`: read-only token, no repo
+# secrets, so a fork cannot exfiltrate anything by editing this file.
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dco-self-test:
+    # Runs before the real check. A DCO checker that silently passes everything
+    # is worse than no checker - it manufactures confidence. These tests build
+    # throwaway git repos and prove it fails on an unsigned commit, skips merge
+    # commits, and refuses rather than passes when the commit range cannot be
+    # resolved (a shallow clone returns an EMPTY range, not an error).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prove the DCO check can still fail
+        run: bash .github/scripts/test-check-dco.sh
+
+  dco:
+    needs: dco-self-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the check needs both BASE and HEAD present to resolve
+          # the commit range. A shallow clone yields an empty range, which would
+          # pass silently on every PR.
+          fetch-depth: 0
+      - name: Every non-merge commit must carry a Signed-off-by line
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/check-dco.sh

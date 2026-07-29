@@ -1,0 +1,24 @@
+# Every path in this repo is owned by the maintainer.
+#
+# CODEOWNERS here is a review-routing convenience, NOT an access control. It
+# requests a review on a PR touching a path; it does not block a merge. Branch
+# protection on main is what actually gates merges - see the ruleset, which
+# requires status checks, restricts deletions and blocks force pushes.
+#
+# Deliberately not paired with "Require review from Code Owners" in the ruleset:
+# this is a single-maintainer project, so requiring an approval would mean
+# nobody can ever merge, including the owner.
+
+*                           @scrollinondubs
+
+# Paths where a wrong change is expensive, listed so the routing is explicit
+# even though the owner is the same. Anything under these should get a slower
+# read than a docs typo.
+
+/chassis/.claude/hooks/      @scrollinondubs
+/.github/                    @scrollinondubs
+/bootstrap.sh                @scrollinondubs
+/docker/                     @scrollinondubs
+/cloudflare/                 @scrollinondubs
+/LICENSE                     @scrollinondubs
+/SECURITY.md                 @scrollinondubs
