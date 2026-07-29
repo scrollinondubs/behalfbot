@@ -9,11 +9,25 @@ name: fetcher-seed-matches-canonical
 # That is precisely the drift class behalfbot#53 was written to kill, one layer
 # down - so enforce it rather than document it.
 
+# NO `paths:` filter on pull_request, and that is deliberate.
+#
+# `diff-against-canonical` is a REQUIRED status check on main as of
+# 2026-07-29. A required check that is path-filtered never reports on a PR
+# outside those paths, and GitHub then blocks that PR forever on
+# "Expected — Waiting for status to be reported". Not a failure - a deadlock
+# with no red X, no log, and nothing for a contributor to click on.
+#
+# The filter here was two specific files, so any PR that did not touch
+# chassis/scripts/fetch-plugins.sh would hang. That includes a README fix,
+# which is the likeliest shape for a first contribution from outside.
+#
+# The job takes about 9 seconds. That is a cheap price for a check that
+# always reports.
+#
+# The `push` trigger is unchanged - it was never filtered and nothing is
+# gated on it.
 on:
   pull_request:
-    paths:
-      - 'chassis/scripts/fetch-plugins.sh'
-      - '.github/workflows/fetcher-seed-matches-canonical.yml'
   push:
     branches: [main]
   workflow_dispatch:
