@@ -8,18 +8,29 @@
 # Behavior:
 #   - Reads chassis.config.yaml to determine which plugins are enabled
 #     (modules.<plugin>.enabled = true)
-#   - For each enabled plugin, reads plugins/<plugin>/openclaw.plugin.json,
-#     pulls the contracts.triggers array
+#   - For each enabled plugin, resolves its openclaw.plugin.json the same way
+#     every other plugin-tree consumer does: via CHASSIS_PLUGINS_ROOT (the
+#     resolved baked+fetched overlay from resolve-plugin-root.sh / _env.sh —
+#     behalfbot#95), falling back to $CUSTOMER_HOME/plugins/<plugin> for
+#     customer-local-only plugins (e.g. midnight-oil) that are never baked or
+#     fetched — see chassis/scripts/fetch-plugins.sh's note on that directory.
+#     Pulls the contracts.triggers array.
 #   - Replaces the `triggers:` block in chassis/triggers.yaml with the merged
 #     set, preserving order: chassis-shipped triggers first (from the template's
 #     marker block), then plugin-declared triggers in plugin-id alphabetical order
-#   - Validates the resulting file parses cleanly via dispatch-trigger.sh's
-#     awk parser (running it in dry-run mode)
+#   - Asserts that every enabled plugin resolves to a manifest somewhere in
+#     that search (resolved root, then customer-local), and fails loudly
+#     (nonzero exit) instead of silently merging zero triggers when the
+#     lookup points at the wrong directory — see behalfbot#98.
 #
 # Required env:
 #   CHASSIS_HOME — absolute path to the chassis directory
 #
 # Optional env:
+#   CHASSIS_PLUGINS_ROOT — resolved plugin root; resolved via _env.sh /
+#       resolve-plugin-root.sh when unset
+#   CUSTOMER_HOME — customer state root (holds the local-only plugins/ dir);
+#       defaults to CHASSIS_HOME when unset, same as _env.sh
 #   DRY_RUN — if "true", emit the merged YAML to stdout instead of writing to disk
 #
 # Idempotent: running twice with no plugin changes produces an identical file.
@@ -27,6 +38,10 @@
 set -euo pipefail
 
 : "${CHASSIS_HOME:?CHASSIS_HOME must be set}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/_env.sh"
 
 CONFIG="$CHASSIS_HOME/chassis.config.yaml"
 TARGET="$CHASSIS_HOME/chassis/triggers.yaml"
@@ -77,25 +92,41 @@ print("\n".join(sorted(plugins)))
 PY
 )
 
-# Build merged triggers section
-merged=$(python3 - <<PY
+# Build merged triggers section. Resolve each plugin's manifest via
+# CHASSIS_PLUGINS_ROOT first (the same resolved baked+fetched overlay every
+# other plugin-tree consumer uses), then fall back to $CUSTOMER_HOME/plugins
+# for customer-local-only plugins that are never baked or fetched.
+merged=$(CHASSIS_PLUGINS_ROOT="$CHASSIS_PLUGINS_ROOT" CUSTOMER_HOME="$CUSTOMER_HOME" python3 - <<PY
 import json
 import os
 import sys
 from pathlib import Path
 
-chassis_home = Path(os.environ["CHASSIS_HOME"])
+plugins_root = Path(os.environ["CHASSIS_PLUGINS_ROOT"])
+customer_plugins = Path(os.environ["CUSTOMER_HOME"]) / "plugins"
 plugin_names = """$enabled_plugins""".strip().splitlines()
 
 entries = []
+not_found = []
 for name in plugin_names:
-    manifest = chassis_home / "plugins" / name / "openclaw.plugin.json"
+    manifest = plugins_root / name / "openclaw.plugin.json"
+    source = "plugins_root"
     if not manifest.exists():
+        manifest = customer_plugins / name / "openclaw.plugin.json"
+        source = "customer_local"
+    if not manifest.exists():
+        # Assertion (behalfbot#98): an enabled plugin with no manifest in
+        # EITHER the resolved plugin root or the customer-local tree is
+        # unresolvable — the exact silent-drop shape this issue exists to
+        # catch (every enabled plugin used to resolve to nothing whenever
+        # the lookup pointed at the wrong directory, and this script kept
+        # printing a success line anyway). Fail loudly instead.
+        not_found.append(name)
         continue
     try:
         data = json.loads(manifest.read_text())
     except Exception as e:
-        print(f"WARN: skipping {name}: {e}", file=sys.stderr)
+        print(f"WARN: skipping {name} ({source}): {e}", file=sys.stderr)
         continue
     triggers = data.get("contracts", {}).get("triggers", []) or []
     plugin_id = data.get("id", name)
@@ -105,6 +136,14 @@ for name in plugin_names:
         t = dict(t)
         t["plugin"] = plugin_id
         entries.append(t)
+
+if not_found:
+    print(
+        f"ERROR: enabled plugin(s) have no manifest under {plugins_root} or {customer_plugins}: "
+        + ", ".join(not_found),
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 # Output in YAML
 def yaml_str(v):
