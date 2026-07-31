@@ -177,6 +177,23 @@ def run_text(argv: list[str], *, verbose: bool, timeout: int = 60) -> str | None
 # --- GitHub surface -------------------------------------------------------
 
 
+def classify_pr_for_day(pr: dict, day_str: str) -> str | None:
+    """Bucket a PR dict into "merged" / "opened" / "closed_unmerged" for the
+    single calendar day `day_str` (YYYY-MM-DD), or None if it belongs to a
+    different day. Each PR maps to at most one bucket for a given day."""
+    state = (pr.get("state") or "").upper()
+    merged_at = pr.get("mergedAt")
+    closed_at = pr.get("closedAt")
+    created_at = pr.get("createdAt")
+    if merged_at and merged_at[:10] == day_str:
+        return "merged"
+    if state == "OPEN" and created_at and created_at[:10] == day_str:
+        return "opened"
+    if state == "CLOSED" and closed_at and not merged_at and closed_at[:10] == day_str:
+        return "closed_unmerged"
+    return None
+
+
 def gather_github(gh_user: str, since: datetime, until: datetime, *, verbose: bool
                   ) -> tuple[dict[str, dict], list[dict], list[str]]:
     """Return (prs_by_repo, open_issues_awaiting_input, warnings)."""
@@ -246,17 +263,13 @@ def gather_github(gh_user: str, since: datetime, until: datetime, *, verbose: bo
                 "url": pr.get("url"),
                 "body_excerpt": body[:300].strip(),
             }
-            state = (pr.get("state") or "").upper()
-            merged_at = pr.get("mergedAt")
-            closed_at = pr.get("closedAt")
-            created_at = pr.get("createdAt")
-            if merged_at and since_str <= merged_at[:10] <= until_str:
+            bucket = classify_pr_for_day(pr, since_str)
+            if bucket == "merged":
                 merged.append(item)
-            elif state == "OPEN" and created_at and since_str <= created_at[:10] <= until_str:
+            elif bucket == "opened":
                 opened.append(item)
-            elif state == "CLOSED" and closed_at and not merged_at:
-                if since_str <= closed_at[:10] <= until_str:
-                    closed_unmerged.append(item)
+            elif bucket == "closed_unmerged":
+                closed_unmerged.append(item)
         if merged or opened or closed_unmerged:
             prs_by_repo[repo] = {
                 "merged": merged,

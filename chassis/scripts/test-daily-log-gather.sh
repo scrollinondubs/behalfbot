@@ -228,6 +228,58 @@ else
 fi
 
 # ------------------------------------------------------------------------
+# Scenario 7: classify_pr_for_day window is one calendar day wide.
+#
+# Regression for the bug where the merged/opened/closed_unmerged filters
+# used an inclusive since..until range (both ends), so a PR merged "today"
+# (until_str) leaked into the report labelled "yesterday" (since_str).
+# ------------------------------------------------------------------------
+classify_out=$(python3 - "$GATHER" <<'PYEOF'
+import importlib.util
+import sys
+
+gather_path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("daily_log_gather", gather_path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+
+classify = mod.classify_pr_for_day
+since_str = "2026-07-18"
+until_str = "2026-07-19"
+
+cases = [
+    # (pr, expected_bucket)
+    ({"state": "MERGED", "mergedAt": "2026-07-18T23:00:00Z"}, "merged"),
+    ({"state": "MERGED", "mergedAt": "2026-07-19T00:30:00Z"}, None),
+    ({"state": "OPEN", "createdAt": "2026-07-18T10:00:00Z"}, "opened"),
+    ({"state": "OPEN", "createdAt": "2026-07-19T00:05:00Z"}, None),
+    ({"state": "CLOSED", "closedAt": "2026-07-18T12:00:00Z"}, "closed_unmerged"),
+    ({"state": "CLOSED", "closedAt": "2026-07-19T00:05:00Z"}, None),
+]
+
+failures = []
+for pr, expected in cases:
+    got = classify(pr, since_str)
+    if got != expected:
+        failures.append(f"{pr} -> got {got!r}, expected {expected!r}")
+
+if failures:
+    print("FAIL")
+    for f in failures:
+        print(f)
+else:
+    print("PASS")
+PYEOF
+)
+if [[ "$classify_out" == PASS* ]]; then
+    pass=$((pass + 1))
+else
+    echo "FAIL [classify_pr_for_day] window is not one calendar day wide"
+    echo "$classify_out"
+    fail=$((fail + 1))
+fi
+
+# ------------------------------------------------------------------------
 # Summary
 # ------------------------------------------------------------------------
 echo
