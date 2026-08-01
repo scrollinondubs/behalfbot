@@ -111,8 +111,16 @@ while IFS=$'\t' read -r hb_name field value; do
 
     # Rule 3: gather field — referenced file must exist + have portable shebang
     if [[ "$field" == "gather" ]]; then
-        # Strip any inline arguments (e.g. `gather: scripts/foo.sh --json`)
-        gather_path="${value%% *}"
+        # Strip a leading `env` token and any leading `KEY=VALUE` environment
+        # prefixes (e.g. `gather: PG_CONTAINER=jax-pg BACKUP_SUBDIR=jax-pg
+        # chassis/chassis/scripts/pg-backup.sh`), then any trailing inline
+        # arguments (e.g. `gather: scripts/foo.sh --json`).
+        gather_path="$value"
+        [[ "$gather_path" == "env "* ]] && gather_path="${gather_path#env }"
+        while [[ "$gather_path" == *=* && "${gather_path%%[ =]*}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; do
+            gather_path="${gather_path#* }"
+        done
+        gather_path="${gather_path%% *}"
         full_path="$CHASSIS_ROOT/$gather_path"
 
         if [[ ! -f "$full_path" ]]; then
