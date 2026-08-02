@@ -273,6 +273,56 @@ if [[ "$DRY_RUN" == "true" ]]; then
     exit 0
 fi
 
+# --- Regression guard -------------------------------------------------------
+#
+# This script derives its key set by diffing the environment before and after
+# sourcing .env, so ANY variable already present in the calling shell is
+# subtracted out. Run it from a shell that has already sourced .env - which is
+# easy to do by accident, since bw-unlock.sh and several gather scripts do it -
+# and the bake quietly produces an almost-empty file while reporting success.
+#
+# Measured 2026-08-01 23:09 on the reference install: a bake from such a shell
+# rewrote .env.baked from 132 keys to 4, dropping every hydrated secret
+# including all six AWS_BACKUP_* credentials. The container came back healthy,
+# nothing errored, and offsite backups failed silently at the next 03:20 run.
+# Nobody noticed for a day.
+#
+# A bake that removes most of the existing keys is never intentional. Refuse it
+# and say why, rather than write a file that looks fine and is not.
+if [[ -f "$DST_BAKED" && "${ALLOW_KEY_SHRINK:-0}" != "1" ]]; then
+    prev_keys=$(grep -cE '^[A-Z][A-Z0-9_]*=' "$DST_BAKED" || true)
+    prev_keys=${prev_keys:-0}
+    if (( prev_keys > 0 )); then
+        # Threshold rather than "any decrease": removing a secret from .env is a
+        # legitimate thing to do, and a guard that fires on a one-key change is
+        # a guard people learn to bypass. Half is well clear of routine churn
+        # and well below the 132 -> 4 collapse this exists to catch.
+        min_keys=$(( (prev_keys + 1) / 2 ))
+        if (( n_keys < min_keys )); then
+            rm -f "$TMP_BAKED"
+            cat >&2 <<EOF
+ERROR: refusing to write $DST_BAKED - key count would collapse.
+
+  existing: $prev_keys keys
+  new bake: $n_keys keys  (below the $min_keys floor)
+
+This almost always means the bake ran from a shell that had already sourced
+.env. This script computes its key set by diffing the environment before and
+after sourcing, so pre-existing variables are subtracted out and vanish from
+the output.
+
+Re-run from a clean environment:
+
+  env -i HOME="\$HOME" PATH=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin \\
+    CHASSIS_HOME="$CUSTOMER_HOME" bash $0
+
+If the reduction is genuinely intended, pass ALLOW_KEY_SHRINK=1.
+EOF
+            exit 1
+        fi
+    fi
+fi
+
 mv "$TMP_BAKED" "$DST_BAKED"
 chmod 600 "$DST_BAKED"
 
