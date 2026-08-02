@@ -46,6 +46,9 @@ scripts/watchdog-*.sh
 # Customer-side scheduled-task state. The template files (e.g. *.template,
 # *-prompt.md.template) live in chassis/ and remain tracked.
 scheduled-tasks/heartbeat-state.json
+# Per-writer staging files set_state/increment_fire_count create before the
+# atomic mv (new-jaxity#412/#409) - "${STATE_FILE}.$$.<key>.tmp".
+scheduled-tasks/heartbeat-state.json.*.tmp
 scheduled-tasks/conservation-mode.json
 scheduled-tasks/quota-last-block-start.txt
 

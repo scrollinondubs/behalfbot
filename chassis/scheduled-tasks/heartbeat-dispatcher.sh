@@ -204,21 +204,95 @@ get_state() {
     jq -r --arg n "$name" --arg f "$field" '.[$n][$f] // ""' "$STATE_FILE"
 }
 
+# Mutex around the read-modify-write cycle below (new-jaxity#412/#409).
+# `mkdir` is atomic on every filesystem this script runs on (the container,
+# macOS, Linux) with no external dependency (flock is not on macOS by
+# default) - exactly one caller can ever create "${STATE_FILE}.lock" at a
+# time, so it doubles as a zero-dependency mutex.
+#
+# This is NOT the same bug a unique-per-writer temp path fixes. A unique tmp
+# path only stops two writers' STAGING files from colliding - it does nothing
+# about two writers both reading $STATE_FILE before either has written it
+# back, computing their update from that same stale snapshot, and the second
+# mv silently discarding the first writer's change. That is a lost-update
+# race, not a filename collision, and it reproduces reliably under concurrent
+# distinct-key writers even with unique tmp paths - see
+# tests/test_state_write_race.sh, which failed against a unique-tmp-path-only
+# version of this fix before the locking below was added. Observed live as
+# the dispatcher firing pulse-triage twice 4s apart on 2026-07-30 - the
+# signature of a lost state write, most likely from two dispatcher runs
+# overlapping (acquire_lock's PID-file check is itself non-atomic).
+_state_lock_acquire() {
+    local lock_dir="${STATE_FILE}.lock"
+    local waited_ms=0
+    # Declared once, outside the loop - zsh prints "holder=<value>" to stdout
+    # (like a bare `typeset holder` would) if `local holder` re-runs on a
+    # variable that already holds a value from the previous iteration.
+    # Verified directly: `f(){ local i=0; while ...; do local x; x=$i; done }`
+    # prints "x=<value>" on every iteration after the first.
+    local holder
+    while ! mkdir "$lock_dir" 2>/dev/null; do
+        # Stale-lock recovery: a dispatcher run that died mid-write (kill -9,
+        # OOM) leaves the lock dir behind forever otherwise.
+        holder=$(cat "$lock_dir/pid" 2>/dev/null || echo "")
+        if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+            rmdir "$lock_dir" 2>/dev/null || true
+            continue
+        fi
+        sleep 0.1 2>/dev/null || sleep 1
+        waited_ms=$((waited_ms + 100))
+        if [[ $waited_ms -ge 10000 ]]; then
+            log "WARNING state lock held >10s by pid ${holder:-unknown} - proceeding unlocked, a write may be lost"
+            return 1
+        fi
+    done
+    echo $$ > "$lock_dir/pid"
+    return 0
+}
+
+_state_lock_release() {
+    rm -rf "${STATE_FILE}.lock"
+}
+
 set_state() {
     local name="$1" field="$2" value="$3"
-    local tmp="${STATE_FILE}.tmp"
-    jq --arg n "$name" --arg f "$field" --arg v "$value" \
-        '.[$n] = (.[$n] // {}) | .[$n][$f] = $v' "$STATE_FILE" > "$tmp" \
-        && mv "$tmp" "$STATE_FILE"
+    local tmp="${STATE_FILE}.$$.${name}.tmp"
+    # `if` rather than a bare call so the timeout ("held >10s, proceeding
+    # unlocked") path can't trip `set -e` (new-jaxity#394's process_heartbeat
+    # lesson: a nonzero return from a bare statement under set -e kills the
+    # whole run, not just this write) - and so _state_lock_release only runs
+    # when THIS call actually holds the lock. Releasing unconditionally on
+    # the timeout path would rm -rf a lock dir some other writer still owns,
+    # letting a second writer in underneath it and recreating the exact race
+    # this is here to close.
+    if _state_lock_acquire; then
+        jq --arg n "$name" --arg f "$field" --arg v "$value" \
+            '.[$n] = (.[$n] // {}) | .[$n][$f] = $v' "$STATE_FILE" > "$tmp" \
+            && mv "$tmp" "$STATE_FILE"
+        _state_lock_release
+    else
+        jq --arg n "$name" --arg f "$field" --arg v "$value" \
+            '.[$n] = (.[$n] // {}) | .[$n][$f] = $v' "$STATE_FILE" > "$tmp" \
+            && mv "$tmp" "$STATE_FILE"
+    fi
 }
 
 increment_fire_count() {
     local name="$1"
-    local tmp="${STATE_FILE}.tmp"
-    jq --arg n "$name" \
-        '.[$n] = (.[$n] // {}) | .[$n].fire_count = ((.[$n].fire_count // "0") | tonumber + 1 | tostring)' \
-        "$STATE_FILE" > "$tmp" \
-        && mv "$tmp" "$STATE_FILE"
+    local tmp="${STATE_FILE}.$$.${name}.tmp"
+    # Same reasoning as set_state above.
+    if _state_lock_acquire; then
+        jq --arg n "$name" \
+            '.[$n] = (.[$n] // {}) | .[$n].fire_count = ((.[$n].fire_count // "0") | tonumber + 1 | tostring)' \
+            "$STATE_FILE" > "$tmp" \
+            && mv "$tmp" "$STATE_FILE"
+        _state_lock_release
+    else
+        jq --arg n "$name" \
+            '.[$n] = (.[$n] // {}) | .[$n].fire_count = ((.[$n].fire_count // "0") | tonumber + 1 | tostring)' \
+            "$STATE_FILE" > "$tmp" \
+            && mv "$tmp" "$STATE_FILE"
+    fi
 }
 
 # --- Ollama ---
@@ -1099,4 +1173,11 @@ ${gathered_data}
 }
 
 # Redirect all output to log; Claude output goes to its own file via >
-main "$@" >> "$LOG_FILE" 2>&1
+#
+# Guarded so tests/test_state_write_race.sh can `source` this file to reach
+# set_state/increment_fire_count in isolation without kicking off a full
+# dispatcher run. Unset in every real invocation (launchd/systemd), so
+# production behaviour is unchanged.
+if [[ "${DISPATCHER_TEST_SOURCE:-0}" != "1" ]]; then
+    main "$@" >> "$LOG_FILE" 2>&1
+fi
