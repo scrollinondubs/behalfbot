@@ -11,6 +11,15 @@ real read + modify + draft tools.
 Draft-only by construction: there is deliberately NO send tool. The heartbeat
 proposes and drafts; the principal sends. Archive + label go through modify.
 
+Attachments and HTML: `get_thread` lists every attachment inline and reports a
+`body_mime`, and `get_attachment` writes the bytes to disk and returns the path
+rather than inlining base64. Both exist because the read surface was incomplete
+in a way that was invisible from the outside: an HTML-only message - which is
+most machine-sent mail - came back with `body: ""` and no attachment list, so
+the caller could not tell an empty message from an unreadable one. The HTML
+fallback keeps link targets, since a sign-in link or a document URL living only
+in an href is exactly the content worth having.
+
 Credentials: read from the environment first (GMAIL_MONITOR_CLIENT_ID /
 _CLIENT_SECRET / _REFRESH_TOKEN). If absent - the running chassis container's
 process env can predate the bake - fall back to parsing the install's
@@ -29,8 +38,10 @@ Protocol: MCP over stdio, JSON-RPC 2.0, newline-delimited messages. stdlib only
 """
 
 import base64
+import html as html_mod
 import json
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -40,7 +51,7 @@ from email.message import EmailMessage
 OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GMAIL_API = "https://gmail.googleapis.com/gmail/v1/users/me"
 SERVER_NAME = "gmail-monitor"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = "1.1.0"
 DEFAULT_PROTOCOL = "2025-06-18"
 
 
@@ -150,14 +161,21 @@ def _headers_map(payload):
             for h in (payload or {}).get("headers", [])}
 
 
+def _decode_part(body):
+    data = (body or {}).get("data")
+    if not data:
+        return ""
+    return base64.urlsafe_b64decode(data + "===").decode("utf-8", "replace")
+
+
 def _extract_plaintext(payload):
     if not payload:
         return ""
     mime = payload.get("mimeType", "")
-    body = payload.get("body", {})
-    if mime == "text/plain" and body.get("data"):
-        return base64.urlsafe_b64decode(body["data"] + "===").decode(
-            "utf-8", "replace")
+    if mime == "text/plain":
+        txt = _decode_part(payload.get("body"))
+        if txt:
+            return txt
     best = ""
     for part in payload.get("parts", []) or []:
         txt = _extract_plaintext(part)
@@ -166,6 +184,104 @@ def _extract_plaintext(payload):
             if part.get("mimeType") == "text/plain":
                 return txt
     return best
+
+
+_TAG_DROP = re.compile(r"<(script|style)\b.*?</\1>", re.I | re.S)
+_TAG_BREAK = re.compile(r"<\s*(br|/p|/div|/tr|/h[1-6])\b[^>]*>", re.I)
+_TAG_LINK = re.compile(r"<a\b[^>]*?href\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+                       re.I | re.S)
+_TAG_ANY = re.compile(r"<[^>]+>")
+_BLANK_RUN = re.compile(r"\n{3,}")
+
+
+def _html_to_text(raw):
+    """Good enough to read, and it keeps the URLs.
+
+    Not a general HTML renderer and not trying to be. The one thing it must not
+    do is drop link targets: a sign-in link or a document URL living only in an
+    href is exactly the content that matters in a machine-sent email, and a
+    naive tag strip throws it away.
+    """
+    if not raw:
+        return ""
+    txt = _TAG_DROP.sub(" ", raw)
+    # Parentheses, not angle brackets: the generic tag strip below would eat
+    # "<https://...>" as if it were markup and silently take the URL with it.
+    txt = _TAG_LINK.sub(
+        lambda m: f"{_TAG_ANY.sub('', m.group(2)).strip()} ({m.group(1)})", txt)
+    txt = _TAG_BREAK.sub("\n", txt)
+    txt = _TAG_ANY.sub("", txt)
+    txt = html_mod.unescape(txt)
+    txt = "\n".join(line.strip() for line in txt.splitlines())
+    return _BLANK_RUN.sub("\n\n", txt).strip()
+
+
+def _extract_html(payload):
+    if not payload:
+        return ""
+    if payload.get("mimeType") == "text/html":
+        raw = _decode_part(payload.get("body"))
+        if raw:
+            return raw
+    for part in payload.get("parts", []) or []:
+        raw = _extract_html(part)
+        if raw:
+            return raw
+    return ""
+
+
+def _extract_body(payload):
+    """Plain text if the sender provided any, otherwise the HTML rendered down.
+
+    Returns (text, mime). Before this fell back, an HTML-only message - which
+    is most machine-sent mail, including every transactional notification -
+    came back with `body: ""` and no indication that anything had been missed.
+    """
+    txt = _extract_plaintext(payload)
+    if txt:
+        return txt, "text/plain"
+    raw = _extract_html(payload)
+    if raw:
+        return _html_to_text(raw), "text/html"
+    return "", ""
+
+
+def _walk_attachments(payload, out):
+    """Collect every part that carries an attachment id."""
+    if not payload:
+        return out
+    body = payload.get("body") or {}
+    filename = payload.get("filename") or ""
+    if body.get("attachmentId") and filename:
+        out.append({
+            "attachment_id": body["attachmentId"],
+            "filename": filename,
+            "mime_type": payload.get("mimeType", ""),
+            "size_bytes": body.get("size", 0),
+        })
+    for part in payload.get("parts", []) or []:
+        _walk_attachments(part, out)
+    return out
+
+
+def _attachment_dir():
+    root = (os.environ.get("GMAIL_MONITOR_ATTACHMENT_DIR")
+            or os.path.join(_install_root(), "data", "gmail-attachments"))
+    os.makedirs(root, exist_ok=True)
+    return root
+
+
+# Blocklist rather than allowlist, so "Apólice.pdf" survives as itself instead
+# of arriving as "Apo_lice.pdf". What has to go is anything that can escape the
+# directory or confuse a shell: separators, NUL and control bytes.
+_UNSAFE_NAME = re.compile(r"[/\\\x00-\x1f\x7f]+")
+
+
+def _safe_filename(name, fallback):
+    """A filename from an email is attacker-controlled. Treat it that way."""
+    name = os.path.basename(name or "").strip()
+    name = _UNSAFE_NAME.sub("_", name).lstrip(". ")
+    return name[:120] or fallback
 
 
 # --- Tool implementations ---------------------------------------------------
@@ -197,6 +313,8 @@ def tool_get_thread(args):
     msgs = []
     for m in det.get("messages", []) or []:
         hm = _headers_map(m.get("payload"))
+        text, mime = _extract_body(m.get("payload"))
+        atts = _walk_attachments(m.get("payload"), [])
         msgs.append({
             "message_id": m.get("id"),
             "from": hm.get("from", ""),
@@ -205,9 +323,74 @@ def tool_get_thread(args):
             "date": hm.get("date", ""),
             "rfc822_message_id": hm.get("message-id", ""),
             "label_ids": m.get("labelIds", []),
-            "body": _extract_plaintext(m.get("payload"))[:20000],
+            "body": text[:20000],
+            "body_mime": mime,
+            # Listed inline so a caller never has to guess whether a message
+            # has attachments before deciding to fetch one.
+            "attachments": [
+                {k: a[k] for k in ("filename", "mime_type", "size_bytes",
+                                   "attachment_id")}
+                for a in atts],
         })
     return {"thread_id": tid, "messages": msgs}
+
+
+def tool_get_attachment(args):
+    """Download one attachment to disk and hand back the path.
+
+    The bytes go to a file rather than into the JSON-RPC result on purpose:
+    a PDF or an image is not useful as base64 in a transcript, and the caller
+    has a Read tool that handles real files.
+    """
+    mid = args["message_id"]
+    aid = args.get("attachment_id")
+    want_name = args.get("filename")
+
+    listed = _walk_attachments(
+        api("GET", f"/messages/{mid}", query={"format": "full"}).get("payload"), [])
+    if not listed:
+        return {"error": "message has no attachments", "message_id": mid}
+
+    chosen = None
+    if aid:
+        chosen = next((a for a in listed if a["attachment_id"] == aid), None)
+    elif want_name:
+        chosen = next((a for a in listed if a["filename"] == want_name), None)
+        if chosen is None:
+            low = want_name.lower()
+            chosen = next((a for a in listed if low in a["filename"].lower()), None)
+    elif len(listed) == 1:
+        chosen = listed[0]
+    if chosen is None:
+        return {"error": "no matching attachment; pass attachment_id or filename",
+                "available": [{k: a[k] for k in ("filename", "mime_type",
+                                                 "size_bytes", "attachment_id")}
+                              for a in listed]}
+
+    limit = int(os.environ.get("GMAIL_MONITOR_MAX_ATTACHMENT_BYTES",
+                               str(25 * 1024 * 1024)))
+    if chosen.get("size_bytes", 0) > limit:
+        return {"error": "attachment exceeds size limit; raise "
+                         "GMAIL_MONITOR_MAX_ATTACHMENT_BYTES to override",
+                "filename": chosen["filename"],
+                "size_bytes": chosen["size_bytes"], "limit_bytes": limit}
+
+    blob = api("GET", f"/messages/{mid}/attachments/{chosen['attachment_id']}")
+    raw = base64.urlsafe_b64decode((blob.get("data") or "") + "===")
+
+    name = _safe_filename(chosen["filename"], f"attachment-{chosen['attachment_id'][:12]}")
+    path = os.path.join(_attachment_dir(), f"{mid}-{name}")
+    with open(path, "wb") as fh:
+        fh.write(raw)
+    return {"path": path, "filename": chosen["filename"],
+            "mime_type": chosen["mime_type"], "size_bytes": len(raw),
+            "message_id": mid, "attachment_id": chosen["attachment_id"]}
+
+
+def tool_list_attachments(args):
+    mid = args["message_id"]
+    payload = api("GET", f"/messages/{mid}", query={"format": "full"}).get("payload")
+    return {"message_id": mid, "attachments": _walk_attachments(payload, [])}
 
 
 def tool_list_labels(args):
@@ -281,9 +464,40 @@ TOOLS = {
         "fn": tool_get_thread,
         "description": ("Read a full thread by thread_id: every message with "
                         "from/to/subject/date, rfc822_message_id (use as "
-                        "in_reply_to when drafting), label_ids, and plaintext body."),
+                        "in_reply_to when drafting), label_ids, body, "
+                        "body_mime, and an attachments list. HTML-only mail is "
+                        "rendered to text with link targets preserved, so "
+                        "body_mime tells you which form you got. Fetch an "
+                        "attachment's bytes with get_attachment."),
         "schema": {"type": "object", "properties": {
             "thread_id": {"type": "string"}}, "required": ["thread_id"]},
+    },
+    "list_attachments": {
+        "fn": tool_list_attachments,
+        "description": ("List the attachments on one message: filename, "
+                        "mime_type, size_bytes, attachment_id. get_thread "
+                        "already returns this per message, so reach for it only "
+                        "when you have a message_id and nothing else."),
+        "schema": {"type": "object", "properties": {
+            "message_id": {"type": "string"}}, "required": ["message_id"]},
+    },
+    "get_attachment": {
+        "fn": tool_get_attachment,
+        "description": ("Download an attachment to disk and return its path, "
+                        "ready to Read. Identify it by attachment_id, or by "
+                        "filename (exact, then substring); with a single "
+                        "attachment on the message both may be omitted. Bytes "
+                        "go to a file rather than into the result, because a "
+                        "PDF is not useful as base64. Saves under "
+                        "GMAIL_MONITOR_ATTACHMENT_DIR, default "
+                        "<install>/data/gmail-attachments."),
+        "schema": {"type": "object", "properties": {
+            "message_id": {"type": "string"},
+            "attachment_id": {"type": "string",
+                              "description": "From get_thread or list_attachments."},
+            "filename": {"type": "string",
+                         "description": "Alternative to attachment_id."}},
+            "required": ["message_id"]},
     },
     "list_labels": {
         "fn": tool_list_labels,
