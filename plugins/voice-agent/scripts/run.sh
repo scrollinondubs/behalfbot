@@ -8,6 +8,34 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+# The operator's config, loaded so that anything already exported WINS over the
+# file. `set -a; source` would do the opposite, and the opposite is wrong here:
+# it makes `VOICE_STT_MODEL=... ./run.sh` silently do nothing, which is exactly
+# the one-off you reach for when testing a model swap.
+ENV_FILE="${VOICE_ENV_FILE:-$(dirname "$(pwd)")/data/voice-agent.env}"
+if [[ -f "$ENV_FILE" ]]; then
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+        [[ "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        key="${key//[[:space:]]/}"
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        # Already set in the environment? Leave it.
+        #
+        # ${!key+set} rather than [[ -v $key ]] on purpose: launchd invokes this
+        # through /bin/bash, which on macOS is still 3.2, and -v is a bash 4
+        # test. The 4-only form parses fine in a login shell and then fails only
+        # under launchd, which is the worst place to find out.
+        if [ -n "${!key+set}" ]; then continue; fi
+        value="${line#*=}"
+        value="${value%\"}"; value="${value#\"}"
+        export "$key=$value"
+    done < "$ENV_FILE"
+else
+    echo "no config at $ENV_FILE - running on defaults"
+fi
+
 PORT="${VOICE_PORT:-7860}"
 # 0 skips tailscale entirely and serves on localhost only. That is the right
 # setting for a laptop, and for anyone who would rather not publish a
