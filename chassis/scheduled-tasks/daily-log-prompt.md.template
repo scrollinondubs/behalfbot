@@ -80,6 +80,12 @@ as the "context" for this prompt. It has this shape:
     "heartbeat_failures": N, "dating_sessions": N,
     "custom": { ... }
   },
+  "surfaces": {
+    "github":       { "status": "ok|error|skipped", "error": "... or null" },
+    "gmail":        { "status": "ok|error|skipped", "error": "... or null" },
+    "second_brain": { "status": "ok|error|skipped", "error": "... or null" },
+    "discord":      { "status": "ok|error|skipped", "error": "... or null" }
+  },
   "warnings": ["strings for any surface that failed gracefully"]
 }
 ```
@@ -88,9 +94,48 @@ If `gmail_scan_deferred` is `true`, use the Gmail MCP to search sent mail:
 `in:sent from:{{ CUSTOMER_ORG_HANDLES }} newer_than:1d` and merge the
 results into your "Shipped" analysis under the operational bullet block.
 
-If `warnings` is non-empty, note it briefly at the bottom of the Metrics
-section so the operator can see which surfaces silently degraded. Do not
-fail the whole log because a surface was skipped.
+### Reading `surfaces` before you write a single line
+
+`surfaces` tells you, per source, whether the gather could see it. Check it
+FIRST. An empty bucket means two completely different things depending on
+that status, and conflating them is the failure this section exists to
+prevent - see new-jaxity#307, where the GitHub query failed, `prs_by_repo`
+came back `{}`, and the log reported a quiet day with nothing shipped on a
+day 8 PRs merged across three repos.
+
+Handle each source by its status. There are exactly three cases:
+
+1. **`status` is `error` or `skipped`** - the source was not read. You do not
+   know what happened there. Do NOT write that nothing happened, and do NOT
+   leave the section silently empty. Write an explicit blind-spot line in the
+   affected section naming the source and the reason from `error`, e.g.
+   `- GitHub not read this run (gh graphql viewer query failed) - shipping
+   activity for the day is unknown.` Then carry on with the sources that did
+   report.
+2. **`status` is `ok` and the bucket is empty** - a real zero. Say so plainly:
+   nothing shipped, no mail sent, no writing. This is the ONLY case in which
+   "quiet day" is an honest sentence.
+3. **`status` is `ok` and the bucket has content** - synthesize it per Step 2.
+
+Two rules that hold in every case:
+
+- **Never invent a cause for an empty result.** Do not write "quiet day
+  because Sean was travelling", "nothing shipped - focus was elsewhere", or
+  any other explanation you reasoned your way to. You may state a cause only
+  when another source in the same payload establishes it - a calendar-derived
+  custom metric, a postmortem excerpt that says it outright. Absent that,
+  report the zero and stop.
+- **Never let a whole-day verdict rest on a source that failed.** If any
+  surface is `error` or `skipped`, the day's summary line in Step 4 says so
+  ("partial - GitHub unreadable") rather than characterizing the day.
+
+Do not fail the whole log because a surface was unavailable. Report the gap
+and write everything else.
+
+`surfaces` is the key to read. `warnings` is a flat legacy list kept for
+older on-disk prompts; if `surfaces` is absent from the payload the install
+is running a pre-#307 gather, so fall back to treating a non-empty
+`warnings` as "one or more sources unread" and apply case 1 conservatively.
 
 ## Step 2: Synthesize
 
@@ -181,6 +226,8 @@ empty)` keep their `##` header but leave the body blank.
   link(s). Include operational bullets: emails sent (from operational_email),
   second-brain writing (from second_brain_activity), and any
   custom-metric-worthy work.]
+- [One blind-spot line per surface whose status is error or skipped, naming
+  the source and the reason. Omit entirely when every surface is ok.]
 
 ## Learnings & Tribal Knowledge
 (skip body if empty)
@@ -205,7 +252,10 @@ empty)` keep their `##` header but leave the body blank.
 - Dating swipe sessions: N (if the install runs any)
 - [Any custom metrics from metrics.custom, one per line]
 
-_Warnings from gather:_ [only shown if warnings array non-empty; comma-joined]
+_Sources unread:_ [one line per surface whose status is error or skipped:
+`<surface>: <error>`. Omit the line entirely when every surface is ok. A
+metric derived from an unread source is not zero, it is unknown - mark those
+counts `unknown`, never `0`.]
 
 ## Reflection
 (skip body if empty)
@@ -231,7 +281,10 @@ Log to stdout (the dispatcher captures this):
 - Confirm the doc created: the parent it was written under, plus the id and
   deeplink `create_doc` returned
 - List section headings that had non-empty bodies
-- One-line summary of the day (for morning briefing context)
+- One-line summary of the day (for morning briefing context). If any surface
+  was error or skipped, prefix it `partial (<surface> unread):` - the morning
+  briefing consumes this line and must not inherit a confident verdict built
+  on a source nobody read.
 
 Do NOT post to Discord - this is a silent background task. The morning
 briefing pulls from these logs.
