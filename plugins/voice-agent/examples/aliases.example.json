@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Transcription repairs applied between Whisper and the router.",
+    "Keys are matched case-insensitively on word boundaries, longest first.",
+    "Values are substituted verbatim, so the capitalisation here is what the",
+    "router, the read-back and the escalation all see.",
+    "",
+    "Two kinds of entry live here. Names Whisper cannot spell, and shorthand Sean",
+    "says out loud that no model would map to the real thing. Both fail the same",
+    "way without this file: the router classifies a sentence that is not the one",
+    "Sean spoke.",
+    "",
+    "Known cost: a real person called Jack becomes Jax. Sean has no such contact,",
+    "and the alternative is the address layer missing every second utterance.",
+    "",
+    "Keys starting with an underscore are ignored, so this block is not a rule."
+  ],
+
+  "jack": "Jax",
+  "jacks": "Jax",
+  "jack's": "Jax",
+  "jaxs": "Jax",
+  "jaks": "Jax",
+  "zach": "Jax",
+  "zacks": "Jax",
+
+  "jil": "Jill",
+  "jyl": "Jill",
+  "gill": "Jill",
+  "jail": "Jill",
+  "jails": "Jill",
+
+  "c1": "SiYuan",
+  "c one": "SiYuan",
+  "see one": "SiYuan",
+  "sea one": "SiYuan",
+  "si yuan": "SiYuan",
+  "seyuan": "SiYuan",
+  "shuan": "SiYuan",
+
+  "tourso": "Turso",
+  "lee chess": "Lichess",
+  "lichesse": "Lichess",
+  "granola ai": "Granola",
+  "micro adventures": "Micro Adventures",
+  "vibe code lisboa": "Vibecode Lisboa",
+  "kog": "KoG",
+  "cog": "KoG"
+}

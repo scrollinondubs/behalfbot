@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Regexes that mark an utterance as too private to send anywhere.",
+    "",
+    "A match REFUSES the turn. Nothing is escalated, nothing is answered, and the",
+    "operator is told to handle it himself. This layer cannot route and cannot",
+    "send - refusing is the only thing it can do, which is precisely what makes it",
+    "safe to trust with the judgement. A layer that could redirect a private",
+    "question somewhere else would be making a privacy decision on the operator's",
+    "behalf, and a probabilistic privacy decision is worse than none: it makes the",
+    "person in front of it relaxed, and relaxed in front of a leaky gate is more",
+    "exposure than careful in front of no gate at all.",
+    "",
+    "SHIP NOTHING BY DEFAULT. The list below is an EXAMPLE, drawn from one",
+    "operator living in Portugal and running a company there. It is useless to",
+    "somebody in Ohio and actively misleading if copied without reading - it will",
+    "refuse turns about things they do not have and miss the things they do.",
+    "",
+    "Be trigger-happy when you write your own. A false positive costs one repeated",
+    "sentence. A false negative sends the thing you did not want to send.",
+    "",
+    "Matched case-insensitively. Keys starting with an underscore are ignored."
+  ],
+
+  "_example_note": "Copy to data/sensitive-terms.json and replace with your own.",
+
+  "terms": [
+    "\\btax(?:es|ed)?\\b",
+    "\\baccountant\\b",
+    "\\bbank\\b",
+    "\\bsalary\\b",
+    "\\bmortgage\\b",
+    "\\bloan\\b",
+    "\\bdebt\\b",
+    "\\binsurance\\b",
+    "\\blawyer\\b",
+    "\\bcontract\\b",
+    "\\bpassport\\b",
+    "\\bpassword\\b",
+    "\\bdoctor\\b",
+    "\\bprescri",
+    "\\bdiagnos",
+    "\\bblood (?:test|work|pressure)\\b",
+    "\\bmy (?:results?|chart|file)\\b",
+    "\\bwhat (?:do|did) (?:i|we) (?:pay|owe)\\b",
+    "\\bthe safe\\b",
+    "\\bthe code for\\b"
+  ]
+}
