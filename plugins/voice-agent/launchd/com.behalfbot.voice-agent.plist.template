@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Pipecat voice agent.
+
+  Install:
+    cp scheduled-tasks/com.behalfbot.voice-agent.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.behalfbot.voice-agent.plist
+
+  Until 2026-08-07 this ran as a bare `nohup bash run.sh` started by hand, which
+  meant a reboot silently took the voice interface away and nothing said so. It
+  is a service Sean talks to; it should come back on its own.
+
+  KeepAlive rather than RunAtLoad alone, so a crash restarts it. ThrottleInterval
+  stops a startup crash from spinning: run.sh exits immediately if Ollama is not
+  answering yet, and on a fresh boot that is a real race.
+
+  run.sh execs the venv python directly and cds to its own directory, so there is
+  nothing to set up here beyond the working directory. It also sets
+  HF_HUB_OFFLINE and VOICE_DISCORD itself - deliberately, because those belong to
+  the real bot and not to a benchmark or a test that imports the same modules.
+
+  Deploys go through scripts/deploy-voice.sh, which detects this agent and uses
+  `launchctl kickstart -k` rather than killing the process, so KeepAlive does not
+  race the restart.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.behalfbot.voice-agent</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__VOICE_HOME__/run.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__VOICE_HOME__</string>
+
+    <!--
+      launchd gives a job a bare PATH, not a login shell's. run.sh calls
+      `tailscale serve` under `set -euo pipefail`, so a missing binary is fatal
+      rather than cosmetic: the first install of this plist crash-looped twenty
+      times in nine minutes on "tailscale: command not found" and took the voice
+      agent down with it.
+
+      /usr/local/bin is where the Tailscale CLI shim lives, /opt/homebrew/bin
+      has curl's neighbours and the python that run.sh checks Ollama with.
+    -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>__VOICE_HOME__/logs/launchd-voice-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>__VOICE_HOME__/logs/launchd-voice-agent.log</string>
+</dict>
+</plist>

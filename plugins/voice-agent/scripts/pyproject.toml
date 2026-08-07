@@ -1,0 +1,26 @@
+[project]
+name = "jax-voice-spike"
+version = "0.1.0"
+description = "Local low-latency voice agent spike for Jax - Pipecat on Apple Silicon"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "python-dotenv",
+    "fastapi[all]",
+    "uvicorn",
+    "mlx-audio",
+    "misaki[en]",
+    "pipecat-ai[openai,silero,mlx-whisper,webrtc,local-smart-turn]>=1.7.0",
+    # pipecat 1.7's mlx-whisper extra does not pull faster-whisper, but
+    # services/whisper/stt.py imports it at module scope, so WhisperSTTServiceMLX
+    # is unimportable without it.
+    "faster-whisper",
+    "pipecat-ai-small-webrtc-prebuilt",
+    "aiortc",
+    "numpy",
+    "soundfile",
+]
+
+# Flat layout of loose scripts, not an importable package. Without this,
+# setuptools auto-discovery errors out on the multiple top-level modules.
+[tool.setuptools]
+py-modules = []
