@@ -1,7 +1,7 @@
 """Background handoff to Jax, plus delivery of what comes back.
 
 Escalation must never block the conversation. The router says something short,
-the work happens on a background task, and Sean keeps talking. When an answer
+the work happens on a background task, and the operator keeps talking. When an answer
 lands it goes two places: spoken aloud if the conversation is idle, and posted
 to Discord regardless, so walking away does not lose it.
 
@@ -12,7 +12,7 @@ Which Discord channel is a privacy decision, not a convenience one:
 There is no Jill path here any more, and its absence is the point. The voice
 loop cannot call Venice, cannot post to a private channel, and cannot read one.
 When the router refuses a turn (Route.HELD) nothing is sent anywhere at all -
-the bot says so out loud and Sean takes the question to Jill himself, which is
+the bot says so out loud and the operator takes the question to Jill himself, which is
 the boundary that was working before a classifier was put in the middle of it.
 
 Deleted rather than disabled by a flag, so that no future change can turn it
@@ -64,8 +64,13 @@ def _repo_root() -> Path:
 
 
 REPO = _repo_root()
-JAX_CHANNEL = "1487190325394014432"       # #jax
-DEVOPS_CHANNEL = "1497870976237699173"    # #jax-devops - operational noise only
+# Where escalation answers get posted, so walking away mid-answer does not lose
+# one. Unset means spoken-only: the answer is still said aloud when the room is
+# quiet, it just is not written down anywhere.
+ANSWER_CHANNEL = os.getenv("VOICE_ANSWER_CHANNEL_ID", "")
+# Operational noise - a failed delivery, a dropped confirmation. Falls back to
+# the answer channel so an install that configures one channel still sees it.
+DEVOPS_CHANNEL = os.getenv("VOICE_DEVOPS_CHANNEL_ID", "") or ANSWER_CHANNEL
 DISCORD_TOKEN_ENV = Path.home() / ".claude" / "channels" / "discord" / ".env"
 
 # Discord delivery is opt-in and off unless the launcher asks for it. run.sh
@@ -75,7 +80,7 @@ DISCORD_TOKEN_ENV = Path.home() / ".claude" / "channels" / "discord" / ".env"
 # This is not belt-and-braces. An earlier revision of the confirmation gate
 # posted a notice on every declined read-back and did it from a code path the
 # dry-run flag did not cover, so a three-minute benchmark run put eight
-# notifications in front of Sean. A flag on the escalation is the wrong place
+# notifications in front of the operator. A flag on the escalation is the wrong place
 # for that guard - it has to sit on the delivery call itself, which is the one
 # thing every path to Discord has in common.
 DISCORD_ENABLED = os.getenv("VOICE_DISCORD", "0") == "1"
@@ -120,14 +125,14 @@ JAX_BUDGET_USD = os.getenv("VOICE_JAX_BUDGET_USD", "0.50")
 DRY_RUN = os.getenv("VOICE_ESCALATION_DRYRUN", "0") == "1"
 
 # Spoken the instant a route resolves, before any work starts. Deliberately
-# boring: it is the only thing standing between Sean and a silent pause, so it
+# boring: it is the only thing standing between the operator and a silent pause, so it
 # has to be fast to synthesize, not clever.
 ACKS = {
     Route.JAX: "On it.",
 }
 
 # What the bot says when the keyword net refuses a turn. It has to be
-# unambiguous that nothing was sent and that the next move is Sean's, because
+# unambiguous that nothing was sent and that the next move is the operator's, because
 # the failure mode of a vague line here is him assuming it was handled.
 HELD_LINE = "That sounds private, so I have not sent it anywhere. Take it to Jill."
 
@@ -167,6 +172,12 @@ def _post_discord(channel_id: str, content: str) -> bool:
     import urllib.error
     import urllib.request
 
+    if not channel_id:
+        # No channel configured. Spoken-only is a supported setup, so this is a
+        # note rather than a warning.
+        logger.info(f"no answer channel configured - {len(content)} chars not posted")
+        return False
+
     if not DISCORD_ENABLED or DRY_RUN:
         # Length, not content: this line is for confirming a message would have
         # gone, and the private channel's payload has no business in a log that
@@ -204,7 +215,7 @@ def _post_discord(channel_id: str, content: str) -> bool:
 
 
 def deliver_to_discord(esc: Escalation) -> None:
-    """Post an answer to #jax. Only JAX escalations ever get here.
+    """Post an answer to the configured channel. Only JAX escalations get here.
 
     A HELD turn never becomes an Escalation, so there is no branch for it and no
     private channel referenced anywhere in this module.
@@ -213,7 +224,7 @@ def deliver_to_discord(esc: Escalation) -> None:
         logger.error(f"refusing to deliver a {esc.route.value} escalation")
         return
     body = esc.answer or f"(escalation failed: {esc.error})"
-    _post_discord(JAX_CHANNEL, f"**voice** - {esc.utterance}\n\n{body}")
+    _post_discord(ANSWER_CHANNEL, f"**voice** - {esc.utterance}\n\n{body}")
 
 
 CONFIRM_LOG = Path(__file__).parent / "metrics" / "confirmations.jsonl"
@@ -222,7 +233,7 @@ CONFIRM_LOG = Path(__file__).parent / "metrics" / "confirmations.jsonl"
 def record_confirmation_drop(reason: str) -> None:
     """Write a blocked escalation to a local file, and notify nobody.
 
-    A declined read-back is the gate working. Sean said no out loud, heard the
+    A declined read-back is the gate working. the operator said no out loud, heard the
     bot say it was dropped, and nothing was sent - there is no action for anyone
     to take, so there is nothing to interrupt him with. The same is true of a
     timeout and of an unrecognised answer: the safe thing happened, and he was
@@ -255,7 +266,7 @@ eighty words unless the question genuinely needs more. Do the work first - use \
 your tools, check the repo, read memory - then give the answer, not a \
 description of how you got it.
 
-Sean asked: {utterance}"""
+the operator asked: {utterance}"""
 
 
 _MCP_CONFIG_CACHE: Path | None = None
@@ -381,7 +392,7 @@ async def ask_jax(utterance: str, session_id: str | None = None) -> tuple[str, s
 
     A resume that fails starts a fresh session and retries once. Sessions expire,
     get cleaned up, or belong to a different working directory, and none of those
-    is a reason for Sean to get an error instead of an answer.
+    is a reason for the operator to get an error instead of an answer.
     """
     if not STICKY_SESSION:
         answer, _ = await _run_claude(utterance, None, resume=False)
@@ -399,7 +410,7 @@ async def ask_jax(utterance: str, session_id: str | None = None) -> tuple[str, s
 
 # There was an ask_jill() here that called Venice. It is gone, not disabled.
 #
-# The reasoning is in the router docstring: a 4B classifier standing where Sean
+# The reasoning is in the router docstring: a 4B classifier standing where the operator
 # used to stand is a probabilistic gate on a privacy boundary, and a boundary
 # that holds three times in four is worse than none, because it makes the person
 # in front of it relaxed. A voice loop that can reach Venice will eventually
@@ -409,7 +420,7 @@ async def ask_jax(utterance: str, session_id: str | None = None) -> tuple[str, s
 # come back through this box, been spoken aloud and landed in a transcript,
 # crossing the boundary in the direction nobody was watching.
 #
-# Jill is unchanged and still reachable. Sean goes to her channel, the way he
+# Jill is unchanged and still reachable. the operator goes to her channel, the way he
 # did before any of this existed.
 
 # --- the queue the bot drains --------------------------------------------
@@ -431,7 +442,7 @@ class Escalator:
         # Serialises escalations within a conversation. Two claude -p processes
         # resuming the same session concurrently would interleave writes into
         # one transcript; the second question also usually depends on the first
-        # having landed, so queueing is the behaviour Sean wants anyway.
+        # having landed, so queueing is the behaviour the operator wants anyway.
         self._session_lock = asyncio.Lock()
 
     def start(self, route: Route, utterance: str) -> str:
@@ -464,7 +475,7 @@ class Escalator:
         except Exception as e:  # noqa: BLE001
             esc.error = f"{type(e).__name__}: {e}"
             logger.error(f"{esc.route.value} escalation failed: {esc.error}")
-        # Discord first: it is the delivery that survives Sean walking away.
+        # Discord first: it is the delivery that survives the operator walking away.
         await asyncio.to_thread(deliver_to_discord, esc)
         await self.answers.put(esc)
 
@@ -473,7 +484,7 @@ class Escalator:
         """What to say when the answer arrives and the room is quiet."""
         if esc.error:
             # Not "it's in Discord". A failed escalation delivered nothing
-            # anywhere, and sending Sean to look for a message that does not
+            # anywhere, and sending the operator to look for a message that does not
             # exist is worse than saying plainly that it did not happen.
             return f"{ANSWER_PREFIX[esc.route]} That one failed. Nothing was sent."
         answer = esc.answer or ""

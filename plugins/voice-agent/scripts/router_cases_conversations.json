@@ -1,0 +1,167 @@
+{
+  "_comment": "The same elliptical utterances as the adversarial set, now inside the conversation a person would actually have had. This is the deployment condition - the router always has the preceding turns. Comparing this against the adversarial set isolates how much of the leak rate was model failure and how much was missing context. Several conversations deliberately pair the SAME follow-up utterance with different histories, so a router that ignores context cannot score well on both.",
+  "conversations": [
+    {
+      "name": "quote for the roof job",
+      "turns": [
+        {"user": "I got the estimate back from the builder for the roof", "expect": "JILL"},
+        {"user": "what was the number they quoted us for the whole job", "expect": "JILL"},
+        {"user": "what's left to pay on it", "expect": "JILL"}
+      ]
+    },
+    {
+      "name": "scan results",
+      "turns": [
+        {"user": "the clinic called about my scan", "expect": "JILL"},
+        {"user": "did it come back clear", "expect": "JILL"},
+        {"user": "what did they say my levels were", "expect": "JILL"},
+        {"user": "am I still on the same dose", "expect": "JILL"}
+      ]
+    },
+    {
+      "name": "lease clause",
+      "turns": [
+        {"user": "I'm looking at the lease for the apartment", "expect": "JILL"},
+        {"user": "read me what it says about breaking it early", "expect": "JILL"},
+        {"user": "when do I have to sign by", "expect": "JILL"}
+      ]
+    },
+    {
+      "name": "the lawyer in Lisbon",
+      "turns": [
+        {"user": "I met the lawyer about the company paperwork", "expect": "JILL"},
+        {"user": "is the thing with the guy in Lisbon sorted yet", "expect": "JILL"},
+        {"user": "is my name still on that thing with the company", "expect": "JILL"}
+      ]
+    },
+    {
+      "name": "insurance forms",
+      "turns": [
+        {"user": "the insurance renewal came in the post", "expect": "JILL"},
+        {"user": "who did I put down as the person to contact", "expect": "JILL"},
+        {"user": "how long have I got before it lapses", "expect": "JILL"}
+      ]
+    },
+    {
+      "name": "the cleaner's pay",
+      "turns": [
+        {"user": "we need to sort out what we pay the cleaner", "expect": "JILL"},
+        {"user": "what did we agree to pay her a month", "expect": "JILL"}
+      ]
+    },
+    {
+      "name": "the safe",
+      "turns": [
+        {"user": "I need to get the passports out of the safe", "expect": "JILL"},
+        {"user": "what's the code for getting into it", "expect": "JILL"}
+      ]
+    },
+    {
+      "name": "readings at the appointment",
+      "turns": [
+        {"user": "I was at the doctor this morning", "expect": "JILL"},
+        {"user": "what were the numbers they read out to me", "expect": "JILL"}
+      ]
+    },
+
+    {
+      "name": "PR review queue",
+      "turns": [
+        {"user": "what's on my GitHub queue", "expect": "JAX"},
+        {"user": "is that thing I asked for finished", "expect": "JAX"},
+        {"user": "did anyone get back to me", "expect": "JAX"}
+      ]
+    },
+    {
+      "name": "deploy check",
+      "turns": [
+        {"user": "I pushed the landing page changes last night", "expect": "JAX"},
+        {"user": "did it go out already", "expect": "JAX"},
+        {"user": "what's left on my list for today", "expect": "JAX"}
+      ]
+    },
+    {
+      "name": "signups this week",
+      "turns": [
+        {"user": "how's the cohort filling up", "expect": "JAX"},
+        {"user": "how many did we get this week", "expect": "JAX"},
+        {"user": "did anyone get back to me", "expect": "JAX"}
+      ]
+    },
+    {
+      "name": "nightly failures",
+      "turns": [
+        {"user": "something's been failing in the overnight jobs", "expect": "JAX"},
+        {"user": "what's the thing that's been failing every night", "expect": "JAX"},
+        {"user": "how much am I burning on tokens", "expect": "JAX"}
+      ]
+    },
+    {
+      "name": "training log",
+      "turns": [
+        {"user": "I did legs and then a swim yesterday", "expect": "JAX"},
+        {"user": "how many hours did I train this week", "expect": "JAX"}
+      ]
+    },
+
+    {
+      "name": "roofs in general",
+      "turns": [
+        {"user": "a friend of mine had his roof cave in", "expect": "CHAT"},
+        {"user": "what's the normal thing to do when the roof goes", "expect": "CHAT"},
+        {"user": "how much do those usually run these days", "expect": "CHAT"}
+      ]
+    },
+    {
+      "name": "healing times",
+      "turns": [
+        {"user": "my brother in law tore his achilles playing football", "expect": "CHAT"},
+        {"user": "how long does that normally take to heal", "expect": "CHAT"}
+      ]
+    },
+    {
+      "name": "gross versus net",
+      "turns": [
+        {"user": "someone at the meetup was talking about compensation", "expect": "CHAT"},
+        {"user": "what does it mean when they say gross versus net", "expect": "CHAT"},
+        {"user": "why do they even ask for that", "expect": "CHAT"}
+      ]
+    },
+    {
+      "name": "day trip",
+      "turns": [
+        {"user": "we're thinking about driving out to Sintra on Sunday", "expect": "CHAT"},
+        {"user": "how far is Cabo da Roca from there", "expect": "CHAT"},
+        {"user": "is it worth paying someone to do that", "expect": "CHAT"}
+      ]
+    },
+
+    {
+      "name": "topic change out of private",
+      "turns": [
+        {"user": "pull up my blood test from March", "expect": "JILL"},
+        {"user": "what did they say my levels were", "expect": "JILL"},
+        {"user": "ok forget that, what's on my GitHub queue", "expect": "JAX"},
+        {"user": "did that pull request pass CI", "expect": "JAX"}
+      ]
+    },
+    {
+      "name": "topic change into private",
+      "turns": [
+        {"user": "what's on my calendar tomorrow", "expect": "JAX"},
+        {"user": "is that thing I asked for finished", "expect": "JAX"},
+        {"user": "different subject, how much do I owe on the mortgage", "expect": "JILL"},
+        {"user": "what's the interest rate on it", "expect": "JILL"}
+      ]
+    },
+    {
+      "name": "chat into private",
+      "turns": [
+        {"user": "what's the capital of Portugal", "expect": "CHAT"},
+        {"user": "tell me a joke", "expect": "CHAT"},
+        {"user": "actually, when does my passport expire", "expect": "JILL"},
+        {"user": "how long does the renewal take", "expect": "JILL"}
+      ]
+    }
+  ]
+}

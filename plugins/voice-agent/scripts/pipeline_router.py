@@ -79,7 +79,7 @@ class TurnState:
         self.bot_speaking = False
         self.user_speaking = False
         self.decisions: list[Decision] = []
-        # An outstanding Jax read-back, and the line owed to Sean about the last
+        # An outstanding Jax read-back, and the line owed to the operator about the last
         # one that did not go through.
         self.pending_confirm: confirm.PendingConfirm | None = None
         self.drop_notice = ""
@@ -188,7 +188,7 @@ class RouteStart(FrameProcessor):
             text = _latest_user_text(frame)
             # Repair the transcript once, here, before anything reads it. The
             # router, the read-back and the escalation then all see the same
-            # repaired sentence, so what Sean hears quoted back is what gets
+            # repaired sentence, so what the operator hears quoted back is what gets
             # sent. Doing it per-layer would let them disagree.
             text = router.normalize_transcript(text)
             if text:
@@ -259,7 +259,7 @@ class RouteGate(FrameProcessor):
         except Exception as e:  # noqa: BLE001 - unclassified text is never released
             # HELD, not JAX. The router failing tells us nothing about the
             # content, and the one thing that must not happen on an unknown
-            # utterance is that it escalates by accident. Refusing costs Sean a
+            # utterance is that it escalates by accident. Refusing costs the operator a
             # repeat.
             logger.error(f"route gate fell back to HELD: {type(e).__name__}: {e}")
             self._decision = Decision(Route.HELD, "fallback", 0.0, str(e))
@@ -275,7 +275,7 @@ class RouteGate(FrameProcessor):
         self._replaced = True
         utterance = self._state.history[-1]["content"] if self._state.history else ""
 
-        # Refused. Nothing is sent, nothing is queued, and Sean is told so in
+        # Refused. Nothing is sent, nothing is queued, and the operator is told so in
         # terms that make clear the next move is his. This is the only outcome
         # the keyword net can produce, which is what makes it safe to trust.
         if decision.route is Route.HELD:
@@ -345,13 +345,13 @@ class RouteGate(FrameProcessor):
                 # stop is the end of the first sentence, not the end of the
                 # read-back. Setting the mark once made the answer window start
                 # while the bot was still talking: a ten second read-back ate
-                # half of a twenty second window and the gate expired on Sean
+                # half of a twenty second window and the gate expired on the operator
                 # mid-thought. Keep pushing the mark forward instead - the last
                 # stop before the answer is the real end of the prompt.
                 pending.prompt_done_at = time.time()
 
         if isinstance(frame, InterruptionFrame):
-            # Talking over the read-back means Sean did not hear all of what was
+            # Talking over the read-back means the operator did not hear all of what was
             # about to be sent, which is the one thing the gate exists to
             # guarantee. Marked here, refused when the answer arrives.
             #
@@ -405,7 +405,7 @@ async def deliver_answers(state: TurnState, escalator: Escalator, task,
 
     Discord delivery has already happened by the time an answer reaches this
     queue, so waiting for a gap is safe: the answer is never lost, only spoken
-    late or not at all. Cutting across Sean mid-sentence to read out something
+    late or not at all. Cutting across the operator mid-sentence to read out something
     he asked for a minute ago is worse than staying silent.
     """
     while True:

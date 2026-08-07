@@ -1,11 +1,15 @@
 {
   "id": "behalfbot-voice-agent",
-  "name": "Behalf.bot — Voice Agent",
-  "description": "Talk to the agent out loud. A local speech loop on the host: Whisper for hearing, Kokoro for speaking, and a small local model that answers what it can and escalates the rest to the full agent. Speech never leaves the machine; only escalated questions do. APPLE SILICON ONLY — the speech models are MLX, which does not run in the Linux container the rest of the chassis lives in.",
+  "name": "Behalf.bot \u2014 Voice Agent",
+  "description": "Talk to the agent out loud. A local speech loop on the host: Whisper for hearing, Kokoro for speaking, and a small local model that answers what it can and escalates the rest to the full agent. Speech never leaves the machine; only escalated questions do. APPLE SILICON ONLY \u2014 the speech models are MLX, which does not run in the Linux container the rest of the chassis lives in.",
   "version": "0.1.0",
   "platform": {
-    "os": ["darwin"],
-    "arch": ["arm64"],
+    "os": [
+      "darwin"
+    ],
+    "arch": [
+      "arm64"
+    ],
     "runs": "host",
     "note": "Not a container plugin. Whisper MLX and Kokoro MLX require Apple Silicon, and the process is managed by launchd on the host rather than by the chassis container. An install on Linux, Cloudflare or a managed host cannot run this."
   },
@@ -23,7 +27,6 @@
         "default": false,
         "description": "Master toggle. False by default: this pulls several GB of models and only runs on Apple Silicon, so it is opt-in."
       },
-
       "agent_name": {
         "type": "string",
         "description": "What the operator calls the agent out loud. Used to detect being addressed by name, which is the strongest routing signal there is.",
@@ -31,27 +34,31 @@
       },
       "agent_name_variants": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "What speech recognition writes instead of the name. Not optional in practice: whisper-base renders 'Jax' as 'Jack' or 'Jacks' most of the time, and without these the agent does not know when it is being spoken to. Add whatever the logs show.",
-        "default": ["jax", "jacks", "jack", "zach"]
+        "default": [
+          "jax",
+          "jacks",
+          "jack",
+          "zach"
+        ]
       },
       "aliases_path": {
         "type": "string",
         "description": "JSON map of what speech recognition writes to what the operator meant, applied once before anything reads the text. For names and shorthand a model would never guess - an internal tool called 'C1', a company acronym. See examples/aliases.example.json. Empty is fine.",
         "default": "${CHASSIS_HOME}/plugins/voice-agent/data/aliases.json"
       },
-
       "sensitive_terms_path": {
         "type": "string",
         "description": "JSON list of regexes that mark an utterance as too private to send anywhere. A match refuses the turn: nothing is escalated and the operator is told to handle it himself. It can only refuse, never route, which is what makes it safe to trust. NO DEFAULT TERMS SHIP - one person's private vocabulary is not another's. See examples/sensitive-terms.example.json.",
         "default": "${CHASSIS_HOME}/plugins/voice-agent/data/sensitive-terms.json"
       },
-
       "answer_channel_id": {
         "type": "string",
         "description": "Chat channel id where escalation answers get posted, so walking away mid-answer does not lose it. Spoken aloud as well when the room is quiet."
       },
-
       "router_model": {
         "type": "string",
         "default": "gemma3:4b",
@@ -77,7 +84,6 @@
         "default": "af_heart",
         "description": "Kokoro voice."
       },
-
       "escalation_model": {
         "type": "string",
         "default": "sonnet",
@@ -95,16 +101,20 @@
       },
       "mcp_servers": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Which MCP servers the escalation may boot, by name from the install's .mcp.json. Every server in that file starts before the model answers a word, so this list is a latency budget, not a capability wish list. Measured: no servers 4s, four servers 7s, fifteen servers never returned. Empty means no MCP at all, which is fastest and answers least.",
-        "default": ["memory", "github"]
+        "default": [
+          "memory",
+          "github"
+        ]
       },
       "sticky_session": {
         "type": "boolean",
         "default": true,
         "description": "Carry one escalation session across a conversation, so a follow-up knows what the previous turn was about. Also six times faster after the first question, because a resumed session stops re-paying for the system prompt and tool definitions."
       },
-
       "port": {
         "type": "integer",
         "default": 7860,
@@ -114,8 +124,53 @@
         "type": "integer",
         "default": 8443,
         "description": "Tailscale serve port. Set 0 to skip publishing and stay on localhost."
+      },
+      "operator_name": {
+        "type": "string",
+        "default": "the operator",
+        "description": "Who the agent works for. Appears in the classifier prompt so it can tell 'is this about something of theirs' from 'is this general knowledge'."
+      },
+      "operator_projects": {
+        "type": "string",
+        "description": "The operator's own nouns - projects, products, repos, the tools they live in. This is the one line in the classifier prompt that has to know about the install, because 'is this about something of mine' is unanswerable without knowing what is theirs. Names a 4B model can match on; vague descriptions of a business do not help it.",
+        "default": "their projects, products, repos and the tools they work in"
+      },
+      "private_brain_name": {
+        "type": "string",
+        "default": "",
+        "description": "Optional. A second, private assistant the operator keeps off this machine entirely. Naming it out loud does not route anywhere - there is no such destination - it HOLDS the turn and tells the operator to take it there himself. Leave empty if there is no second brain; nothing is lost."
+      },
+      "private_brain_name_variants": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "description": "Speech-recognition spellings of that name. Worth filling in for any name that sounds like a common word: whisper-base wrote 'jail' for 'Jill' five times out of five."
+      },
+      "devops_channel_id": {
+        "type": "string",
+        "default": "",
+        "description": "Channel for operational noise - a failed delivery, a dropped confirmation. Falls back to answer_channel_id when unset."
+      },
+      "router_model_2": {
+        "type": "string",
+        "default": "off",
+        "description": "Optional second classifier voter. Off since the router dropped to two destinations: it existed to union two models' privacy verdicts, and there is no privacy verdict left to union. Costs 200-460ms when on."
+      },
+      "ollama_url": {
+        "type": "string",
+        "default": "http://127.0.0.1:11434",
+        "description": "Where Ollama is listening."
+      },
+      "confirm_before_escalating": {
+        "type": "boolean",
+        "default": false,
+        "description": "Read an escalation back and wait for a spoken yes before it runs. Off: its privacy half became redundant when the keyword net started refusing outright, and a read-back on every escalated turn is heavy friction for a thing whose point is speed. On is reasonable if you would rather hear a misheard sentence before it starts an agent."
       }
     },
-    "required": ["enabled"]
+    "required": [
+      "enabled"
+    ]
   }
 }

@@ -78,13 +78,13 @@ ROUTER_MODEL_2 = router_mod.second_model(router_mod.ROUTER_MODEL_2)
 METRICS_PATH = Path(__file__).parent / "metrics" / "latency.jsonl"
 
 # What this model is, and is not, is load-bearing. Phase 1 ran it with an empty
-# system prompt and Sean got a bot that claimed to have Jax's tools, memory and
+# system prompt and the operator got a bot that claimed to have Jax's tools, memory and
 # "creators". It is the front door, not the assistant: it handles the small talk
 # and hands everything else to something that can actually do the work.
-SYSTEM_INSTRUCTION = """You are the voice front end for Jax, Sean's assistant.
+SYSTEM_INSTRUCTION = """You are the voice front end for Jax, the operator's assistant.
 
 You are not Jax. You have no tools, no memory of past sessions, no access to
-Sean's files, repos, calendar, email or accounts, and no knowledge of his
+the operator's files, repos, calendar, email or accounts, and no knowledge of his
 business beyond what he says to you right now. Anything that needs those is
 handed to Jax or to Jill automatically, without you doing anything - you will
 never be asked to answer one of those. Never claim or imply you can look
@@ -94,7 +94,7 @@ So answer what you actually can: general knowledge, facts about the world,
 directions, definitions, and conversation. If you do not know something, say so
 plainly in one sentence.
 
-Your input is text transcribed in realtime from Sean's voice, so expect
+Your input is text transcribed in realtime from the operator's voice, so expect
 transcription errors and adjust without commenting on them.
 
 Your output is converted to speech. Never use markdown, lists, emoji, or special
@@ -115,7 +115,7 @@ class TurnAwareRTVIObserver(RTVIObserver):
     "that would be Lisbon" - leaves its tail sitting in the buffer, and the next
     reply's transcript opens with it.
 
-    That is the repeated-sentence transcript Sean saw. It was only ever on
+    That is the repeated-sentence transcript the operator saw. It was only ever on
     screen: the spoken audio and the LLM context were both verified clean across
     a four-turn conversation (bench_conversation.py, and VOICE_DEBUG_CONTEXT=1).
 

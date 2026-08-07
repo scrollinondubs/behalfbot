@@ -4,7 +4,7 @@ Two destinations, and one refusal:
 
   CHAT  answered by the local model itself, in the voice loop, ~1s
   JAX   escalated to the Claude Code install (tools, memory, repos, business)
-  HELD  nothing is sent anywhere; Sean is told to take it to Jill himself
+  HELD  nothing is sent anywhere; the operator is told to take it to Jill himself
 
 WHY JILL IS NOT A DESTINATION ANY MORE (2026-08-07)
 ---------------------------------------------------
@@ -13,7 +13,7 @@ something was private enough to go to Venice instead of Anthropic. That is the
 design this file used to describe at length, and it was wrong in a way that took
 a while to see.
 
-The privacy boundary that actually works in this system is **Sean**. When a
+The privacy boundary that actually works in this system is **the operator**. When a
 question needs Jill, he carries it into her channel himself, reads her answer,
 and carries back whatever he chooses to. Nothing automated touches the membrane.
 It fails closed by construction, because nothing crosses unless he personally
@@ -27,7 +27,7 @@ turns through to Anthropic.
 
 The number is not the point, though. **A boundary that is 75% reliable is worse
 than no boundary at all**, because of what it does to the person in front of it.
-No boundary makes Sean careful, and careful is what has kept this safe for
+No boundary makes the operator careful, and careful is what has kept this safe for
 months of typing into Discord where no router has ever existed. A boundary he
 believes in makes him relaxed, and relaxed in front of a leaky gate is strictly
 more exposure than careful in front of none.
@@ -36,17 +36,17 @@ So the voice loop does not talk to Venice. It cannot: there is no code path from
 here to Jill, deliberately, so that no future change can quietly reintroduce
 one. What is left is the thing that was actually wanted - a fast local model
 that fields what it can and escalates what it cannot - with the same trust model
-Sean already operates when he types.
+the operator already operates when he types.
 
 The keyword net survives, inverted. It no longer routes anything; it can only
-refuse. If an utterance looks private it is HELD, the bot says so, and Sean
+refuse. If an utterance looks private it is HELD, the bot says so, and the operator
 takes it to Jill in her channel. The one thing it can do is stop, which means
 it cannot leak, which means it can be trusted with the one job it has: catching
 the case where he was mid-flow and never decided anything at all.
 
 ONE SPEAKER IS THE WHOLE ASSUMPTION
 -----------------------------------
-The above holds because Sean is the only voice this thing ever hears. He is
+The above holds because the operator is the only voice this thing ever hears. He is
 trusted, he can steer by naming a destination, and everything else defaults to
 an escalation that runs an agent with tools on his behalf.
 
@@ -64,7 +64,7 @@ line, the speaker is untrusted and every layer inverts:
 The correct shape for that case is a separate mode: local model only, no
 escalation, no tools, no overrides. It is not a flag on this design, and adding
 the phone leg without building it would hand an unknown caller the same
-authority Sean has. Written down here rather than in a ticket because the person
+authority the operator has. Written down here rather than in a ticket because the person
 who wires up Telnyx will read this file first.
 """
 
@@ -79,6 +79,7 @@ from enum import Enum
 from pathlib import Path
 
 import httpx
+from loguru import logger
 
 LLM_BASE_URL = os.getenv("VOICE_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
 OLLAMA_URL = LLM_BASE_URL.removesuffix("/v1")
@@ -139,7 +140,7 @@ class Route(str, Enum):
 # The disclosure this accepts, stated plainly so nobody has to reconstruct it:
 # escalating sends the transcript to Anthropic. The words are the payload, and
 # nothing downstream of the routing decision can take them back. That is the
-# same exposure Sean has every time he types into Discord, managed the same way
+# same exposure the operator has every time he types into Discord, managed the same way
 # - by him, before he speaks.
 DEFAULT_ROUTE = Route.JAX
 
@@ -151,7 +152,7 @@ DEFAULT_ROUTE = Route.JAX
 # conversation set, follow-up holding is the difference between catching half a
 # private thread and catching all of it.
 #
-# The way out is the way in: Sean names Jax, or changes subject to something the
+# The way out is the way in: the operator names Jax, or changes subject to something the
 # classifier reads as ordinary.
 STICKY_WHOLE_THREAD = os.getenv("VOICE_ROUTER_STICKY_THREAD", "1") != "0"
 
@@ -165,7 +166,7 @@ class Decision:
     raw: str = ""
     # model name -> the route it voted for, or None when it failed to answer.
     votes: dict[str, Route | None] = field(default_factory=dict)
-    # True when the keyword net fired on something Sean did not address to
+    # True when the keyword net fired on something the operator did not address to
     # anyone. `route` still says where it would go, but nothing may leave the
     # box until he answers "Jill or Jax". This is the one place the privacy
     # boundary still interrupts him, and it is deliberately the only one.
@@ -174,18 +175,54 @@ class Decision:
 
 # --- layer 1: explicit override -------------------------------------------
 #
-# "ask Jax about X" wins outright. Sean saying a name is a stronger signal than
+# "ask Jax about X" wins outright. the operator saying a name is a stronger signal than
 # anything the classifier can infer, and honouring it is what makes the router
 # feel steerable rather than arbitrary.
 #
-# Whisper renders both names loosely and the confirmation gate depends on the
-# same list, so the variants live here and nowhere else. "jail" is in the JILL
-# set because that is literally what `whisper-base` produced for "send it to
-# Jill" in bench_confirm, five times out of five - and with the gate reading a
-# redirect as consent, that one transcription error was enough to send a
-# question to Anthropic that Sean had just asked to keep off it.
-JAX_NAMES = r"(?:jax|jacks|jaxx|jack|jags|jx)"
-JILL_NAMES = r"(?:jill|jil|jils|jyl|jell|gil|gill|jail|jails)"
+# Whisper renders a name loosely and the confirmation gate depends on the same
+# list, so the variants are built once here and nowhere else.
+#
+# The variants are NOT optional decoration. whisper-base writes "Jack" or
+# "Jacks" for "Jax" most of the time, and an install that lists only the real
+# spelling will find the agent simply does not notice being addressed. Whatever
+# the transcripts show, put it in the config.
+#
+# The cautionary one is worth repeating: whisper-base produced "jail" for "Jill"
+# five times out of five in bench_confirm, and with the confirmation gate reading
+# a redirect as consent, that single transcription error was enough to send a
+# question off the box that the operator had just asked to keep on it. A name
+# that sounds like a common word needs its homophones listed.
+
+def _name_alternation(names: list[str]) -> str:
+    """Build a non-capturing alternation, longest first so 'jaxx' beats 'jax'."""
+    cleaned = sorted({n.strip().lower() for n in names if n.strip()},
+                     key=len, reverse=True)
+    if not cleaned:
+        # Matches nothing. An install with no configured name simply has no
+        # address layer, rather than a regex that matches every empty string.
+        return r"(?!x)x"
+    return "(?:" + "|".join(re.escape(n) for n in cleaned) + ")"
+
+
+def _env_list(name: str, default: str = "") -> list[str]:
+    return [p for p in (os.getenv(name, default) or "").split(",") if p.strip()]
+
+
+AGENT_NAME = os.getenv("VOICE_AGENT_NAME", "Jax")
+JAX_NAMES = _name_alternation(
+    _env_list("VOICE_AGENT_NAME_VARIANTS") or [AGENT_NAME])
+
+# A second, private brain the operator keeps off this box entirely. Optional and
+# empty by default, because most installs do not have one.
+#
+# Naming it out loud does not route anywhere - there is no such destination here
+# (see the module docstring). It HOLDS the turn: nothing is sent, and the
+# operator is told to take it there himself. That is the whole feature, and it
+# is why an install without a second brain loses nothing by leaving this empty.
+PRIVATE_BRAIN_NAME = os.getenv("VOICE_PRIVATE_BRAIN_NAME", "")
+JILL_NAMES = _name_alternation(
+    _env_list("VOICE_PRIVATE_BRAIN_NAME_VARIANTS")
+    or ([PRIVATE_BRAIN_NAME] if PRIVATE_BRAIN_NAME else []))
 
 _ADDRESS = r"(?:ask|check\s+with|get|have|tell|hey|yo|okay|ok)\s+"
 _OVERRIDE_JAX = re.compile(rf"\b{_ADDRESS}{JAX_NAMES}\b", re.I)
@@ -193,17 +230,17 @@ _OVERRIDE_JILL = re.compile(rf"\b{_ADDRESS}{JILL_NAMES}\b", re.I)
 # Bare vocative at the head of the utterance: "Jax, what's on my queue".
 #
 # The punctuation is optional and so is a possessive tail, because both are
-# Whisper's choice rather than Sean's. Live, whisper-base rendered the same
+# Whisper's choice rather than the operator's. Live, whisper-base rendered the same
 # spoken sentence as "Jack, I'm testing..." once and "Jack's what's in my
 # GitHub queue?" the next time. Requiring a comma made the first an explicit
 # address and the second an inferred guess, so the gate fired on one and not
-# the other for input Sean spoke identically. A trailing space is still
+# the other for input the operator spoke identically. A trailing space is still
 # required, so a one-word "Jax." is not a vocative.
 _VOCATIVE_TAIL = r"(?:'s|s)?\s*[,:.!?]?\s+"
 
 # Discourse openers that carry no meaning and are not addressed to anybody.
 # Stripped before the vocative is looked for, because anchoring at ^ made the
-# address layer lose a name behind any of them. Live failure, 2026-08-07: Sean
+# address layer lose a name behind any of them. Live failure, 2026-08-07: the operator
 # said "Alright, Jack, I'm testing this voice interface" and the override never
 # fired - "Jack" was neither at position zero nor after one of the _ADDRESS
 # verbs - so an utterance he had explicitly addressed to Jax fell through to the
@@ -233,18 +270,20 @@ _VOCATIVE_JILL = re.compile(rf"^\s*{JILL_NAMES}{_VOCATIVE_TAIL}", re.I)
 
 # --- layer 0: transcription repair ----------------------------------------
 #
-# Whisper hears a name and writes a different word. Sean says a shorthand and
-# Whisper writes it faithfully, but no model maps "C1" to SiYuan. Both end the
-# same way: the router classifies a sentence Sean did not say. Repairing the
+# Whisper hears a name and writes a different word. the operator says a shorthand and
+# Whisper writes it faithfully, but no model maps an internal shorthand to the
+# tool it means. Both end the same way: the router classifies a sentence the
+# operator did not say. Repairing the
 # text once, before anything reads it, is cheaper and far more predictable than
 # teaching every downstream layer the variants.
 #
 # Applied to the transcript itself rather than only to the routing copy, so the
 # read-back quotes the repaired sentence and the escalation asks the repaired
-# question. Sean hears what is about to be sent.
+# question. the operator hears what is about to be sent.
 
 ALIASES_PATH = Path(
-    os.getenv("VOICE_ALIASES_PATH", str(Path(__file__).parent / "aliases.json")))
+    os.getenv("VOICE_ALIASES_PATH",
+              str(Path(__file__).parent.parent / "data" / "aliases.json")))
 
 _ALIAS_RE: re.Pattern[str] | None = None
 _ALIAS_MAP: dict[str, str] = {}
@@ -286,11 +325,11 @@ def normalize_transcript(text: str) -> str:
 
 
 def explicit_override(text: str) -> Route | None:
-    """Return the route Sean named out loud, or None if he named nobody.
+    """Return the route the operator named out loud, or None if he named nobody.
 
     Jill is checked first so "ask Jill, not Jax" resolves the careful way. She
     is not a destination any more, so naming her returns HELD: the turn stops
-    here and Sean is told to take it to her channel himself. That is not a
+    here and the operator is told to take it to her channel himself. That is not a
     downgrade of the feature, it is the feature - a spoken question answered by
     Venice would have to come back through this box to be read aloud, which is
     the boundary crossing in the other direction.
@@ -309,63 +348,68 @@ def explicit_override(text: str) -> Route | None:
 # catch the cases a 7B model gets wrong, and its false positives cost only a
 # slower answer from Venice. Measured contribution is in the README.
 
-_SENSITIVE_TERMS = [
-    # tax and accounting
-    r"\btax(?:es|ed)?\b", r"\birs\b", r"\bnif\b", r"\bvat\b", r"\biva\b",
-    r"\bfinan[cç]as\b", r"\baccountant\b", r"\bbookkeep", r"\bdeduct",
-    r"\bwrite[- ]off", r"\bfiscal\b", r"\btaxable\b", r"\bhmrc\b",
-    # money held, earned, owed
-    r"\bbank\b", r"\biban\b", r"\bnet worth\b",
-    r"\b(?:bank|business|checking|savings|current|joint|company)\s+account\b",
-    r"\bhow much is (?:in|left)\b", r"\bhow much (?:is|do) (?:i|we) (?:have|owe)\b",
-    r"\bsalary\b", r"\bincome\b", r"\bpayroll\b", r"\bmortgage\b",
-    r"\bloan\b", r"\bdebt\b", r"\binvest(?:ment|ing|ed)?\b", r"\bportfolio\b",
-    r"\bbrokerage\b", r"\bpension\b", r"\bretirement\b", r"\bcrypto wallet\b",
-    r"\bseed phrase\b", r"\bbalance on\b", r"\bcredit card\b", r"\bstatement\b",
-    # money spent
-    r"\bspen[dt]\b", r"\bspending\b", r"\bcost me\b", r"\bhow much (?:did|do|does) (?:i|we|it)\b",
-    r"\bwhat did (?:i|we) pay\b", r"\bexpenses?\b", r"\binvoice", r"\breceipts?\b",
-    # legal
-    r"\bbeneficiar", r"\bnext of kin\b", r"\bpower of attorney\b",
-    r"\blawyer\b", r"\battorney\b", r"\badvogad", r"\bnotary\b", r"\bnot[aá]rio\b",
-    r"\bcontract\b", r"\blease\b", r"\bdeed\b", r"\bwill\b and\b", r"\btestament\b",
-    r"\bcustody\b", r"\bdivorce\b", r"\bsettlement\b", r"\blitigation\b", r"\bsue\b",
-    r"\bvisa\b", r"\bresidency\b", r"\bimmigration\b", r"\bcitizenship\b", r"\baima\b",
-    r"\binsurance\b", r"\bpolicy number\b", r"\bpremium\b", r"\bclaim\b",
-    # medical
-    r"\bdoctor\b", r"\bm[eé]dico\b", r"\bprescri", r"\bdiagnos", r"\bsymptom",
-    r"\bblood (?:test|work|panel|pressure)\b", r"\bcholesterol\b", r"\bmri\b",
-    r"\bx[- ]?ray\b", r"\bbiopsy\b", r"\bmedical record", r"\bhealth record",
-    r"\btherapist\b", r"\btherapy\b", r"\bpsychiatr", r"\bantidepressant",
-    r"\bmedication\b", r"\bdosage\b", r"\bmy meds\b", r"\bhospital\b", r"\bclinic\b",
-    r"\bsurgery\b", r"\bspecialist\b", r"\bsns\b", r"\butente\b",
-    r"\bscan\b", r"\bultrasound\b", r"\bdentist\b", r"\bdental\b", r"\bpharmac",
-    r"\ballerg", r"\bblood type\b", r"\bvaccin", r"\bimmuni[sz]ation\b",
-    r"\bmy (?:results?|chart|file|history)\b", r"\bmedical history\b",
-    r"\bappointment\b", r"\brefill\b", r"\bconsult(?:ation)?\b", r"\bsick\b",
-    r"\binjur", r"\bpain in my\b", r"\bmy (?:knee|back|chest|stomach|heart)\b",
-    # identity and credentials
-    r"\bpassport\b", r"\bpassword\b", r"\bpasswords\b", r"\bcredential",
-    r"\bsocial security\b", r"\bssn\b", r"\bid number\b", r"\bdate of birth\b",
-    r"\bapi key\b", r"\bprivate key\b", r"\b2fa\b", r"\bpin code\b",
-    # the property, which is a money-and-paperwork object
-    r"\bquinta\b", r"\bproperty tax", r"\bimi\b", r"\bcondo fee", r"\bhoa\b",
-    # Added 2026-08-07 after the conversation eval. Every one of these is a
-    # thread that stayed private for several turns and was never caught,
-    # because the opening line named no regulated noun - it was a builder's
-    # quote, a domestic wage, or the safe. A false positive here costs one
-    # repeated sentence, so the bar for adding a term is low on purpose.
-    r"\bquote(?:d|s)?\b", r"\bestimate(?:d|s)?\b", r"\bthe builder\b",
-    r"\bwhat (?:do|did) (?:i|we) (?:pay|agree)\b", r"\bpay (?:her|him|them)\b",
-    r"\bthe cleaner\b", r"\bwages?\b", r"\bcash\b",
-    r"\bthe safe\b", r"\bcombination\b", r"\bthe code for\b",
-    r"\bwhat'?s left to pay\b", r"\bstill owe\b", r"\bowe(?:d|s)?\b",
-]
-_SENSITIVE_RE = re.compile("|".join(_SENSITIVE_TERMS), re.I)
+# The terms live in a file, not in this module, and NOTHING SHIPS BY DEFAULT.
+#
+# One operator's private vocabulary is not another's. The list this started as
+# was Portuguese tax and medical - NIF, IVA, IMI, AIMA, SNS, utente - plus one
+# specific property. Shipped as a default it would refuse turns about things the
+# reader does not have and stay silent on the things they do, which is the worst
+# of both: friction where there is no risk, and confidence where there is.
+#
+# See examples/sensitive-terms.example.json. An install with no file has no
+# keyword net, which is a coherent choice - it means the operator is the only
+# thing deciding what leaves the box, which is true of every other interface
+# they use anyway.
+#
+# Be trigger-happy when writing one. A false positive costs a repeated sentence.
+
+SENSITIVE_TERMS_PATH = Path(
+    os.getenv("VOICE_SENSITIVE_TERMS_PATH",
+              str(Path(__file__).parent.parent / "data" / "sensitive-terms.json")))
+
+_SENSITIVE_RE: re.Pattern[str] | None = None
+
+
+def _load_sensitive() -> re.Pattern[str]:
+    global _SENSITIVE_RE
+    if _SENSITIVE_RE is not None:
+        return _SENSITIVE_RE
+    terms: list[str] = []
+    try:
+        blob = json.loads(SENSITIVE_TERMS_PATH.read_text())
+        raw = blob.get("terms", blob) if isinstance(blob, dict) else blob
+        terms = [t for t in raw if isinstance(t, str) and not t.startswith("_")]
+    except (OSError, ValueError, AttributeError, TypeError):
+        # No file is a valid configuration. A malformed one is not, but the
+        # right response is still to run without a net rather than refuse to
+        # start - a voice agent that will not boot helps nobody, and the log
+        # line below is what gets it fixed.
+        pass
+    if not terms:
+        logger.info(f"no sensitive-terms file at {SENSITIVE_TERMS_PATH}; "
+                    "nothing will be refused on keywords")
+        _SENSITIVE_RE = re.compile(r"(?!x)x")  # matches nothing
+        return _SENSITIVE_RE
+    bad = []
+    good = []
+    for t in terms:
+        try:
+            re.compile(t)
+            good.append(t)
+        except re.error as e:
+            bad.append(f"{t!r} ({e})")
+    if bad:
+        # One broken regex must not take the whole net down with it, which is
+        # what joining them into a single alternation would do.
+        logger.warning(f"dropping {len(bad)} unparseable sensitive term(s): "
+                       f"{'; '.join(bad[:3])}")
+    _SENSITIVE_RE = re.compile("|".join(good), re.I) if good else re.compile(r"(?!x)x")
+    logger.info(f"sensitive net: {len(good)} term(s) from {SENSITIVE_TERMS_PATH.name}")
+    return _SENSITIVE_RE
 
 
 def sensitive_prefilter(text: str) -> bool:
-    return bool(_SENSITIVE_RE.search(text))
+    return bool(_load_sensitive().search(text))
 
 
 # --- layer 3: the local classifier ----------------------------------------
@@ -374,45 +418,59 @@ def sensitive_prefilter(text: str) -> bool:
 # and each classification is prompt-eval-free. The utterance is the only thing
 # that changes, and it goes last.
 
-ROUTER_SYSTEM = """You decide who answers Sean's spoken request. \
-Answer with ONE word and nothing else: CHAT or JAX.
+# The operator's own nouns. Everything else in this prompt is generic; this is
+# the one line that has to know about the install, because "is this about
+# something of mine" is unanswerable without knowing what is theirs.
+#
+# Keep it to names a 4B model can match on: projects, products, repos, the tools
+# they live in. Vague descriptions of a business do not help it.
+OPERATOR_NAME = os.getenv("VOICE_OPERATOR_NAME", "the operator")
+OPERATOR_PROJECTS = os.getenv(
+    "VOICE_OPERATOR_PROJECTS",
+    "their projects, products, repos and the tools they work in")
 
-JAX handles anything needing live tools, stored memory, code, or the business:
-GitHub issues and pull requests, code, deploys, servers, containers, the
-website, Vibecode Lisboa, MicroAdventures, prep.training, leads, students,
-cohorts, outreach, email drafts, the calendar, Discord, briefings, the blog and
-content pipeline, Oura sleep and readiness numbers, workouts he logged, the
-dating queue, home automation, notes in SiYuan, and anything phrased as "do I
-have", "what's on my", "did I", "remind me", "draft", "send", "check", "look up
-in my", or naming a person, project or repo that belongs to Sean.
+ROUTER_SYSTEM = f"""You decide who answers {OPERATOR_NAME}'s spoken request. \
+Answer with ONE word and nothing else: CHAT or {AGENT_NAME.upper()}.
+
+{AGENT_NAME.upper()} handles anything needing live tools, stored memory, code, or
+work data: GitHub issues and pull requests, code, deploys, servers, containers,
+websites, leads, customers, outreach, email drafts, the calendar, chat,
+briefings, the blog and content pipeline, health and workout numbers they
+logged, notes and documents in their own tools, and specifically:
+{OPERATOR_PROJECTS}.
+
+Also anything phrased as "do I have", "what's on my", "did I", "remind me",
+"draft", "send", "check", "look up in my", or naming a person, project or repo
+that belongs to them.
 
 CHAT is everything else: general knowledge, facts about the world, definitions,
 directions and distances, weather, recipes, history, science, opinions, jokes,
 small talk, and questions about you.
 
-Decide by whether answering needs anything of Sean's.
-- Needs his tools, projects, records or work data -> JAX.
-- Needs nothing of his at all -> CHAT.
+Decide by whether answering needs anything of theirs.
+- Needs their tools, projects, records or work data -> {AGENT_NAME.upper()}.
+- Needs nothing of theirs at all -> CHAT.
 
 A question about how taxes, insurance, mortgages or medicine work in general
-needs nothing of Sean's, so it is CHAT. The same question about HIS taxes, HIS
-policy or HIS body needs his records, so it is JAX. The word "my" is the usual
-tell.
+needs nothing of theirs, so it is CHAT. The same question about THEIR taxes,
+THEIR policy or THEIR body needs their records, so it is {AGENT_NAME.upper()}.
+The word "my" is the usual tell.
 
-You are not deciding whether anything is private. Nothing you can answer sends
-a question to Venice, and a separate deterministic layer has already stopped
-whatever looked sensitive before you were asked. If you are unsure between the
-two, answer JAX: a general question sent to Jax costs a slower answer, and a
-question about Sean answered by the small local model costs a wrong one.
+You are not deciding whether anything is private. A separate deterministic layer
+has already stopped whatever looked sensitive before you were asked, and it
+refuses rather than redirects, so there is nowhere else for you to send
+something. If you are unsure between the two, answer {AGENT_NAME.upper()}: a
+general question sent there costs a slower answer, and a question about them
+answered by the small local model costs a wrong one.
 
 Examples:
-how far is Cabo da Roca from Lisbon -> CHAT
-what's on my GitHub queue -> JAX
-what did I spend on the Quinta last month -> JAX
+how far is the coast from here -> CHAT
+what's on my GitHub queue -> {AGENT_NAME.upper()}
+what did I spend on that last month -> {AGENT_NAME.upper()}
 what's the capital of Portugal -> CHAT
-did that pull request pass CI -> JAX
-how does health insurance work in Portugal -> CHAT
-when is my next appointment -> JAX
+did that pull request pass CI -> {AGENT_NAME.upper()}
+how does health insurance work -> CHAT
+when is my next appointment -> {AGENT_NAME.upper()}
 tell me a joke -> CHAT
 
 Now route this request. One word."""
@@ -430,7 +488,7 @@ Now route this request. One word."""
 _ANAPHOR = re.compile(
     r"\b(?:it|its|that|this|those|these|they|them|their|he|him|his|she|her|"
     r"hers|the same|the one|there|then|both|either)\b", re.I)
-# A concrete noun of Sean's working life. Its presence means the utterance
+# A concrete noun of the operator's working life. Its presence means the utterance
 # stands on its own and is not a continuation.
 _TOPIC_SHIFT = re.compile(
     r"\b(?:github|pull request|pr|repo|branch|deploy|ci|server|container|site|"
@@ -473,7 +531,7 @@ def _with_history(text: str, history: list[dict] | None) -> str:
     """
     if not history:
         return text
-    lines = [f"{'Sean' if h['role'] == 'user' else 'You'}: {h['content']}"
+    lines = [f"{'the operator' if h['role'] == 'user' else 'You'}: {h['content']}"
              for h in history[-4:]]
     return "Recent conversation:\n" + "\n".join(lines) + f"\n\nRoute this: {text}"
 
@@ -501,7 +559,7 @@ async def classify_llm(
         # conversation evicts both voters and the next turn pays a cold load.
         # Measured live on 2026-08-07: seventeen minutes idle, then a classify
         # that normally takes 620 ms took 4002 ms, blew the 3 s gate and fell
-        # closed to JILL. Sean asked a GitHub question and got Jill saying she
+        # closed to JILL. the operator asked a GitHub question and got Jill saying she
         # has no access to his GitHub. The router was not wrong, it never
         # answered. Boot-time warming does not help here - the eviction happens
         # mid-session.
@@ -577,7 +635,7 @@ def _apply_default(parsed: Route | None) -> Route:
     The classifier is only asked to separate CHAT from JAX now. If an older
     prompt or a confused model still emits a privacy verdict it is discarded
     rather than honoured: that judgement belongs to the deterministic keyword
-    net, which has already run above, and to Sean, who is the actual boundary.
+    net, which has already run above, and to the operator, who is the actual boundary.
 
     A vote of None means the classifier gave no usable answer at all, which is a
     failure rather than a verdict, so it takes the default too.
@@ -633,7 +691,7 @@ async def route(
     # With an escalation on the other side of that miss it is a disclosure, so
     # holding now covers the whole thread rather than the elliptical part of it.
     #
-    # The way out is Sean naming Jax, which is the same steering the rest of
+    # The way out is the operator naming Jax, which is the same steering the rest of
     # this file gives him.
     if sticky and last_route is Route.HELD:
         if STICKY_WHOLE_THREAD or is_elliptical(text):
@@ -642,7 +700,7 @@ async def route(
     # The keyword net, and the only thing in this file that can refuse.
     #
     # It does not route. It cannot: HELD has no destination, so the worst it can
-    # do is stop a turn Sean then repeats or takes to Jill himself. That is what
+    # do is stop a turn the operator then repeats or takes to Jill himself. That is what
     # makes it trustworthy in a way the three-way classifier never was - a layer
     # whose only power is to refuse cannot leak.
     #
@@ -657,7 +715,7 @@ async def route(
         # A classifier that fell over tells us nothing about the content, and
         # the keyword net has already had its say above. Escalating is the
         # useful failure: the alternative is answering a real question with a 3B
-        # model, and Sean has already decided what he is willing to say aloud.
+        # model, and the operator has already decided what he is willing to say aloud.
         return done(DEFAULT_ROUTE, "fallback", f"error: {type(e).__name__}: {e}")
 
     if parsed is None or any(v is None for v in votes.values()):

@@ -1,0 +1,6 @@
+# Operator content and local state. The examples/ copies are what ship.
+data/*.json
+data/*.env
+.venv/
+logs/
+metrics/
