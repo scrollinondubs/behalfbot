@@ -22,6 +22,8 @@ jobs:
         with:
           severity: error
           scandir: '.'
-          # heartbeat-dispatcher.sh is zsh (not bash/sh); shellcheck
-          # doesn't support zsh, so exclude it from the scan.
-          ignore_names: heartbeat-dispatcher.sh
+          # These are zsh (not bash/sh); shellcheck doesn't support zsh, so
+          # exclude them from the scan. Both carry a #!/bin/zsh shebang - keep
+          # this list in sync with:
+          #   grep -rl '^#!/bin/zsh' --include='*.sh' .
+          ignore_names: heartbeat-dispatcher.sh test_state_write_race.sh
