@@ -7,7 +7,9 @@
 #   1. Pre-flight (clean working tree)
 #   2. Snapshot pre-update state + effective compose config
 #   3. Drain in-flight heartbeats (state file lock)
-#   4. Pull upstream (canonical-clone mode: git pull; vendored mode: git subtree pull)
+#   4. Pull upstream, into the repo that actually owns the chassis tree
+#      (canonical-clone / overlay-mount: git pull --ff-only; vendored: git
+#      subtree pull) - see "Mode detection" below
 #   5. Compose pull + up -d THROUGH compose.sh so the per-install override
 #      applies (behalfbot#100) - bare compose only when the install has none
 #   6. Healthcheck poll (60s)
@@ -22,6 +24,13 @@
 #   chassis-update.sh --force        # apply BREAKING-CHANGE update (operator reviewed)
 #   chassis-update.sh --dry-run      # print plan, don't execute
 #   chassis-update.sh --rollback     # restore the most recent pre-update snapshot
+#
+# Exit codes:
+#   0 - update applied (or dry-run printed, or already up to date)
+#   1 - refused / failed (pre-flight, unrecognised layout, healthcheck rollback)
+#   2 - bad usage
+#   3 - PARTIAL: the tree was updated on disk but the running container was not
+#       refreshed, so it still executes the previous code
 #
 # Invoked by `skills/chassis-update.md` in response to the Discord trigger
 # `update chassis` / `update chassis --force` in the alerts channel.
@@ -173,23 +182,135 @@ CONFIG_PRE="${STATE_DIR}/compose-config-pre.yaml"
 CONFIG_POST="${STATE_DIR}/compose-config-post.yaml"
 CONFIG_DIFF="${STATE_DIR}/compose-config.diff"
 
-# --- Mode detection ---
-# canonical_clone: CHASSIS_HOME's git origin is scrollinondubs/behalfbot itself.
-#                  Update with `git pull --ff-only`.
-# vendored_subtree: CHASSIS_HOME is a customer repo with chassis/ pulled in via
-#                   `git subtree`. Update with `git subtree pull`.
-detect_mode() {
-    local origin_url
-    origin_url=$(cd "$CHASSIS_HOME" && git config --get remote.origin.url 2>/dev/null || echo "")
-    if [[ "$origin_url" == *"scrollinondubs/behalfbot"* ]]; then
-        echo "canonical_clone"
-    else
-        echo "vendored_subtree"
-    fi
+# --- Mode detection (behalfbot#152) ---
+#
+# The question this answers is "which git repository owns the chassis tree this
+# install actually runs", and the answer decides the pull strategy:
+#
+#   canonical_clone  - CHASSIS_HOME is itself a clone of scrollinondubs/behalfbot.
+#                      Update with `git pull --ff-only` there.
+#   overlay_mount    - the chassis tree resolves into a SEPARATE git worktree
+#                      that is a clone of scrollinondubs/behalfbot, mounted or
+#                      nested underneath CHASSIS_HOME. This is the supported
+#                      overlay layout (new-jaxity#136) the reference install
+#                      runs, the one gather-chassis-update-check.sh names in its
+#                      own header and resolve-chassis-root.sh already resolves.
+#                      Update with `git pull --ff-only` in THAT repo.
+#   vendored_subtree - CHASSIS_HOME is a customer repo that genuinely carries
+#                      chassis/ as a git subtree. Update with `git subtree pull`.
+#
+# What was wrong before: detection asked one question - is CHASSIS_HOME's origin
+# behalfbot? - and treated every "no" as vendored_subtree. On an overlay-mount
+# install that planned `git subtree pull --prefix=chassis` inside the CUSTOMER
+# repo for a path owned by a different repository, so the supported update path
+# had never once worked there. An unrecognised layout now refuses rather than
+# falling through to the destructive strategy: silently picking a subtree merge
+# for a shape you cannot identify is worse than doing nothing.
+
+git_origin_url() {
+    git -C "$1" config --get remote.origin.url 2>/dev/null || true
 }
 
-MODE=$(detect_mode)
+git_worktree_root() {
+    git -C "$1" rev-parse --show-toplevel 2>/dev/null || true
+}
+
+is_behalfbot_origin() {
+    [[ "$1" == *"scrollinondubs/behalfbot"* ]]
+}
+
+# The chassis tree this install actually runs. resolve-chassis-root.sh decides
+# that at boot and records the answer; read it rather than re-deriving one (the
+# pattern gather-chassis-root-health.sh already uses). SCRIPT_DIR/.. is the
+# fallback for installs whose resolver has never run - this script always ships
+# at <chassis>/scripts/, in every layout.
+resolve_chassis_source_root() {
+    local state_file="${CUSTOMER_HOME}/chassis-root.state.json" root=""
+    if [[ -f "$state_file" ]] && command -v jq >/dev/null 2>&1; then
+        root=$(jq -r '.resolved_root // ""' "$state_file" 2>/dev/null || echo "")
+    fi
+    if [[ -z "$root" || ! -d "$root" ]]; then
+        root=$(cd "${SCRIPT_DIR}/.." && pwd)
+    fi
+    printf '%s' "$root"
+}
+
+MODE=""
+CHASSIS_REPO_DIR=""       # the repo the pull runs in
+CHASSIS_SOURCE_ROOT=""    # the chassis tree itself
+CUSTOMER_WORKTREE=""
+CHASSIS_WORKTREE=""
+CUSTOMER_ORIGIN=""
+CHASSIS_ORIGIN=""
+
+# Sets MODE + CHASSIS_REPO_DIR as globals (NOT via echo - the caller needs both,
+# and a command substitution would throw the assignments away with the subshell).
+# Returns non-zero when the layout is unrecognised.
+detect_mode() {
+    CHASSIS_SOURCE_ROOT=$(resolve_chassis_source_root)
+    CUSTOMER_WORKTREE=$(git_worktree_root "$CHASSIS_HOME")
+    CHASSIS_WORKTREE=$(git_worktree_root "$CHASSIS_SOURCE_ROOT")
+    CUSTOMER_ORIGIN=$(git_origin_url "$CHASSIS_HOME")
+
+    if is_behalfbot_origin "$CUSTOMER_ORIGIN"; then
+        CHASSIS_REPO_DIR="$CHASSIS_HOME"
+        MODE="canonical_clone"
+        return 0
+    fi
+
+    # Overlay: the chassis tree sits in a git worktree that is NOT the one
+    # CHASSIS_HOME belongs to, and that worktree is a behalfbot clone.
+    if [[ -n "$CHASSIS_WORKTREE" && "$CHASSIS_WORKTREE" != "$CUSTOMER_WORKTREE" ]]; then
+        CHASSIS_ORIGIN=$(git_origin_url "$CHASSIS_WORKTREE")
+        if is_behalfbot_origin "$CHASSIS_ORIGIN"; then
+            CHASSIS_REPO_DIR="$CHASSIS_WORKTREE"
+            MODE="overlay_mount"
+            return 0
+        fi
+    fi
+
+    # Vendored subtree: the chassis tree is inside CHASSIS_HOME and chassis/ is
+    # a tracked path of CHASSIS_HOME's repo. Both halves matter - a directory
+    # that merely exists at chassis/ is what the old detection settled for.
+    if [[ "$CHASSIS_SOURCE_ROOT" == "$CHASSIS_HOME"/* ]] \
+        && [[ -n "$(git -C "$CHASSIS_HOME" ls-tree -d --name-only HEAD chassis 2>/dev/null)" ]]; then
+        CHASSIS_REPO_DIR="$CHASSIS_HOME"
+        MODE="vendored_subtree"
+        return 0
+    fi
+
+    MODE="unknown"
+    return 1
+}
+
+if ! detect_mode; then
+    cat >&2 <<EOF
+[chassis-update] FATAL: cannot classify this install's chassis layout, so there
+[chassis-update] FATAL: is no update strategy that is safe to pick. Observed:
+[chassis-update] FATAL:
+[chassis-update] FATAL:   CHASSIS_HOME              = ${CHASSIS_HOME}
+[chassis-update] FATAL:   CHASSIS_HOME git worktree = ${CUSTOMER_WORKTREE:-<none>}
+[chassis-update] FATAL:   CHASSIS_HOME origin       = ${CUSTOMER_ORIGIN:-<none>}
+[chassis-update] FATAL:   resolved chassis root     = ${CHASSIS_SOURCE_ROOT:-<none>}
+[chassis-update] FATAL:   its git worktree          = ${CHASSIS_WORKTREE:-<none>}
+[chassis-update] FATAL:   its origin                = ${CHASSIS_ORIGIN:-<none>}
+[chassis-update] FATAL:
+[chassis-update] FATAL: Expected one of: a behalfbot clone at CHASSIS_HOME
+[chassis-update] FATAL: (canonical_clone), a behalfbot clone mounted underneath it
+[chassis-update] FATAL: (overlay_mount), or chassis/ vendored into CHASSIS_HOME's
+[chassis-update] FATAL: own repo as a subtree (vendored_subtree).
+[chassis-update] FATAL:
+[chassis-update] FATAL: An empty worktree or origin above usually means git REFUSED
+[chassis-update] FATAL: the directory rather than that it is not a repo - run
+[chassis-update] FATAL: 'git -C <path> status' and look for a dubious-ownership
+[chassis-update] FATAL: refusal, then add the safe.directory exception it asks for.
+EOF
+    die "unrecognised chassis layout - refusing to guess an update strategy (behalfbot#152)"
+fi
+
 log "Mode: $MODE"
+log "Chassis tree: $CHASSIS_SOURCE_ROOT"
+log "Pull target repo: $CHASSIS_REPO_DIR"
 
 # --- Snapshot restore, shared by --rollback and the healthcheck failure path ---
 #
@@ -268,16 +389,31 @@ fi
 
 # --- Step 1: pre-flight ---
 log "Pre-flight: working tree clean check..."
-DIRTY=$(cd "$CHASSIS_HOME" && git status --porcelain -- chassis/ 2>/dev/null | head)
+if [[ "$MODE" == "overlay_mount" ]]; then
+    # Ask the repo the pull will actually run in. Checking CHASSIS_HOME here was
+    # the same wrong-repo defect as the mode detection, and on the reference
+    # install it was worse than wrong: git refuses that directory outright, so
+    # the check returned empty and passed vacuously.
+    #
+    # Whole repo, because `git pull --ff-only` in the clone is blocked by any
+    # modified TRACKED file, not only ones under chassis/. Untracked files
+    # cannot block a fast-forward, so -uno keeps a stray scratch file from
+    # bricking the supported update path.
+    DIRTY=$(git -C "$CHASSIS_REPO_DIR" status --porcelain -uno 2>/dev/null | head)
+    DIRTY_HINT="git -C '$CHASSIS_REPO_DIR' stash push"
+else
+    DIRTY=$(cd "$CHASSIS_HOME" && git status --porcelain -- chassis/ 2>/dev/null | head)
+    DIRTY_HINT="git -C '$CHASSIS_HOME' stash push -- chassis/"
+fi
 if [[ -n "$DIRTY" ]]; then
     cat <<EOF >&2
-Pre-flight FAILED: dirty chassis/ working tree.
-Local edits in chassis/ would be clobbered by an update. Listing:
+Pre-flight FAILED: dirty working tree in $CHASSIS_REPO_DIR ($MODE).
+Local edits would be clobbered by an update. Listing:
 
 $DIRTY
 
 Resolve by upstreaming the change or stashing it:
-  git -C "$CHASSIS_HOME" stash push -- chassis/
+  $DIRTY_HINT
 EOF
     exit 1
 fi
@@ -379,22 +515,63 @@ fi
 
 # --- Step 5: pull upstream ---
 case "$MODE" in
-    canonical_clone)
-        dry_or_run "cd '$CHASSIS_HOME' && git pull --ff-only origin $UPSTREAM_BRANCH"
+    canonical_clone|overlay_mount)
+        # Same command, different repo. CHASSIS_REPO_DIR is CHASSIS_HOME for a
+        # canonical clone and the overlaid behalfbot clone otherwise.
+        dry_or_run "cd '$CHASSIS_REPO_DIR' && git pull --ff-only origin $UPSTREAM_BRANCH"
         ;;
     vendored_subtree)
         # Ensure the chassis remote exists (idempotent: ignore "already exists")
         if [[ $DRY_RUN -eq 0 ]]; then
-            (cd "$CHASSIS_HOME" && git remote add "$UPSTREAM_REMOTE_NAME" "$UPSTREAM_REMOTE_URL" 2>/dev/null) || true
+            (cd "$CHASSIS_REPO_DIR" && git remote add "$UPSTREAM_REMOTE_NAME" "$UPSTREAM_REMOTE_URL" 2>/dev/null) || true
         fi
-        dry_or_run "cd '$CHASSIS_HOME' && git subtree pull --prefix=chassis '$UPSTREAM_REMOTE_NAME' '$UPSTREAM_BRANCH' --squash -m 'chore(chassis): pull v$UPSTREAM_VERSION (#33)'"
+        dry_or_run "cd '$CHASSIS_REPO_DIR' && git subtree pull --prefix=chassis '$UPSTREAM_REMOTE_NAME' '$UPSTREAM_BRANCH' --squash -m 'chore(chassis): pull v$UPSTREAM_VERSION (#33)'"
         ;;
     *)
         die "unknown mode: $MODE"
         ;;
 esac
 
+# --- Step 5.5: did the pull actually deliver a new tree? ---
+#
+# behalfbot#152 defect 3. The pull step can return 0 having moved nothing (wrong
+# repo, already-merged subtree squash, a ff-only pull with no new commits), and
+# everything after this point - healthcheck, migration, last-applied.json, the
+# final status line - then describes an update that did not happen. VERSION on
+# the chassis tree is the ground truth for what landed, so read it back before
+# building anything else on top of the claim.
+#
+# LOCAL_VERSION_FILE is SCRIPT_DIR/../VERSION, so a real run must be launched
+# from the chassis tree's own copy of this script. Running a detached copy (the
+# baked image tree, a scratch dir) still pulls the correct repo but then reads
+# back its own untouched VERSION and fails here. Use --dry-run for those.
+POST_PULL_VERSION="$CURRENT_VERSION"
+if [[ $DRY_RUN -eq 0 ]]; then
+    POST_PULL_VERSION=$(tr -d '[:space:]' < "$LOCAL_VERSION_FILE" 2>/dev/null || echo "")
+    if [[ -z "$POST_PULL_VERSION" ]]; then
+        die "pull reported success but $LOCAL_VERSION_FILE is now unreadable (mode: $MODE, repo: $CHASSIS_REPO_DIR)"
+    fi
+    if [[ "$POST_PULL_VERSION" == "$CURRENT_VERSION" ]]; then
+        log "FAIL: the pull returned success but $LOCAL_VERSION_FILE still reads"
+        log "FAIL: v$CURRENT_VERSION. Nothing was delivered, so there is no update"
+        log "FAIL: to healthcheck and nothing to report as complete."
+        die "pull did not advance the chassis tree (mode: $MODE, repo: $CHASSIS_REPO_DIR)"
+    fi
+    if [[ "$POST_PULL_VERSION" != "$UPSTREAM_VERSION" ]]; then
+        log "WARN: the tree advanced to v$POST_PULL_VERSION, not the v$UPSTREAM_VERSION this"
+        log "WARN: run set out to apply - upstream most likely moved mid-update. The"
+        log "WARN: healthcheck below still requires v$UPSTREAM_VERSION."
+    fi
+fi
+
 # --- Step 6: docker compose pull + up (through compose.sh, behalfbot#100) ---
+#
+# CONTAINER_REFRESHED is carried to the final status line: a skipped refresh
+# used to be a single mid-log note under a closing line that said the update was
+# complete, which is how a containerized install could go on running the old
+# code while the operator read "complete" (behalfbot#152 defect 2).
+CONTAINER_REFRESHED="no"
+CONTAINER_REFRESH_NOTE="no docker-compose.yml at $COMPOSE_DIR"
 if [[ ! -f "${COMPOSE_DIR}/docker-compose.yml" ]]; then
     log "No docker-compose.yml at $COMPOSE_DIR; skipping container refresh"
 else
@@ -414,6 +591,8 @@ else
     fi
     dry_or_run "$(compose_invoke "pull")"
     dry_or_run "$(compose_invoke "up -d")"
+    CONTAINER_REFRESHED="yes"
+    CONTAINER_REFRESH_NOTE=""
 fi
 
 # --- Step 7: healthcheck ---
@@ -567,15 +746,63 @@ if [[ -f "$MIGRATION_SCRIPT" ]]; then
     dry_or_run "bash '$MIGRATION_SCRIPT'"
 fi
 
-# --- Step 9: record successful apply ---
+# --- Step 9: record what was applied ---
+# `to` is the version read back off the tree after the pull, not the version
+# this run set out to apply. Those differ exactly when the update did not do
+# what it intended, which is the case worth recording accurately.
 if [[ $DRY_RUN -eq 0 ]]; then
     jq -n \
         --arg from "$CURRENT_VERSION" \
-        --arg to "$UPSTREAM_VERSION" \
+        --arg to "$POST_PULL_VERSION" \
         --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --arg snapshot "$SNAPSHOT" \
-        '{"from": $from, "to": $to, "applied_at": $ts, "snapshot": $snapshot}' \
+        --arg mode "$MODE" \
+        --arg repo "$CHASSIS_REPO_DIR" \
+        --argjson container_refreshed "$([[ "$CONTAINER_REFRESHED" == "yes" ]] && echo true || echo false)" \
+        '{"from": $from, "to": $to, "applied_at": $ts, "snapshot": $snapshot,
+          "mode": $mode, "repo": $repo, "container_refreshed": $container_refreshed}' \
         > "${STATE_DIR}/last-applied.json"
 fi
 
-log "Update complete: v$CURRENT_VERSION → v$UPSTREAM_VERSION"
+# --- Step 10: report what actually happened (behalfbot#152 defect 3) ---
+#
+# The old final line was a constant - `Update complete: vX → vY` printed
+# whatever the run did, including a dry run that changed nothing and a run whose
+# container was never refreshed. An operator who reads only the last line has to
+# be able to trust it.
+#
+# A skipped refresh is not automatically a failure: an install with no docker
+# and no compose file legitimately runs the dispatcher on the host, and its disk
+# tree IS the artifact. What makes it a partial update is a chassis container
+# that is up and therefore still executing the previous code.
+STALE_CONTAINER=""
+if [[ "$CONTAINER_REFRESHED" == "no" ]] && command -v docker >/dev/null 2>&1; then
+    STALE_CONTAINER=$(chassis_find_container "$COMPOSE_DIR")
+fi
+
+if [[ $DRY_RUN -eq 1 ]]; then
+    log "DRY-RUN complete: nothing was changed."
+    log "DRY-RUN plan was: v$CURRENT_VERSION → v$UPSTREAM_VERSION via $MODE in $CHASSIS_REPO_DIR"
+    if [[ "$CONTAINER_REFRESHED" == "no" ]]; then
+        log "DRY-RUN: container refresh WOULD BE SKIPPED - $CONTAINER_REFRESH_NOTE"
+        if [[ -n "$STALE_CONTAINER" ]]; then
+            log "DRY-RUN: container '$STALE_CONTAINER' would keep running its current code"
+        fi
+    fi
+    exit 0
+fi
+
+if [[ "$CONTAINER_REFRESHED" == "yes" ]]; then
+    log "Update complete: v$CURRENT_VERSION → v$POST_PULL_VERSION (tree pulled, container refreshed)"
+    exit 0
+fi
+
+if [[ -n "$STALE_CONTAINER" ]]; then
+    log "Update PARTIAL: the chassis tree is now v$POST_PULL_VERSION but no container"
+    log "Update PARTIAL: was refreshed - $CONTAINER_REFRESH_NOTE."
+    log "Update PARTIAL: container '$STALE_CONTAINER' is still running its previous code."
+    log "Update PARTIAL: bring the stack up from wherever its compose file lives, then re-check."
+    exit 3
+fi
+
+log "Update complete (host install): v$CURRENT_VERSION → v$POST_PULL_VERSION (tree pulled; no container to refresh - $CONTAINER_REFRESH_NOTE)"
