@@ -14,9 +14,9 @@
 #   Gap 2 - `git remote -v` returns no customer-owned URL.
 #           Same install. Means customizations only exist on the install
 #           machine - no off-machine push target.
-#   Gap 3 - `.mcp.json.mcpServers.memory` block is missing OR points at a
-#           non-writable MEMORY_FILE_PATH. Surfaced via William Holdeman
-#           2026-06-20 amnesiac-bot incident.
+#   Gap 3 - `.mcp.json.mcpServers.memory` block is missing OR the memory graph
+#           it resolves to is unreachable / non-writable in this namespace.
+#           Surfaced via William Holdeman 2026-06-20 amnesiac-bot incident.
 #   Gap 4 - macOS LaunchDaemons not loaded. discord-restart + discord-watchdog
 #           must be `launchctl print system/com.behalfbot.<name>` OK. Without
 #           the Daemons loaded, the tmux session that backs Discord routing
@@ -196,6 +196,37 @@ audit_gap_2_customer_remote() {
 # Gap 3 - .mcp.json has memory server with writable path
 # ============================================================
 
+# Substitute ${CHASSIS_HOME} / ${CUSTOMER_HOME}, including the ${VAR:-default}
+# form, in a path read out of .mcp.json. Deliberately limited to those two
+# names: the config is data, and a generic expansion would evaluate whatever a
+# hand-edited .mcp.json happens to contain. A set env var wins; otherwise the
+# inline default is used; otherwise the same fallback bootstrap.sh assumes.
+expand_home_tokens() {
+    local s="$1"
+    local re='\$\{(CHASSIS_HOME|CUSTOMER_HOME)(:-[^}]*)?\}'
+    local i=0
+    while [[ $i -lt 10 && "$s" =~ $re ]]; do
+        i=$((i + 1))
+        local token="${BASH_REMATCH[0]}"
+        local name="${BASH_REMATCH[1]}"
+        local inline="${BASH_REMATCH[2]:-}"
+        local value=""
+        case "$name" in
+            CHASSIS_HOME)  value="${CHASSIS_HOME:-}" ;;
+            CUSTOMER_HOME) value="${CUSTOMER_HOME:-}" ;;
+        esac
+        if [[ -z "$value" ]]; then
+            if [[ -n "$inline" ]]; then
+                value="${inline#:-}"
+            elif [[ "$name" == "CHASSIS_HOME" ]]; then
+                value="${HOME}/behalfbot"
+            fi
+        fi
+        s="${s//"$token"/$value}"
+    done
+    printf '%s' "$s"
+}
+
 audit_gap_3_memory_mcp() {
     group "Gap 3: memory MCP wired with writable path"
     local mcp="$CUSTOMER_HOME/.mcp.json"
@@ -219,27 +250,52 @@ audit_gap_3_memory_mcp() {
         hint "    --output $mcp"
         return
     fi
-    local mem_path
+    # Two config shapes are legitimate, so resolve the path rather than
+    # asserting a shape:
+    #
+    #   legacy  - env.MEMORY_FILE_PATH baked into the block, possibly carrying
+    #             a ${CHASSIS_HOME} / ${CUSTOMER_HOME} token.
+    #   current - no env block at all. The template wraps the server in
+    #             `sh -c 'export MEMORY_FILE_PATH="$(pwd)/memory/memory.jsonl"; ...'`
+    #             because the host and the chassis container see the same
+    #             bind-mounted directory at different absolute paths, so a
+    #             single baked absolute path is valid in only one namespace.
+    #             Claude Code spawns the server with cwd = the customer root in
+    #             both, so the resolved graph is $CUSTOMER_HOME/memory/memory.jsonl.
+    #
+    # Before this, Gap 3 read env.MEMORY_FILE_PATH only and therefore failed on
+    # every install running the current template - the check that exists to
+    # catch an unreachable memory graph could never pass (#142).
+    local mem_path shape
     mem_path="$(jq -r '.mcpServers.memory.env.MEMORY_FILE_PATH // empty' "$mcp" 2>/dev/null)"
-    if [[ -z "$mem_path" ]]; then
-        fail "mcpServers.memory.env.MEMORY_FILE_PATH not set"
-        return
+    if [[ -n "$mem_path" ]]; then
+        shape="env.MEMORY_FILE_PATH"
+    else
+        mem_path="memory/memory.jsonl"
+        shape="cwd-resolved, no env block"
     fi
-    # Expand ${CHASSIS_HOME} / ${CUSTOMER_HOME} for the writability check
-    local expanded="$mem_path"
-    expanded="${expanded//\$\{CHASSIS_HOME\}/${CHASSIS_HOME:-${HOME}/behalfbot}}"
-    expanded="${expanded//\$\{CUSTOMER_HOME\}/$CUSTOMER_HOME}"
+
+    local expanded
+    expanded="$(expand_home_tokens "$mem_path")"
+    # A relative path is resolved against the launch cwd, which is the
+    # customer root for both the host and the container.
+    [[ "$expanded" != /* ]] && expanded="$CUSTOMER_HOME/$expanded"
+
     local parent
     parent="$(dirname "$expanded")"
     if [[ ! -d "$parent" ]]; then
-        warn "parent dir does not exist: $parent"
-        hint "  mkdir -p \"$parent\""
+        # Not a warning. A memory graph whose directory does not exist here is
+        # exactly the amnesiac-bot failure - most often an absolute path baked
+        # in one namespace and read in the other.
+        fail "memory graph dir does not exist in this namespace: $parent ($shape)"
+        hint "A path baked on the host is not valid inside the container, and vice versa."
+        hint "  mkdir -p \"$parent\"   (or re-hydrate .mcp.json from the current template)"
         return
     fi
     if touch "$expanded" 2>/dev/null; then
-        ok "memory MCP wired; MEMORY_FILE_PATH writable: $expanded"
+        ok "memory MCP wired; graph writable: $expanded ($shape)"
     else
-        fail "MEMORY_FILE_PATH not writable: $expanded"
+        fail "memory graph not writable: $expanded ($shape)"
         hint "  chown \$(whoami) \"$expanded\" (or fix parent permissions)"
     fi
 }

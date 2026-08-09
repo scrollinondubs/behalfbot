@@ -18,6 +18,13 @@ Semver:
 
 ## Unreleased
 
+### Fixed
+
+- **`bootstrap-audit.sh` Gap 3 could never pass, so the memory-graph check had never caught anything (#142).** Gap 3 read `.mcpServers.memory.env.MEMORY_FILE_PATH` out of the customer's `.mcp.json`, but the current `.mcp.json.template` deliberately sets no `env` block - it resolves `$(pwd)/memory/memory.jsonl` inside an `sh -c` wrapper, because the host and the chassis container see the same bind-mounted directory at different absolute paths (`/Users/<user>/.behalfbot` vs `/app/customer`) and a single baked absolute path is therefore valid in only one namespace. Every install on the current template reported a false Gap 3 failure, and the check that exists to catch an unreachable knowledge graph could not pass on any of them. Gap 3 now resolves the graph path from either shape - legacy `env.MEMORY_FILE_PATH` when present, otherwise the cwd-resolved `$CUSTOMER_HOME/memory/memory.jsonl` the wrapper produces - and fails only when the resolved graph is unreachable or non-writable.
+- **A memory graph whose directory does not exist is now a Gap 3 failure rather than a warning.** That is the original amnesiac-bot symptom (an absolute path baked in one namespace and read in the other), not a nit.
+- **`${CHASSIS_HOME:-default}` in a hand-edited `.mcp.json` is expanded.** The old substitution handled only the bare `${CHASSIS_HOME}` token, so the defaulted form fell through as a literal path and failed. Expansion stays scoped to `CHASSIS_HOME` and `CUSTOMER_HOME`: the config is data, not shell to evaluate.
+- New behavioural suite `chassis/scripts/test-bootstrap-audit-memory.sh` (wired into `shell-tests.yml`) covers both config shapes and forces every unreachable-graph case - missing dir, non-writable dir, foreign-namespace absolute path, absent memory block - so the fix cannot degrade into a check that passes everything.
+
 ## v0.4.0 - 2026-07-28
 
 ### Added
