@@ -35,6 +35,8 @@ on:
       - 'chassis/scripts/gather-memory-canary.sh'
       - 'chassis/scripts/test-memory-canary.sh'
       - 'chassis/scripts/tests/stub-memory-server.sh'
+      - 'chassis/scripts/gather-chassis-update-check.sh'
+      - 'chassis/scripts/test-chassis-update-check.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -63,6 +65,8 @@ on:
       - 'chassis/scripts/gather-memory-canary.sh'
       - 'chassis/scripts/test-memory-canary.sh'
       - 'chassis/scripts/tests/stub-memory-server.sh'
+      - 'chassis/scripts/gather-chassis-update-check.sh'
+      - 'chassis/scripts/test-chassis-update-check.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
@@ -139,6 +143,18 @@ jobs:
       # a write that does not persist - plus that the read-back really does
       # happen in a second process.
       - run: bash chassis/scripts/test-memory-canary.sh
+  chassis-update-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for #146: Gate 5 of the update check was
+      # documented as a weekly debounce and implemented as a permanent mute,
+      # so one unanswered notification opted the installer out of that version
+      # forever. The suite proves an aged offer re-offers, a fresh one stays
+      # silent, an explicit dismissal is still permanent, and every corrupt
+      # timestamp fails open. No docker, no network - upstream is served from
+      # a temp dir over file://.
+      - run: bash chassis/scripts/test-chassis-update-check.sh
 
   dating-emulator-state:
     runs-on: ubuntu-latest
