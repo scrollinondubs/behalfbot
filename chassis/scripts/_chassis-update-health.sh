@@ -95,6 +95,39 @@ chassis_container_version() {
     printf '%s' "$version"
 }
 
+# Print the CHANGELOG.md of the tree the given container is actually running.
+# Returns non-zero and prints nothing when the read fails.
+#
+# Same probe order and the same reasoning as chassis_container_version above -
+# the boot-time symlink first, because it names the tree the dispatcher runs
+# rather than the tree the image was built from.
+#
+# This exists for the drift half of #147. A drift update moves no VERSION, so
+# the version probe passes the instant the update starts and proves nothing:
+# the container was already reporting that number. Digesting the container's
+# `## Unreleased` section is the equivalent evidence, and without it the
+# healthcheck for a drift apply is exactly the tautology this file's header
+# exists to warn about.
+#
+# Prints raw changelog text. The caller digests it HOST-side, so the comparison
+# never depends on which hash tool happens to be inside the image.
+chassis_container_changelog() {
+    local container="$1"
+    local root text
+
+    [[ -z "$container" ]] && return 1
+
+    text=$(docker exec "$container" cat /app/customer/state/chassis-root/CHANGELOG.md 2>/dev/null)
+    if [[ -z "$text" ]]; then
+        root=$(docker exec "$container" printenv CHASSIS_ROOT 2>/dev/null | tr -d '[:space:]')
+        [[ -z "$root" ]] && root="$CHASSIS_CONTAINER_ROOT_DEFAULT"
+        text=$(docker exec "$container" cat "${root}/CHANGELOG.md" 2>/dev/null)
+    fi
+    [[ -z "$text" ]] && return 1
+
+    printf '%s\n' "$text"
+}
+
 # Which healthcheck contract applies: "container" or "host".
 #
 # Container mode requires proof from inside the container. Host mode (no docker

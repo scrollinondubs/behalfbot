@@ -25,15 +25,29 @@ Activate when a Discord message in the configured alerts channel matches one of 
 | `update chassis --force` | Run `chassis-update.sh --force` (BREAKING-allowed) |
 | `update chassis --dry-run` | Run `chassis-update.sh --dry-run` (preview, no changes) |
 | `update chassis --rollback` | Run `chassis-update.sh --rollback` (restore most recent snapshot) |
-| `skip update` | Append the latest offered version to `state/chassis-update/dismissed.json` |
+| `skip update` | Append the latest offer's `offer_key` to `state/chassis-update/dismissed.json` |
 
 Sender allowlist: only the principal (`INSTALLER_DISCORD_USER_ID` env var). Other users in the channel may type the words — ignore them.
 
 ## What you have
 
-- `state/chassis-update/last-offered.json` — the most recent version surfaced to the operator. This is the version any `update chassis` / `skip update` reply refers to.
+- `state/chassis-update/last-offered.json` - the most recent offer surfaced to the operator. This is what any `update chassis` / `skip update` reply refers to. Fields:
+  - `version` - the upstream VERSION at the time of the offer.
+  - `kind` - `version` or `drift`. Absent on state files written before behalfbot#147; treat absent as `version`.
+  - `offer_key` - the identity of this offer: `<version>` for a version offer, `<version>+<digest>` for a drift offer. Also absent on pre-#147 files, where `version` served as the key.
+  - `unreleased_digest` - short hash of upstream's `## Unreleased` section.
+  - `offered_at` - ISO timestamp.
 - `chassis.config.yaml` — `discord_channels.alerts_label` (display) + `.env`'s `DISCORD_ALERTS_CHANNEL_ID` (runtime).
 - `chassis/scripts/chassis-update.sh` — the apply script.
+
+## The two kinds of offer
+
+`chassis/VERSION` only moves on an explicit release commit, while `main` is the branch every install pulls from. So there are two ways to be behind:
+
+- **`kind: version`** - upstream VERSION is newer. `update chassis` applies it, and the apply reports `vX → vY`.
+- **`kind: drift`** - the versions match but `main` carries changes under `## Unreleased` this install does not have. `update chassis` applies it exactly the same way (the apply script detects drift itself, on the same signal), and reports `vX unreleased <digest> → <digest> (VERSION unchanged)`.
+
+A drift apply reports the same version on both sides of the arrow. That is correct, not a failed update. The evidence it worked is the digest change and the `Update complete` line, and `last-applied.json` records `"kind": "drift"` with both digests.
 
 ## What to do
 
@@ -45,7 +59,7 @@ Sender allowlist: only the principal (`INSTALLER_DISCORD_USER_ID` env var). Othe
    - Force: `bash ${CHASSIS_HOME}/chassis/scripts/chassis-update.sh --force`
 3. **Capture stdout + exit code.**
 4. **Report outcome:**
-   - Success: post to alerts channel — "Chassis updated: `<from> → <to>`. Snapshot: `<path>`. Healthcheck green." Include any relevant migration script output.
+   - Success: post to alerts channel - "Chassis updated: `<from> → <to>`. Snapshot: `<path>`. Healthcheck green." Include any relevant migration script output. For a drift apply, quote the script's own closing line rather than composing a `vX → vX` message that reads as a no-op.
    - Failure: post to alerts channel — "Chassis update FAILED. Last 20 lines of output:\n\n```\n<tail>\n```\n\nSnapshot for rollback: `<path>`. Run `update chassis --rollback` if container is unhealthy." Tag the principal.
 5. **Clear `last-offered.json`** on success (next weekly check will re-populate if more versions remain).
 
@@ -62,13 +76,19 @@ Sender allowlist: only the principal (`INSTALLER_DISCORD_USER_ID` env var). Othe
 
 ### Branch 4: `skip update`
 
-1. Read `state/chassis-update/last-offered.json` to get the version being dismissed.
-2. If no offered version is recorded, reply: "Nothing pending to skip." Exit.
-3. Append that version string to `state/chassis-update/dismissed.json` (initialize to `[]` if missing). Use jq:
+1. Read `state/chassis-update/last-offered.json` to get the offer being dismissed.
+2. If nothing is recorded, reply: "Nothing pending to skip." Exit.
+3. Append the offer's **`offer_key`** to `state/chassis-update/dismissed.json` (initialize to `[]` if missing). Fall back to `.version` when the file predates behalfbot#147 and has no `offer_key`:
    ```bash
-   jq --arg v "$VERSION" '. + [$v] | unique' state/chassis-update/dismissed.json
+   KEY=$(jq -r '.offer_key // .version' state/chassis-update/last-offered.json)
+   jq --arg v "$KEY" '. + [$v] | unique' state/chassis-update/dismissed.json
    ```
-4. Reply to alerts channel: "Chassis update v$VERSION dismissed. Will re-notify when a newer version drops."
+   For a version offer the key IS the bare version, so this writes exactly what it always wrote. For a drift offer it writes `<version>+<digest>`, which mutes that specific set of changes and nothing more.
+4. Reply to alerts channel:
+   - version offer: "Chassis update v$VERSION dismissed. Will re-notify when a newer version drops."
+   - drift offer: "Those unreleased changes are dismissed. Will re-notify when more land on main, or when a new version drops."
+
+**Never write a bare version string to dismiss a drift offer.** A bare version is the legacy "mute this version entirely" entry: it would silence every future merge under that version number until a release is cut, which on a branch where VERSION moves only on release commits means silencing the install indefinitely. That is the exact failure behalfbot#147 exists to remove.
 
 ## Important
 

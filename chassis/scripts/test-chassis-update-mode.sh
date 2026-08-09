@@ -34,6 +34,11 @@
 #    8. dry run                               -> never prints "Update complete"
 #    9. real run whose pull delivers nothing  -> dies, no success line
 #   10. skipped container refresh             -> visible in the final outcome
+#   11. same VERSION, drifted changelog       -> plans a real pull        (#147)
+#   12. same VERSION, same changelog          -> still the up-to-date no-op
+#   13. REAL drift apply                      -> lands, records kind=drift
+#   14. re-running it                         -> up-to-date no-op
+#   15. REAL drift run that pulls nothing     -> dies, no success line
 #
 # No network and no docker daemon: upstream is served from a temp dir over
 # file:// via CHASSIS_UPDATE_RAW_BASE, and `docker` is stubbed on PATH so the
@@ -46,7 +51,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPDATER="${SCRIPT_DIR}/chassis-update.sh"
 
-for f in "$UPDATER" "${SCRIPT_DIR}/_chassis-update-health.sh" "${SCRIPT_DIR}/_compose-verify.sh"; do
+for f in "$UPDATER" "${SCRIPT_DIR}/_chassis-update-health.sh" \
+         "${SCRIPT_DIR}/_compose-verify.sh" "${SCRIPT_DIR}/_chassis-changelog.sh"; do
     if [[ ! -f "$f" ]]; then
         echo "test-chassis-update-mode: missing $f" >&2
         exit 2
@@ -84,6 +90,8 @@ UPSTREAM_VERSION="0.9.0"
 printf '%s\n' "$UPSTREAM_VERSION" > "$UPSTREAM_DIR/chassis/VERSION"
 cat > "$UPSTREAM_DIR/chassis/CHANGELOG.md" <<'EOF'
 # Chassis Changelog
+
+## Unreleased
 
 ## v0.9.0 - 2026-08-09
 
@@ -140,13 +148,29 @@ assert_status() {
 
 git_q() { git -c user.name=test -c user.email=test@example.invalid -C "$1" "${@:2}"; }
 
-# Drop the scripts under test into a chassis tree at $1, with VERSION $2.
+# Write a changelog at $1 whose `## Unreleased` body is the line $2. An empty
+# $2 leaves the section empty, which is the state of main right after a release.
+write_changelog() {
+    local path="$1" unreleased="${2:-}"
+    {
+        printf '# Chassis Changelog\n\n'
+        printf '## Unreleased\n\n'
+        [[ -n "$unreleased" ]] && printf -- '- %s\n\n' "$unreleased"
+        printf '## v0.9.0 - 2026-08-09\n\n### Fixed\n\n- Nothing that breaks anything.\n\n'
+        printf '## v0.1.0 - 2026-01-01\n\n### Added\n\n- The beginning.\n'
+    } > "$path"
+}
+
+# Drop the scripts under test into a chassis tree at $1, with VERSION $2 and an
+# `## Unreleased` body of $3 (default: none).
 plant_chassis_tree() {
-    local tree="$1" version="$2"
+    local tree="$1" version="$2" unreleased="${3:-}"
     mkdir -p "$tree/scripts" "$tree/scheduled-tasks"
     cp "$UPDATER" "${SCRIPT_DIR}/_chassis-update-health.sh" \
-       "${SCRIPT_DIR}/_compose-verify.sh" "$tree/scripts/"
+       "${SCRIPT_DIR}/_compose-verify.sh" "${SCRIPT_DIR}/_chassis-changelog.sh" \
+       "$tree/scripts/"
     printf '%s\n' "$version" > "$tree/VERSION"
+    write_changelog "$tree/CHANGELOG.md" "$unreleased"
     printf '#!/bin/bash\n:\n' > "$tree/scheduled-tasks/heartbeat-dispatcher.sh"
     chmod +x "$tree/scheduled-tasks/heartbeat-dispatcher.sh"
 }
@@ -312,6 +336,145 @@ assert_not_contains "no-op pull: never prints a success line" "Update complete" 
 assert_contains "no-op pull: names the defect" "did not advance the chassis tree" "$out"
 if [[ -f "$NOPULL/state/chassis-update/last-applied.json" ]]; then
     report_fail "no-op pull: last-applied.json" "written for an update that never landed"
+else
+    report_pass
+fi
+
+# --- Scenarios 11-15: unreleased drift (#147) --------------------------------
+#
+# The critical half of the issue. The checker can now see that main carries
+# unreleased commits under an unchanged VERSION, but this script gated on
+# `CURRENT_VERSION == UPSTREAM_VERSION` and exited 0 with "Already up to date."
+# A notification the apply path refuses to act on is worse than no
+# notification, so these cases drive the applier, not the checker.
+#
+# Two more gates would have failed a real drift apply even after the first one
+# was opened, and only a REAL run reaches them: step 5.5 ("pull did not advance
+# the chassis tree", which is true of every drift apply by definition) and the
+# step 7 healthcheck (which compares VERSION, unchanged, so it passes on the
+# first poll whether or not anything happened). Scenarios 13-15 run for real.
+
+DRIFT_RAW="$TMP/upstream-drift"
+mkdir -p "$DRIFT_RAW/chassis"
+printf '0.9.0\n' > "$DRIFT_RAW/chassis/VERSION"
+write_changelog "$DRIFT_RAW/chassis/CHANGELOG.md" "the fix that merged after v0.9.0 was cut"
+
+LEVEL_RAW="$TMP/upstream-level"
+mkdir -p "$LEVEL_RAW/chassis"
+printf '0.9.0\n' > "$LEVEL_RAW/chassis/VERSION"
+write_changelog "$LEVEL_RAW/chassis/CHANGELOG.md" "already applied here"
+
+# --- Scenario 11: same VERSION, drifted changelog, dry run ------------------
+DRIFT_CANON="$TMP/drift-canonical"
+mkdir -p "$DRIFT_CANON"
+git_q "$DRIFT_CANON" init -q -b main
+git_q "$DRIFT_CANON" remote add origin https://github.com/scrollinondubs/behalfbot.git
+plant_chassis_tree "$DRIFT_CANON/chassis" "0.9.0" "already applied here"
+git_q "$DRIFT_CANON" add -A
+git_q "$DRIFT_CANON" commit -qm "chassis at 0.9.0"
+out=$(CHASSIS_UPDATE_RAW_BASE="file://${DRIFT_RAW}" \
+    run_updater "$DRIFT_CANON" "$DRIFT_CANON/chassis" --dry-run); status=$?
+assert_status "drift dry-run: exits clean" 0 $status
+assert_not_contains "drift dry-run: does not claim to be up to date" \
+    "Already up to date" "$out"
+assert_contains "drift dry-run: names the unchanged VERSION and the drift" \
+    "VERSION is level at v0.9.0, but main carries unreleased changes" "$out"
+assert_contains "drift dry-run: plans a real pull" \
+    "DRY-RUN: cd '$DRIFT_CANON' && git pull --ff-only origin main" "$out"
+assert_contains "drift dry-run: the plan line is not a v-to-same-v no-op" \
+    "DRY-RUN plan was: v0.9.0 unreleased" "$out"
+
+# --- Scenario 12: same VERSION, same changelog, dry run ---------------------
+# The genuinely up-to-date case must still be a silent no-op. Without this the
+# suite would pass on a script that simply removed the gate.
+out=$(CHASSIS_UPDATE_RAW_BASE="file://${LEVEL_RAW}" \
+    run_updater "$DRIFT_CANON" "$DRIFT_CANON/chassis" --dry-run); status=$?
+assert_status "level: exits clean" 0 $status
+assert_contains "level: still reports up to date" "Already up to date. Exiting." "$out"
+assert_not_contains "level: plans no pull" "DRY-RUN: cd" "$out"
+
+# --- Scenario 13: a REAL drift apply -----------------------------------------
+# A bare origin whose chassis/CHANGELOG.md has moved while VERSION has not,
+# which is what every merge between releases does to main. The clone starts one
+# commit behind it.
+DRIFT_ORIGIN="$TMP/remote-drift/scrollinondubs/behalfbot.git"
+mkdir -p "$DRIFT_ORIGIN"
+git_q "$DRIFT_ORIGIN" init -q --bare -b main
+DRIFT_SEED="$TMP/drift-seed"
+mkdir -p "$DRIFT_SEED"
+git_q "$DRIFT_SEED" init -q -b main
+plant_chassis_tree "$DRIFT_SEED/chassis" "0.9.0" "already applied here"
+git_q "$DRIFT_SEED" add -A
+git_q "$DRIFT_SEED" commit -qm "seed at 0.9.0"
+git_q "$DRIFT_SEED" remote add origin "$DRIFT_ORIGIN"
+git_q "$DRIFT_SEED" push -q origin main
+
+DRIFT_INSTALL="$TMP/drift-install"
+git -c user.name=test -c user.email=test@example.invalid \
+    clone -q "$DRIFT_ORIGIN" "$DRIFT_INSTALL"
+
+# Now main moves: a merge that changes no VERSION.
+write_changelog "$DRIFT_SEED/chassis/CHANGELOG.md" "the fix that merged after v0.9.0 was cut"
+git_q "$DRIFT_SEED" add -A
+git_q "$DRIFT_SEED" commit -qm "fix: something, under Unreleased"
+git_q "$DRIFT_SEED" push -q origin main
+
+out=$(CHASSIS_UPDATE_RAW_BASE="file://${DRIFT_RAW}" \
+    run_updater "$DRIFT_INSTALL" "$DRIFT_INSTALL/chassis"); status=$?
+assert_status "real drift apply: succeeds" 0 $status
+assert_contains "real drift apply: does not die at the step 5.5 version check" \
+    "Update complete" "$out"
+assert_not_contains "real drift apply: step 5.5 does not fire on an unmoved VERSION" \
+    "did not advance the chassis tree" "$out"
+assert_contains "real drift apply: healthcheck proves the unreleased section, not VERSION" \
+    "Host-mode unreleased section on disk is" "$out"
+assert_contains "real drift apply: the tree really did move" \
+    "the fix that merged after v0.9.0 was cut" \
+    "$(cat "$DRIFT_INSTALL/chassis/CHANGELOG.md")"
+APPLIED="$DRIFT_INSTALL/state/chassis-update/last-applied.json"
+if [[ -f "$APPLIED" ]]; then
+    report_pass
+    assert_contains "real drift apply: last-applied records kind=drift" \
+        '"kind": "drift"' "$(cat "$APPLIED")"
+    if [[ "$(jq -r '.from_unreleased_digest' "$APPLIED")" \
+        != "$(jq -r '.to_unreleased_digest' "$APPLIED")" ]]; then
+        report_pass
+    else
+        report_fail "real drift apply: digests" "from and to are identical in last-applied.json"
+    fi
+else
+    report_fail "real drift apply: last-applied.json" "not written"
+    report_fail "real drift apply: last-applied kind" "no file to read"
+    report_fail "real drift apply: last-applied digests" "no file to read"
+fi
+
+# --- Scenario 14: the drift apply is idempotent ------------------------------
+# Immediately re-running it must be the up-to-date no-op, not a second apply.
+out=$(CHASSIS_UPDATE_RAW_BASE="file://${DRIFT_RAW}" \
+    run_updater "$DRIFT_INSTALL" "$DRIFT_INSTALL/chassis"); status=$?
+assert_status "drift re-run: exits clean" 0 $status
+assert_contains "drift re-run: is now genuinely up to date" "Already up to date. Exiting." "$out"
+
+# --- Scenario 15: a drift run whose pull delivers nothing --------------------
+# The drift equivalent of scenario 9. The clone is level with its origin while
+# the raw base advertises a different unreleased section, so the pull returns 0
+# having moved nothing. Without a digest-based post-pull check this run would
+# report a completed update that never happened.
+DRIFT_NOPULL="$TMP/drift-nopull"
+git -c user.name=test -c user.email=test@example.invalid \
+    clone -q "$DRIFT_ORIGIN" "$DRIFT_NOPULL"
+GHOST_RAW="$TMP/upstream-ghost"
+mkdir -p "$GHOST_RAW/chassis"
+printf '0.9.0\n' > "$GHOST_RAW/chassis/VERSION"
+write_changelog "$GHOST_RAW/chassis/CHANGELOG.md" "a change no git remote actually carries"
+out=$(CHASSIS_UPDATE_RAW_BASE="file://${GHOST_RAW}" \
+    run_updater "$DRIFT_NOPULL" "$DRIFT_NOPULL/chassis"); status=$?
+assert_status "drift no-op pull: fails instead of reporting success" 1 $status
+assert_not_contains "drift no-op pull: never prints a success line" "Update complete" "$out"
+assert_contains "drift no-op pull: names the defect" \
+    "pull did not deliver the unreleased changes" "$out"
+if [[ -f "$DRIFT_NOPULL/state/chassis-update/last-applied.json" ]]; then
+    report_fail "drift no-op pull: last-applied.json" "written for an update that never landed"
 else
     report_pass
 fi

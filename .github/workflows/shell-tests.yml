@@ -38,6 +38,7 @@ on:
       - 'chassis/scripts/tests/stub-memory-server.sh'
       - 'chassis/scripts/gather-chassis-update-check.sh'
       - 'chassis/scripts/test-chassis-update-check.sh'
+      - 'chassis/scripts/_chassis-changelog.sh'
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - '.github/workflows/shell-tests.yml'
   push:
@@ -70,6 +71,7 @@ on:
       - 'chassis/scripts/tests/stub-memory-server.sh'
       - 'chassis/scripts/gather-chassis-update-check.sh'
       - 'chassis/scripts/test-chassis-update-check.sh'
+      - 'chassis/scripts/_chassis-changelog.sh'
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
@@ -158,6 +160,15 @@ jobs:
       # silent, an explicit dismissal is still permanent, and every corrupt
       # timestamp fails open. No docker, no network - upstream is served from
       # a temp dir over file://.
+      #
+      # Also covers #147: chassis/VERSION only moves on a release commit, so
+      # once local and upstream VERSION matched, every merge landing under
+      # `## Unreleased` on main - the branch installs actually pull from - was
+      # invisible to the checker. The suite proves a changed unreleased section
+      # under an unchanged VERSION re-offers with an explicit kind=drift, an
+      # unchanged one stays silent, dismissal is keyed to the digest rather
+      # than muting the whole version, and a pre-#147 dismissed.json entry
+      # still means what it always meant.
       - run: bash chassis/scripts/test-chassis-update-check.sh
 
   dating-emulator-state:
@@ -183,4 +194,10 @@ jobs:
       # defaulting to the destructive strategy, and the final status line no
       # longer reports success for a run that pulled nothing. No docker daemon,
       # no network - upstream is served over file:// and docker is stubbed.
+      #
+      # Extended for #147 with the applier half of unreleased drift. A checker
+      # that can see drift while the applier answers "Already up to date"
+      # delivers nothing, and two of the three blockers (the post-pull
+      # advanced-tree check and the healthcheck) are only reachable by a REAL
+      # run, so those scenarios pull for real against a local bare repo.
       - run: bash chassis/scripts/test-chassis-update-mode.sh
