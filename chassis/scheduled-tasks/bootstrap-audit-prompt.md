@@ -10,7 +10,7 @@ The transcript walks five known install gaps:
 
 1. **HEARTBEATS.md backup row** - a regular backup heartbeat is registered. Failure means scheduled backups aren't firing.
 2. **Customer GitHub remote** - `origin` points at the customer's own private repo, not the chassis template. Failure means changes here only exist on this machine.
-3. **Memory MCP** - the knowledge graph MCP is wired into `.mcp.json` and its `MEMORY_FILE_PATH` is writable. Failure means narrative memory across sessions is broken.
+3. **Memory MCP** - the knowledge graph MCP is wired into `.mcp.json` and the graph file it resolves to is writable from the launch cwd. The path comes either from a legacy `env.MEMORY_FILE_PATH` or, on the current template, from `$(pwd)/memory/memory.jsonl`. Failure means narrative memory across sessions is broken - most often an absolute path baked in one namespace (the host customer dir) and read in the other (`/app/customer` inside the container).
 4. **LaunchDaemons** - `com.behalfbot.<bot>-discord-restart` and `-discord-watchdog` are loaded in the system domain. Failure means the Discord bridge has no persistent `claude` process to route into.
 5. **Tmux session** - the bot's tmux session exists. A failure here is a warning unless paired with a failing LaunchDaemon check (the daemon creates the session at 05:00 + RunAtLoad).
 
