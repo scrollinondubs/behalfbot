@@ -12,7 +12,27 @@
 set -uo pipefail
 
 CUSTOMER_HOME="${CUSTOMER_HOME:-${HOME}/.behalfbot}"
-AUDIT_SCRIPT="${CHASSIS_HOME:-${HOME}/behalfbot}/chassis/scripts/bootstrap-audit.sh"
+
+# Locate the audit the same way gather-memory-canary.sh locates the canary
+# (#151): sibling first, then the boot-time chassis-root record, then the
+# legacy host layout. `${CHASSIS_HOME}/chassis/...` only names the chassis tree
+# on a host-side install; in a container CHASSIS_HOME is the customer root and
+# that path does not exist, so this gather has been reporting "cannot gate" on
+# every containerized install instead of running the audit.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+LEGACY_AUDIT="${CHASSIS_HOME:-${HOME}/behalfbot}/chassis/scripts/bootstrap-audit.sh"
+STATE_FILE="$CUSTOMER_HOME/chassis-root.state.json"
+
+AUDIT_SCRIPT=""
+if [[ -n "$SCRIPT_DIR" && -x "$SCRIPT_DIR/bootstrap-audit.sh" ]]; then
+    AUDIT_SCRIPT="$SCRIPT_DIR/bootstrap-audit.sh"
+elif [[ -f "$STATE_FILE" ]] && command -v jq >/dev/null 2>&1 &&
+     RESOLVED_ROOT="$(jq -r '.resolved_root // ""' "$STATE_FILE" 2>/dev/null)" &&
+     [[ -n "$RESOLVED_ROOT" && -x "$RESOLVED_ROOT/scripts/bootstrap-audit.sh" ]]; then
+    AUDIT_SCRIPT="$RESOLVED_ROOT/scripts/bootstrap-audit.sh"
+else
+    AUDIT_SCRIPT="$LEGACY_AUDIT"
+fi
 
 if [[ ! -x "$AUDIT_SCRIPT" ]]; then
     # No audit script means we can't say anything. Emit count=0 + a note,

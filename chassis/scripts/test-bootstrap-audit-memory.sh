@@ -137,5 +137,69 @@ fi
 h="$(make_home nomemory '"filesystem":{"command":"npx"}')"
 assert_case "mcpServers.memory absent" "$(run_gap3 "$h")" fail
 
+# ------------------------------------------------------------------
+# gather-bootstrap-audit.sh locates the audit (#151)
+#
+# The gather derived the audit's path from CHASSIS_HOME, which names the chassis
+# tree only on a host-side install. On a container it resolved a path that does
+# not exist and emitted the quiet "cannot gate" count=0 forever - the audit has
+# never run on a containerized install. Assert the two resolution paths that
+# replace it: a sibling, and the boot-time chassis-root record for a root that
+# is not $CHASSIS_HOME/chassis. A stub audit stands in for the real one so this
+# stays a path-resolution test, not a second copy of the audit suite.
+# ------------------------------------------------------------------
+
+GATHER="${SCRIPT_DIR}/gather-bootstrap-audit.sh"
+
+make_stub_tree() {
+    local root="$TMP/$1"
+    mkdir -p "$root/scripts"
+    cat > "$root/scripts/bootstrap-audit.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "Summary: 3 passed, 1 warned, 2 failed"
+STUB
+    chmod +x "$root/scripts/bootstrap-audit.sh"
+    printf '%s' "$root"
+}
+
+# assert_gather_count <name> <gather-path> <customer-home> <chassis-home> <expected-count>
+assert_gather_count() {
+    local name="$1" gather="$2" home="$3" chassis="$4" want="$5"
+    local out count
+    out="$(env -u CHASSIS_HOME CUSTOMER_HOME="$home" CHASSIS_HOME="$chassis" bash "$gather" 2>/dev/null)"
+    count="$(printf '%s' "$out" | jq -r '.count' 2>/dev/null)"
+    if [[ "$count" != "$want" ]]; then
+        printf '  FAIL gather %s: expected count %s, got %s\n       | %s\n' "$name" "$want" "$count" "$out"
+        fail=$((fail + 1))
+        return
+    fi
+    printf '  ok   gather %s (count=%s)\n' "$name" "$count"
+    pass=$((pass + 1))
+}
+
+SIBLING_TREE="$(make_stub_tree sibling-tree)"
+cp "$GATHER" "$SIBLING_TREE/scripts/"
+assert_gather_count "sibling audit is found" "$SIBLING_TREE/scripts/gather-bootstrap-audit.sh" \
+    "$TMP/gather-sibling-home" "$TMP/nonexistent-chassis-home" 2
+
+OFFSET_TREE="$(make_stub_tree offset-tree/chassis/chassis)"
+LONE_GATHER_DIR="$TMP/lone-audit-gather"
+mkdir -p "$LONE_GATHER_DIR" "$TMP/gather-offset-home"
+cp "$GATHER" "$LONE_GATHER_DIR/"
+cat > "$TMP/gather-offset-home/chassis-root.state.json" <<EOF
+{"schema": 1, "mode": "live", "resolved_root": "$OFFSET_TREE",
+ "resolved_at": "2026-08-09T00:00:00Z", "error": null}
+EOF
+assert_gather_count "chassis root outside \$CHASSIS_HOME/chassis resolves via state file" \
+    "$LONE_GATHER_DIR/gather-bootstrap-audit.sh" \
+    "$TMP/gather-offset-home" "$TMP/nonexistent-chassis-home" 2
+
+# No audit anywhere: stays quiet at count=0. Unlike the memory canary this
+# gather is not criticality: critical, and its documented contract is a silent
+# note rather than an alarm - the fix must not change that.
+mkdir -p "$TMP/gather-empty-home"
+assert_gather_count "missing audit stays quiet" "$LONE_GATHER_DIR/gather-bootstrap-audit.sh" \
+    "$TMP/gather-empty-home" "$TMP/nonexistent-chassis-home" 0
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]] || exit 1

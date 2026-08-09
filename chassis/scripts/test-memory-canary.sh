@@ -21,6 +21,9 @@
 #  10. gather-memory-canary.sh: healthy -> count 0, broken -> count 1, missing
 #      canary -> count 1, and ALWAYS exit 0 (a non-zero gather exit is read as
 #      count=0, which would mute the monitor exactly when it fires)
+#  11. gather-memory-canary.sh on a chassis root that is NOT $CHASSIS_HOME/chassis
+#      (#151): resolves through chassis-root.state.json -> PASS, and a state
+#      record pointing at a tree with no canary still fires rather than passing
 #
 # No docker, no network, no npx: a stub memory server stands in for
 # @modelcontextprotocol/server-memory. The stub persists to $MEMORY_FILE_PATH
@@ -238,23 +241,45 @@ assert_case "healthy graph, legacy env.MEMORY_FILE_PATH shape" "$(run_canary "$h
 
 GATHER="${SCRIPT_DIR}/gather-memory-canary.sh"
 
-# Build a CHASSIS_HOME layout the gather can resolve the canary through.
+# Build a host-shaped CHASSIS_HOME layout ($CHASSIS_HOME/chassis/scripts). The
+# gather copy inside it resolves its canary as a sibling.
 FAKE_CHASSIS="$TMP/chassis-home"
 mkdir -p "$FAKE_CHASSIS/chassis/scripts/tests"
 cp "$CANARY" "$SCRIPT_DIR/_memory-graph.sh" "$GATHER" "$FAKE_CHASSIS/chassis/scripts/"
 cp "$STUB" "$FAKE_CHASSIS/chassis/scripts/tests/"
 
-# run_gather <customer-home> <chassis-home>
-run_gather() {
-    env -u CHASSIS_HOME CUSTOMER_HOME="$1" CHASSIS_HOME="$2" MEMORY_CANARY_TIMEOUT=30 \
-        bash "$GATHER" 2>/dev/null
+# A chassis tree that is NOT at $CHASSIS_HOME/chassis - the reference install's
+# shape (#151), where the chassis clone is mounted at $CUSTOMER_HOME/chassis and
+# nests its own tree one level down. Deriving the canary path from CHASSIS_HOME
+# cannot find this one; the boot-time chassis-root record can.
+OFFSET_CHASSIS="$TMP/offset-tree/chassis/chassis"
+mkdir -p "$OFFSET_CHASSIS/scripts/tests"
+cp "$CANARY" "$SCRIPT_DIR/_memory-graph.sh" "$OFFSET_CHASSIS/scripts/"
+cp "$STUB" "$OFFSET_CHASSIS/scripts/tests/"
+
+# A gather that is ALONE in its directory. Every case that must not resolve a
+# sibling runs this copy - the in-repo gather sits next to the real canary, so
+# running it directly would resolve step 1 no matter what the environment says.
+LONE_DIR="$TMP/lone-gather"
+mkdir -p "$LONE_DIR"
+cp "$GATHER" "$LONE_DIR/"
+
+# run_gather_from <gather-path> <customer-home> <chassis-home>
+run_gather_from() {
+    env -u CHASSIS_HOME CUSTOMER_HOME="$2" CHASSIS_HOME="$3" MEMORY_CANARY_TIMEOUT=30 \
+        bash "$1" 2>/dev/null
 }
 
-# assert_gather <name> <customer-home> <chassis-home> <expected-count> [expected-stage]
-assert_gather() {
-    local name="$1" home="$2" chassis="$3" want_count="$4" want_stage="${5:-}"
+# run_gather <customer-home> <chassis-home>
+run_gather() {
+    run_gather_from "$FAKE_CHASSIS/chassis/scripts/gather-memory-canary.sh" "$1" "$2"
+}
+
+# assert_gather_from <gather-path> <name> <customer-home> <chassis-home> <expected-count> [expected-stage]
+assert_gather_from() {
+    local gather="$1" name="$2" home="$3" chassis="$4" want_count="$5" want_stage="${6:-}"
     local out rc count stage
-    out="$(run_gather "$home" "$chassis")"
+    out="$(run_gather_from "$gather" "$home" "$chassis")"
     rc=$?
     if [[ $rc -ne 0 ]]; then
         printf '  FAIL gather %s: exited %d. A non-zero gather exit is read as count=0, so the monitor goes silent when it fires.\n' "$name" "$rc"
@@ -283,17 +308,50 @@ assert_gather() {
     pass=$((pass + 1))
 }
 
+# assert_gather <name> <customer-home> <chassis-home> <expected-count> [expected-stage]
+assert_gather() {
+    assert_gather_from "$FAKE_CHASSIS/chassis/scripts/gather-memory-canary.sh" "$@"
+}
+
 h="$(make_home gather-healthy "$(stub_template_block)")"
 assert_gather "healthy install is silent" "$h" "$FAKE_CHASSIS" 0 verified
 
 h="$(make_home gather-broken "$(stub_legacy_block /dev/null)")"
 assert_gather "broken graph fires, exit still 0" "$h" "$FAKE_CHASSIS" 1 read
 
-# A chassis tree with no canary script: the monitor cannot run. Loud on
-# purpose - a critical liveness check that is absent is itself the alarm, which
-# is why this diverges from gather-bootstrap-audit.sh's quiet count=0.
+# #151: a chassis root that is NOT $CHASSIS_HOME/chassis. The gather runs from a
+# directory with no canary beside it and CHASSIS_HOME points at a tree that does
+# not hold one either, so the ONLY way through is chassis-root.state.json. This
+# is the reference install's shape; before the fix it emitted count=1,
+# stage=unavailable while the canary it was wrapping passed by hand.
+h="$(make_home gather-offset-root "$(stub_template_block)")"
+cat > "$h/chassis-root.state.json" <<EOF
+{"schema": 1, "mode": "live", "resolved_root": "$OFFSET_CHASSIS",
+ "baked_root": "$TMP/chassis-empty/chassis", "live_root": "$OFFSET_CHASSIS",
+ "resolved_at": "2026-08-09T00:00:00Z", "error": null}
+EOF
 mkdir -p "$TMP/chassis-empty/chassis/scripts"
-assert_gather "missing canary script fires" "$h" "$TMP/chassis-empty" 1 unavailable
+assert_gather_from "$LONE_DIR/gather-memory-canary.sh" \
+    "chassis root outside \$CHASSIS_HOME/chassis resolves via state file" \
+    "$h" "$TMP/chassis-empty" 0 verified
+
+# No canary anywhere: no sibling, no state file, and a CHASSIS_HOME tree without
+# one. The monitor cannot run. Loud on purpose - a critical liveness check that
+# is absent is itself the alarm, which is why this diverges from
+# gather-bootstrap-audit.sh's quiet count=0.
+h="$(make_home gather-no-canary "$(stub_template_block)")"
+assert_gather_from "$LONE_DIR/gather-memory-canary.sh" "missing canary script fires" \
+    "$h" "$TMP/chassis-empty" 1 unavailable
+
+# A state file whose resolved_root no longer holds a canary must not be trusted
+# into a false negative: the gather falls through and still fires.
+h="$(make_home gather-stale-state "$(stub_template_block)")"
+cat > "$h/chassis-root.state.json" <<EOF
+{"schema": 1, "mode": "live", "resolved_root": "$TMP/chassis-empty/chassis",
+ "resolved_at": "2026-08-09T00:00:00Z", "error": null}
+EOF
+assert_gather_from "$LONE_DIR/gather-memory-canary.sh" "stale chassis-root record still fires" \
+    "$h" "$TMP/chassis-empty" 1 unavailable
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]] || exit 1

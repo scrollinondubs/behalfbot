@@ -31,7 +31,52 @@
 set -uo pipefail
 
 CUSTOMER_HOME="${CUSTOMER_HOME:-${HOME}/.behalfbot}"
-CANARY="${CHASSIS_HOME:-${HOME}/behalfbot}/chassis/scripts/memory-canary.sh"
+
+# LOCATING THE CANARY (#151)
+# ==========================
+# This used to be `${CHASSIS_HOME}/chassis/scripts/memory-canary.sh`. Deriving
+# a chassis path from CHASSIS_HOME assumes the chassis tree sits exactly one
+# level under it, which is true only on a host-side install. In a container
+# CHASSIS_HOME is the CUSTOMER root (/app/customer) and the chassis tree is at
+# /app/chassis (baked) or /app/customer/chassis/chassis (a clone mounted at
+# $CUSTOMER_HOME/chassis, which nests its own chassis/ one level down). On both
+# shapes the derived path does not exist, so the gather reported the monitor
+# unavailable while the canary next to it passed.
+#
+# Order of resolution:
+#   1. SCRIPT_DIR. The gather and the canary ship in the same directory, so a
+#      sibling cannot be the wrong tree. Deliberately first even when the state
+#      file names a different root: whichever tree's gather the dispatcher
+#      runs, that tree's canary is the one that should run.
+#   2. chassis-root.state.json, written by resolve-chassis-root.sh at boot and
+#      read here exactly as gather-chassis-root-health.sh reads it. Covers an
+#      invocation that copied the gather somewhere on its own.
+#   3. The legacy host layout, kept so a pre-#118 install with no state file
+#      still resolves.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+LEGACY_CANARY="${CHASSIS_HOME:-${HOME}/behalfbot}/chassis/scripts/memory-canary.sh"
+STATE_FILE="$CUSTOMER_HOME/chassis-root.state.json"
+
+CANARY=""
+SEARCHED=()
+
+if [[ -n "$SCRIPT_DIR" ]]; then
+    SEARCHED+=("$SCRIPT_DIR/memory-canary.sh")
+    [[ -f "$SCRIPT_DIR/memory-canary.sh" ]] && CANARY="$SCRIPT_DIR/memory-canary.sh"
+fi
+
+if [[ -z "$CANARY" && -f "$STATE_FILE" ]] && command -v jq >/dev/null 2>&1; then
+    RESOLVED_ROOT="$(jq -r '.resolved_root // ""' "$STATE_FILE" 2>/dev/null)"
+    if [[ -n "$RESOLVED_ROOT" ]]; then
+        SEARCHED+=("$RESOLVED_ROOT/scripts/memory-canary.sh")
+        [[ -f "$RESOLVED_ROOT/scripts/memory-canary.sh" ]] && CANARY="$RESOLVED_ROOT/scripts/memory-canary.sh"
+    fi
+fi
+
+if [[ -z "$CANARY" ]]; then
+    SEARCHED+=("$LEGACY_CANARY")
+    [[ -f "$LEGACY_CANARY" ]] && CANARY="$LEGACY_CANARY"
+fi
 
 # Deliberate divergence from gather-bootstrap-audit.sh, which emits count=0 with
 # a note when its helper is missing. This heartbeat is criticality: critical -
@@ -52,8 +97,12 @@ emit_unavailable() {
     exit 0
 }
 
-if [[ ! -f "$CANARY" ]]; then
-    emit_unavailable "memory-canary.sh not found at $CANARY; the memory liveness monitor is not running on this install"
+if [[ -z "$CANARY" ]]; then
+    # Name every location searched, not just the last one. An unavailable
+    # verdict is only actionable if the operator can see which trees were
+    # considered - that is the whole lesson of #151.
+    printf -v SEARCH_LIST '%s, ' "${SEARCHED[@]}"
+    emit_unavailable "memory-canary.sh not found (searched: ${SEARCH_LIST%, }); the memory liveness monitor is not running on this install"
 fi
 if ! command -v jq >/dev/null 2>&1; then
     emit_unavailable "jq not installed; memory-canary cannot parse .mcp.json or the MCP responses on this install"
