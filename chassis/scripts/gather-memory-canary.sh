@@ -14,9 +14,11 @@
 # in `count`. memory-canary.sh keeps the conventional 0/1 exit for humans and
 # for the test suite; this wrapper converts it.
 #
-# Cost: two short-lived `npx @modelcontextprotocol/server-memory` spawns per
-# run. That is more than the near-free gathers, which is why the heartbeat is
-# daily rather than every 15m. Nothing else in the gather touches the network.
+# Cost: three short-lived `npx @modelcontextprotocol/server-memory` spawns per
+# run (clear, write, read - one tool call each, because the server serves
+# pipelined requests concurrently). ~1.7s warm. That is more than the near-free
+# gathers, which is why the heartbeat is daily rather than every 15m. Nothing
+# else in the gather touches the network.
 #
 # Emits: {"count":N, "stage":..., "error":..., "resolved_path":..., "shape":...,
 #         "entity":..., "nonce":..., "server_cmd":..., "customer_home":...,

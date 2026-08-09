@@ -102,7 +102,7 @@ while [[ $# -gt 0 ]]; do
         --customer-home) CUSTOMER_HOME="$2"; shift 2 ;;
         --json) OUTPUT_JSON=true; shift ;;
         --help|-h)
-            sed -n '1,60p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '1,84p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) echo "Unknown arg: $1" >&2; exit 2 ;;

@@ -247,8 +247,9 @@ enough to avoid false alarms would not have caught the outage until late.
 `criticality: critical` - a silently amnesiac assistant is not a background
 concern, and the check must keep running in conservation mode.
 
-Costs two short-lived `npx @modelcontextprotocol/server-memory` spawns per run,
-which is why it is daily rather than every 15m.
+Costs three short-lived `npx @modelcontextprotocol/server-memory` spawns per
+run (clear, write, read - one tool call each), about 1.7s warm, which is why it
+is daily rather than every 15m.
 
 Issue: scrollinondubs/behalfbot#145.
 

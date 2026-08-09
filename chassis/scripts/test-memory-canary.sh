@@ -18,6 +18,9 @@
 #   7. server command cannot start                     -> FAIL (write)
 #   8. mcpServers.memory block absent                  -> FAIL (resolve)
 #   9. healthy graph, legacy env.MEMORY_FILE_PATH shape-> PASS
+#  10. gather-memory-canary.sh: healthy -> count 0, broken -> count 1, missing
+#      canary -> count 1, and ALWAYS exit 0 (a non-zero gather exit is read as
+#      count=0, which would mute the monitor exactly when it fires)
 #
 # No docker, no network, no npx: a stub memory server stands in for
 # @modelcontextprotocol/server-memory. The stub persists to $MEMORY_FILE_PATH
@@ -221,6 +224,76 @@ assert_case "mcpServers.memory absent" "$(run_canary "$h")" fail resolve "mcpSer
 mkdir -p "$TMP/legacy-ok/memory"
 h="$(make_home legacy-ok "$(stub_legacy_block "$TMP/legacy-ok/memory/memory.jsonl")")"
 assert_case "healthy graph, legacy env.MEMORY_FILE_PATH shape" "$(run_canary "$h")" pass verified
+
+
+# ------------------------------------------------------------------
+# gather-memory-canary.sh
+#
+# The gather's exit inversion is the single most load-bearing convention here:
+# the dispatcher treats a non-zero gather exit as count=0, so a gather that
+# exited non-zero on failure would go silent exactly when it fires. That is a
+# one-character regression away at all times, so assert it rather than trust
+# the comment.
+# ------------------------------------------------------------------
+
+GATHER="${SCRIPT_DIR}/gather-memory-canary.sh"
+
+# Build a CHASSIS_HOME layout the gather can resolve the canary through.
+FAKE_CHASSIS="$TMP/chassis-home"
+mkdir -p "$FAKE_CHASSIS/chassis/scripts/tests"
+cp "$CANARY" "$SCRIPT_DIR/_memory-graph.sh" "$GATHER" "$FAKE_CHASSIS/chassis/scripts/"
+cp "$STUB" "$FAKE_CHASSIS/chassis/scripts/tests/"
+
+# run_gather <customer-home> <chassis-home>
+run_gather() {
+    env -u CHASSIS_HOME CUSTOMER_HOME="$1" CHASSIS_HOME="$2" MEMORY_CANARY_TIMEOUT=30 \
+        bash "$GATHER" 2>/dev/null
+}
+
+# assert_gather <name> <customer-home> <chassis-home> <expected-count> [expected-stage]
+assert_gather() {
+    local name="$1" home="$2" chassis="$3" want_count="$4" want_stage="${5:-}"
+    local out rc count stage
+    out="$(run_gather "$home" "$chassis")"
+    rc=$?
+    if [[ $rc -ne 0 ]]; then
+        printf '  FAIL gather %s: exited %d. A non-zero gather exit is read as count=0, so the monitor goes silent when it fires.\n' "$name" "$rc"
+        fail=$((fail + 1))
+        return
+    fi
+    if ! printf '%s' "$out" | jq -e . >/dev/null 2>&1; then
+        printf '  FAIL gather %s: stdout is not JSON: %s\n' "$name" "$out"
+        fail=$((fail + 1))
+        return
+    fi
+    count="$(printf '%s' "$out" | jq -r '.count')"
+    stage="$(printf '%s' "$out" | jq -r '.stage // ""')"
+    if [[ "$count" != "$want_count" ]]; then
+        printf '  FAIL gather %s: expected count %s, got %s\n' "$name" "$want_count" "$count"
+        printf '       | %s\n' "$out"
+        fail=$((fail + 1))
+        return
+    fi
+    if [[ -n "$want_stage" && "$stage" != "$want_stage" ]]; then
+        printf '  FAIL gather %s: expected stage %s, got %s\n' "$name" "$want_stage" "$stage"
+        fail=$((fail + 1))
+        return
+    fi
+    printf '  ok   gather %s (exit 0, count=%s%s)\n' "$name" "$count" "${stage:+, stage=$stage}"
+    pass=$((pass + 1))
+}
+
+h="$(make_home gather-healthy "$(stub_template_block)")"
+assert_gather "healthy install is silent" "$h" "$FAKE_CHASSIS" 0 verified
+
+h="$(make_home gather-broken "$(stub_legacy_block /dev/null)")"
+assert_gather "broken graph fires, exit still 0" "$h" "$FAKE_CHASSIS" 1 read
+
+# A chassis tree with no canary script: the monitor cannot run. Loud on
+# purpose - a critical liveness check that is absent is itself the alarm, which
+# is why this diverges from gather-bootstrap-audit.sh's quiet count=0.
+mkdir -p "$TMP/chassis-empty/chassis/scripts"
+assert_gather "missing canary script fires" "$h" "$TMP/chassis-empty" 1 unavailable
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]] || exit 1
