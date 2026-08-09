@@ -32,6 +32,18 @@
 #   3 - PARTIAL: the tree was updated on disk but the running container was not
 #       refreshed, so it still executes the previous code
 #
+# Two kinds of update (#147):
+#
+#   version - upstream chassis/VERSION is newer than this tree's.
+#   drift   - the versions match but upstream main carries commits under
+#             `## Unreleased` that this tree does not have. VERSION only moves
+#             on an explicit release commit while main is the distribution
+#             branch, so this is the normal state between releases, not an edge
+#             case. Detected the same way gather-chassis-update-check.sh
+#             detects it, via _chassis-changelog.sh, because a checker that can
+#             see drift while the applier answers "Already up to date" delivers
+#             nothing.
+#
 # Invoked by `skills/chassis-update.md` in response to the Discord trigger
 # `update chassis` / `update chassis --force` in the alerts channel.
 
@@ -43,6 +55,7 @@ CUSTOMER_HOME="${CUSTOMER_HOME:-${HOME}/.behalfbot}"
 # overlay-mount install layouts; see gather-chassis-update-check.sh header).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_VERSION_FILE="${SCRIPT_DIR}/../VERSION"
+LOCAL_CHANGELOG_FILE="${SCRIPT_DIR}/../CHANGELOG.md"
 # Container discovery + VERSION probe. Split into a sourceable lib so the
 # healthcheck logic is testable without running a real update.
 # shellcheck source=chassis/scripts/_chassis-update-health.sh
@@ -55,6 +68,16 @@ source "${SCRIPT_DIR}/_compose-verify.sh" || {
     echo "[chassis-update] FATAL: ${SCRIPT_DIR}/_compose-verify.sh missing - it ships with this script" >&2
     exit 1
 }
+# `## Unreleased` digest helpers, shared with gather-chassis-update-check.sh so
+# the applier's idea of drift is the checker's idea of drift (#147). Soft on
+# purpose, unlike _compose-verify.sh above: without it the applier degrades to
+# the version-only behavior it has always had rather than refusing a released
+# update it is perfectly able to perform.
+DRIFT_CAPABLE=0
+# shellcheck source=chassis/scripts/_chassis-changelog.sh
+if [[ -f "${SCRIPT_DIR}/_chassis-changelog.sh" ]] && source "${SCRIPT_DIR}/_chassis-changelog.sh"; then
+    DRIFT_CAPABLE=1
+fi
 UPSTREAM_REMOTE_URL="${CHASSIS_UPDATE_REMOTE:-https://github.com/scrollinondubs/behalfbot.git}"
 UPSTREAM_REMOTE_NAME="chassis"
 UPSTREAM_BRANCH="main"
@@ -382,9 +405,55 @@ UPSTREAM_VERSION=$(curl --silent --fail --max-time 10 "${UPSTREAM_RAW_BASE}/chas
 log "Current: v$CURRENT_VERSION"
 log "Latest:  v$UPSTREAM_VERSION"
 
+# --- Step 0.5: fetch the upstream changelog ---
+# Moved above the version gate (#147): the drift decision below needs it, and
+# the BREAKING gate in step 2 then reuses the same file rather than fetching
+# twice.
+CHANGELOG_PATH="${STATE_DIR}/upstream-changelog.md"
+CHANGELOG_FETCHED=0
+if curl --silent --fail --max-time 10 -o "$CHANGELOG_PATH" "${UPSTREAM_RAW_BASE}/chassis/CHANGELOG.md" 2>/dev/null; then
+    CHANGELOG_FETCHED=1
+fi
+
+# --- Step 0.6: is there anything to apply? ---
+#
+# UPDATE_KIND=version - upstream VERSION is newer. The path this script has
+#                       always taken.
+# UPDATE_KIND=drift   - the versions match but upstream main carries unreleased
+#                       changes this tree does not have (#147).
+#
+# The equality check used to exit 0 here unconditionally, which meant that even
+# once the CHECKER could see drift, the APPLIER would answer `update chassis`
+# with "Already up to date. Exiting." A notification the apply path refuses to
+# act on is worse than no notification.
+UPDATE_KIND="version"
+UPSTREAM_UNRELEASED_DIGEST=""
+LOCAL_UNRELEASED_DIGEST=""
 if [[ "$CURRENT_VERSION" == "$UPSTREAM_VERSION" ]]; then
-    log "Already up to date. Exiting."
-    exit 0
+    if [[ $DRIFT_CAPABLE -eq 1 && $CHANGELOG_FETCHED -eq 1 ]]; then
+        UPSTREAM_UNRELEASED_DIGEST=$(chassis_unreleased_digest "$CHANGELOG_PATH" 2>/dev/null || echo "")
+        LOCAL_UNRELEASED_DIGEST=$(chassis_unreleased_digest "$LOCAL_CHANGELOG_FILE" 2>/dev/null || echo "")
+    fi
+    if [[ -z "$UPSTREAM_UNRELEASED_DIGEST" || -z "$LOCAL_UNRELEASED_DIGEST" ]]; then
+        log "Already up to date at v$CURRENT_VERSION."
+        log "Note: could not compare the unreleased changelog sections, so this"
+        log "Note: cannot rule out unreleased changes on main. Missing"
+        log "Note: ${LOCAL_CHANGELOG_FILE}, an unreachable upstream changelog,"
+        log "Note: or a torn tree missing _chassis-changelog.sh."
+        exit 0
+    fi
+    if [[ "$UPSTREAM_UNRELEASED_DIGEST" == "empty" ]]; then
+        log "Already up to date. Exiting."
+        exit 0
+    fi
+    if [[ "$UPSTREAM_UNRELEASED_DIGEST" == "$LOCAL_UNRELEASED_DIGEST" ]]; then
+        log "Already up to date. Exiting."
+        exit 0
+    fi
+    UPDATE_KIND="drift"
+    log "VERSION is level at v$CURRENT_VERSION, but main carries unreleased changes"
+    log "this tree does not have: unreleased section ${LOCAL_UNRELEASED_DIGEST} here,"
+    log "${UPSTREAM_UNRELEASED_DIGEST} upstream. Applying that drift."
 fi
 
 # --- Step 1: pre-flight ---
@@ -450,9 +519,15 @@ if [[ $USE_COMPOSE_SH -eq 0 && -f "${COMPOSE_DIR}/docker-compose.yml" ]] && comm
 fi
 
 # --- Step 2: BREAKING CHANGES gate ---
-CHANGELOG_PATH="${STATE_DIR}/upstream-changelog.md"
-if curl --silent --fail --max-time 10 -o "$CHANGELOG_PATH" "${UPSTREAM_RAW_BASE}/chassis/CHANGELOG.md" 2>/dev/null; then
+#
+# Window matches gather-chassis-update-check.sh exactly: `## Unreleased` down to
+# (not including) the local version's heading. The unreleased section is in
+# scope because a pull of main delivers it (#147), and capture must not start
+# at the top of the file because the format-conventions preamble contains the
+# literal marker text.
+if [[ $CHANGELOG_FETCHED -eq 1 ]]; then
     WINDOW=$(awk -v upstream="## v${UPSTREAM_VERSION}" -v local_v="## v${CURRENT_VERSION}" '
+        /^## Unreleased/ { capture = 1 }
         $0 ~ "^"upstream { capture = 1 }
         $0 ~ "^"local_v { capture = 0 }
         capture { print }
@@ -460,7 +535,7 @@ if curl --silent --fail --max-time 10 -o "$CHANGELOG_PATH" "${UPSTREAM_RAW_BASE}
     if printf '%s\n' "$WINDOW" | grep -q "BREAKING CHANGES:"; then
         if [[ $FORCE -ne 1 ]]; then
             cat <<EOF >&2
-BREAKING CHANGES detected between v$CURRENT_VERSION and v$UPSTREAM_VERSION.
+BREAKING CHANGES detected in what this update would deliver (v$CURRENT_VERSION to v$UPSTREAM_VERSION, unreleased section included).
 Review the changelog: ${UPSTREAM_RAW_BASE}/chassis/CHANGELOG.md
 Re-run with --force to apply after review.
 EOF
@@ -545,19 +620,38 @@ esac
 # from the chassis tree's own copy of this script. Running a detached copy (the
 # baked image tree, a scratch dir) still pulls the correct repo but then reads
 # back its own untouched VERSION and fails here. Use --dry-run for those.
+#
+# A drift apply moves no version by definition, so VERSION is the wrong ground
+# truth for it and this check would fail every one of them. The equivalent
+# evidence for drift is the tree's own `## Unreleased` section: the run set out
+# to deliver a specific upstream digest, so after the pull the local section
+# must hash to it.
 POST_PULL_VERSION="$CURRENT_VERSION"
+POST_PULL_DIGEST="$LOCAL_UNRELEASED_DIGEST"
 if [[ $DRY_RUN -eq 0 ]]; then
     POST_PULL_VERSION=$(tr -d '[:space:]' < "$LOCAL_VERSION_FILE" 2>/dev/null || echo "")
     if [[ -z "$POST_PULL_VERSION" ]]; then
         die "pull reported success but $LOCAL_VERSION_FILE is now unreadable (mode: $MODE, repo: $CHASSIS_REPO_DIR)"
     fi
-    if [[ "$POST_PULL_VERSION" == "$CURRENT_VERSION" ]]; then
+    if [[ "$UPDATE_KIND" == "drift" ]]; then
+        POST_PULL_DIGEST=$(chassis_unreleased_digest "$LOCAL_CHANGELOG_FILE" 2>/dev/null || echo "")
+        if [[ -z "$POST_PULL_DIGEST" ]]; then
+            die "pull reported success but $LOCAL_CHANGELOG_FILE is now unreadable (mode: $MODE, repo: $CHASSIS_REPO_DIR)"
+        fi
+        if [[ "$POST_PULL_DIGEST" != "$UPSTREAM_UNRELEASED_DIGEST" ]]; then
+            log "FAIL: the pull returned success but this tree's unreleased changelog"
+            log "FAIL: section still hashes to ${POST_PULL_DIGEST}, not the"
+            log "FAIL: ${UPSTREAM_UNRELEASED_DIGEST} this run set out to apply. Nothing was"
+            log "FAIL: delivered, so there is no update to healthcheck."
+            die "pull did not deliver the unreleased changes (mode: $MODE, repo: $CHASSIS_REPO_DIR)"
+        fi
+    elif [[ "$POST_PULL_VERSION" == "$CURRENT_VERSION" ]]; then
         log "FAIL: the pull returned success but $LOCAL_VERSION_FILE still reads"
         log "FAIL: v$CURRENT_VERSION. Nothing was delivered, so there is no update"
         log "FAIL: to healthcheck and nothing to report as complete."
         die "pull did not advance the chassis tree (mode: $MODE, repo: $CHASSIS_REPO_DIR)"
     fi
-    if [[ "$POST_PULL_VERSION" != "$UPSTREAM_VERSION" ]]; then
+    if [[ "$UPDATE_KIND" == "version" && "$POST_PULL_VERSION" != "$UPSTREAM_VERSION" ]]; then
         log "WARN: the tree advanced to v$POST_PULL_VERSION, not the v$UPSTREAM_VERSION this"
         log "WARN: run set out to apply - upstream most likely moved mid-update. The"
         log "WARN: healthcheck below still requires v$UPSTREAM_VERSION."
@@ -610,8 +704,14 @@ fi
 # check on any miss. Since the disk check compares the file the subtree pull
 # just wrote against the upstream value it was pulled from, it passed
 # unconditionally - which is why the rollback below had never once fired.
+#
+# For a drift apply the artifact is the same but the evidence is not: VERSION
+# does not move, so the version probe would pass on the first poll whether or
+# not the container was ever recreated. The container's own `## Unreleased`
+# digest is the honest equivalent, and it is read out and hashed HOST-side so
+# the comparison does not depend on what hash tools the image carries.
 HEALTHCHECK_MODE=$(chassis_healthcheck_mode "$COMPOSE_DIR")
-log "Healthcheck: ${HEALTHCHECK_MODE} mode, polling (timeout ${HEALTHCHECK_TIMEOUT_SECONDS}s)..."
+log "Healthcheck: ${HEALTHCHECK_MODE} mode, ${UPDATE_KIND} update, polling (timeout ${HEALTHCHECK_TIMEOUT_SECONDS}s)..."
 if [[ $DRY_RUN -eq 0 ]]; then
     healthy=0
     last_reason="no poll ran"
@@ -620,6 +720,18 @@ if [[ $DRY_RUN -eq 0 ]]; then
             CONTAINER_NAME=$(chassis_find_container "$COMPOSE_DIR")
             if [[ -z "$CONTAINER_NAME" ]]; then
                 last_reason="no running chassis container found"
+            elif [[ "$UPDATE_KIND" == "drift" ]]; then
+                RUNNING_DIGEST=$(chassis_container_changelog "$CONTAINER_NAME" \
+                    | chassis_unreleased_digest -) || RUNNING_DIGEST=""
+                if [[ -z "$RUNNING_DIGEST" || "$RUNNING_DIGEST" == "empty" ]]; then
+                    last_reason="container '$CONTAINER_NAME' is up but its CHANGELOG could not be read"
+                elif [[ "$RUNNING_DIGEST" == "$UPSTREAM_UNRELEASED_DIGEST" ]]; then
+                    healthy=1
+                    log "Container '$CONTAINER_NAME' carries unreleased section $RUNNING_DIGEST"
+                    break
+                else
+                    last_reason="container '$CONTAINER_NAME' still carries unreleased section $RUNNING_DIGEST, expected $UPSTREAM_UNRELEASED_DIGEST"
+                fi
             else
                 RUNNING_VERSION=$(chassis_container_version "$CONTAINER_NAME") || RUNNING_VERSION=""
                 if [[ -z "$RUNNING_VERSION" ]]; then
@@ -632,6 +744,17 @@ if [[ $DRY_RUN -eq 0 ]]; then
                     last_reason="container '$CONTAINER_NAME' still reports v$RUNNING_VERSION, expected v$UPSTREAM_VERSION"
                 fi
             fi
+        elif [[ "$UPDATE_KIND" == "drift" ]]; then
+            # Host mode: the disk tree IS the artifact, and step 5.5 already
+            # required this digest to match before getting here. Re-reading it
+            # keeps the two modes symmetrical and costs nothing.
+            DISK_DIGEST=$(chassis_unreleased_digest "$LOCAL_CHANGELOG_FILE" 2>/dev/null || echo "")
+            if [[ "$DISK_DIGEST" == "$UPSTREAM_UNRELEASED_DIGEST" ]]; then
+                healthy=1
+                log "Host-mode unreleased section on disk is $DISK_DIGEST"
+                break
+            fi
+            last_reason="unreleased section on disk is ${DISK_DIGEST:-<unreadable>}, expected $UPSTREAM_UNRELEASED_DIGEST"
         else
             DISK_VERSION=$(tr -d '[:space:]' < "$LOCAL_VERSION_FILE" 2>/dev/null || echo "")
             if [[ "$DISK_VERSION" == "$UPSTREAM_VERSION" ]]; then
@@ -740,26 +863,45 @@ fi
 # ${CHASSIS_HOME}/chassis/scripts/...: that literal path only exists in
 # canonical-clone mode. In vendored-subtree mode the pulled repo root lands
 # UNDER chassis/, so the old path silently skipped every migration there.
+#
+# Migrations are keyed to a version bump, so a drift apply must not run one:
+# vX.Y.Z.sh already ran when vX.Y.Z was applied, and re-running it is a second
+# execution of a state mutation nobody asked for. A migration that a drift
+# delivers gets run when its release is cut.
 MIGRATION_SCRIPT="${SCRIPT_DIR}/chassis-migrations/v${UPSTREAM_VERSION}.sh"
-if [[ -f "$MIGRATION_SCRIPT" ]]; then
+if [[ "$UPDATE_KIND" == "version" && -f "$MIGRATION_SCRIPT" ]]; then
     log "Running migration: $MIGRATION_SCRIPT"
     dry_or_run "bash '$MIGRATION_SCRIPT'"
+elif [[ "$UPDATE_KIND" == "drift" && -f "$MIGRATION_SCRIPT" ]]; then
+    log "Skipping $MIGRATION_SCRIPT: it belongs to the v${UPSTREAM_VERSION} bump, which"
+    log "Skipping: this install already applied. Drift applies run no migration."
 fi
 
 # --- Step 9: record what was applied ---
 # `to` is the version read back off the tree after the pull, not the version
 # this run set out to apply. Those differ exactly when the update did not do
 # what it intended, which is the case worth recording accurately.
+#
+# `kind` and the two digests are recorded because a drift apply has
+# from == to, which is otherwise indistinguishable from the pathology #147
+# describes: a hand-run `git pull` that self-applies unreleased code while
+# last-applied.json still names an old version pair. With the digests in the
+# record, "we applied drift on top of v0.5.0" is a fact, not an inference.
 if [[ $DRY_RUN -eq 0 ]]; then
     jq -n \
+        --arg kind "$UPDATE_KIND" \
         --arg from "$CURRENT_VERSION" \
         --arg to "$POST_PULL_VERSION" \
+        --arg from_digest "$LOCAL_UNRELEASED_DIGEST" \
+        --arg to_digest "$POST_PULL_DIGEST" \
         --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --arg snapshot "$SNAPSHOT" \
         --arg mode "$MODE" \
         --arg repo "$CHASSIS_REPO_DIR" \
         --argjson container_refreshed "$([[ "$CONTAINER_REFRESHED" == "yes" ]] && echo true || echo false)" \
-        '{"from": $from, "to": $to, "applied_at": $ts, "snapshot": $snapshot,
+        '{"kind": $kind, "from": $from, "to": $to,
+          "from_unreleased_digest": $from_digest, "to_unreleased_digest": $to_digest,
+          "applied_at": $ts, "snapshot": $snapshot,
           "mode": $mode, "repo": $repo, "container_refreshed": $container_refreshed}' \
         > "${STATE_DIR}/last-applied.json"
 fi
@@ -780,9 +922,19 @@ if [[ "$CONTAINER_REFRESHED" == "no" ]] && command -v docker >/dev/null 2>&1; th
     STALE_CONTAINER=$(chassis_find_container "$COMPOSE_DIR")
 fi
 
+# What this run set out to deliver, in one phrase, for the closing lines. A
+# drift apply that reported `v0.5.0 → v0.5.0` would read as the no-op it is not.
+if [[ "$UPDATE_KIND" == "drift" ]]; then
+    PLAN_DESC="v$CURRENT_VERSION unreleased $LOCAL_UNRELEASED_DIGEST → $UPSTREAM_UNRELEASED_DIGEST (VERSION unchanged)"
+    DONE_DESC="v$POST_PULL_VERSION unreleased $LOCAL_UNRELEASED_DIGEST → $POST_PULL_DIGEST (VERSION unchanged)"
+else
+    PLAN_DESC="v$CURRENT_VERSION → v$UPSTREAM_VERSION"
+    DONE_DESC="v$CURRENT_VERSION → v$POST_PULL_VERSION"
+fi
+
 if [[ $DRY_RUN -eq 1 ]]; then
     log "DRY-RUN complete: nothing was changed."
-    log "DRY-RUN plan was: v$CURRENT_VERSION → v$UPSTREAM_VERSION via $MODE in $CHASSIS_REPO_DIR"
+    log "DRY-RUN plan was: $PLAN_DESC via $MODE in $CHASSIS_REPO_DIR"
     if [[ "$CONTAINER_REFRESHED" == "no" ]]; then
         log "DRY-RUN: container refresh WOULD BE SKIPPED - $CONTAINER_REFRESH_NOTE"
         if [[ -n "$STALE_CONTAINER" ]]; then
@@ -793,16 +945,16 @@ if [[ $DRY_RUN -eq 1 ]]; then
 fi
 
 if [[ "$CONTAINER_REFRESHED" == "yes" ]]; then
-    log "Update complete: v$CURRENT_VERSION → v$POST_PULL_VERSION (tree pulled, container refreshed)"
+    log "Update complete: $DONE_DESC (tree pulled, container refreshed)"
     exit 0
 fi
 
 if [[ -n "$STALE_CONTAINER" ]]; then
-    log "Update PARTIAL: the chassis tree is now v$POST_PULL_VERSION but no container"
+    log "Update PARTIAL: the chassis tree is now $DONE_DESC but no container"
     log "Update PARTIAL: was refreshed - $CONTAINER_REFRESH_NOTE."
     log "Update PARTIAL: container '$STALE_CONTAINER' is still running its previous code."
     log "Update PARTIAL: bring the stack up from wherever its compose file lives, then re-check."
     exit 3
 fi
 
-log "Update complete (host install): v$CURRENT_VERSION → v$POST_PULL_VERSION (tree pulled; no container to refresh - $CONTAINER_REFRESH_NOTE)"
+log "Update complete (host install): $DONE_DESC (tree pulled; no container to refresh - $CONTAINER_REFRESH_NOTE)"
