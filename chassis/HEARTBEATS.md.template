@@ -19,6 +19,26 @@ After #6 split CUSTOMER_HOME from CHASSIS_HOME, picking the right env var for `g
 
 Rule of thumb: if the script or prompt ships with the chassis (lives under `${CHASSIS_HOME}/chassis/`), use CHASSIS_HOME. If you wrote it for this install (lives under `${CUSTOMER_HOME}/`), use CUSTOMER_HOME. Mixing them up resolves to the wrong tree post-migration - see Toby case study in #6.
 
+### Containerized installs: the first two rows do not apply (#151)
+
+The rows above describe a HOST-side install, where `CHASSIS_HOME` is the chassis git tree. Inside the container `CHASSIS_HOME` is the CUSTOMER root (`/app/customer`) and the chassis tree is somewhere else entirely - `/app/chassis` on a baked install, `/app/customer/chassis/chassis` when a chassis clone is mounted at `$CUSTOMER_HOME/chassis`. `${CHASSIS_HOME}/chassis/scripts/...` names neither.
+
+Two separate failures follow, and both are silent:
+
+- **gather**: the line is `eval`ed with cwd `$CUSTOMER_HOME`, so the variable expands - to a path that does not exist. The heartbeat logs `gather script failed` every tick.
+- **prompt**: prompt paths are NOT variable-expanded. The dispatcher joins the raw string onto `$CHASSIS_HOME`, so a `${CHASSIS_HOME}/...` prompt becomes the literal `/app/customer/${CHASSIS_HOME}/chassis/...` and the heartbeat dies with `prompt_missing` the first time it fires.
+
+For chassis-shipped scripts and prompts on a containerized install, address them through the boot-time chassis-root symlink, relative to `$CUSTOMER_HOME`:
+
+```yaml
+gather: state/chassis-root/scripts/gather-memory-canary.sh
+prompt: state/chassis-root/scheduled-tasks/memory-canary-prompt.md
+```
+
+`state/chassis-root` is materialized by `resolve-chassis-root.sh` at every container boot and always points at the tree the dispatcher is actually running, on both the baked and the mounted-clone layout. The gather resolves because the dispatcher runs gathers with cwd `$CUSTOMER_HOME`; the prompt resolves through the same `$CHASSIS_HOME`/`$CUSTOMER_HOME` join, both of which are `/app/customer` in the container.
+
+A host-side install that runs the dispatcher directly from launchd never executes the resolving entrypoint, so it has no `state/chassis-root`. There, keep the literal chassis tree path: `${CHASSIS_HOME}/chassis/scripts/...` for the gather, and a `$CHASSIS_HOME`-relative path with no variable in it for the prompt (`chassis/scheduled-tasks/...`).
+
 ---
 
 Declarative work queue for the chassis heartbeat dispatcher (`chassis/scheduled-tasks/heartbeat-dispatcher.sh`). Each `##` section defines a heartbeat: when to check, how to gather data, when to fire Claude.
@@ -251,13 +271,15 @@ Costs three short-lived `npx @modelcontextprotocol/server-memory` spawns per
 run (clear, write, read - one tool call each), about 1.7s warm, which is why it
 is daily rather than every 15m.
 
-Issue: scrollinondubs/behalfbot#145.
+Issue: scrollinondubs/behalfbot#145. Path shape: scrollinondubs/behalfbot#151
+(the registration below used `${CHASSIS_HOME}/chassis/...`, which resolves on
+no containerized install; see "Containerized installs" under Path conventions).
 
 ```yaml
 schedule: daily 07:00
-gather: ${CHASSIS_HOME}/chassis/scripts/gather-memory-canary.sh
+gather: state/chassis-root/scripts/gather-memory-canary.sh
 condition: threshold count > 0
-prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/memory-canary-prompt.md
+prompt: state/chassis-root/scheduled-tasks/memory-canary-prompt.md
 model: sonnet
 budget: 1
 criticality: critical

@@ -58,7 +58,7 @@ The canary itself could not run - `memory-canary.sh` missing, or `jq` absent. Tr
 
 1. Run the canary by hand **inside the container** and paste the output. A host-side run proves nothing - a host check passed cleanly the entire sixteen days the container was broken.
    ```
-   docker exec -w /app/customer behalfbot bash ${CHASSIS_HOME}/chassis/scripts/memory-canary.sh --customer-home /app/customer
+   docker exec -w /app/customer behalfbot bash state/chassis-root/scripts/memory-canary.sh --customer-home /app/customer
    ```
 2. Post one line to the install's ops channel: the stage, the resolved path, the error, and the fix you propose.
 3. Apply the fix if it is config-side and reversible (re-hydrating `.mcp.json`, correcting a path). Anything that touches the graph file's contents or the bind-mount needs the operator's go-ahead first - the graph is the assistant's continuity and there is no second copy.
@@ -72,13 +72,15 @@ The canary itself could not run - `memory-canary.sh` missing, or `jq` absent. Tr
 
 ## Heartbeat registration
 
-Shipped in `chassis/HEARTBEATS.md.template`, so new installs get it by default. Existing installs must add the block to `${CUSTOMER_HOME}/HEARTBEATS.md` by hand - bootstrap copies the template only when no rendered file exists yet:
+Shipped in `chassis/HEARTBEATS.md.template`, so new installs get it by default. Existing installs must add the block to `${CUSTOMER_HOME}/HEARTBEATS.md` by hand - bootstrap copies the template only when no rendered file exists yet.
+
+Containerized install (both the baked and the mounted-clone layout). The paths are relative to `$CUSTOMER_HOME` and go through the boot-time chassis-root symlink, because `${CHASSIS_HOME}/chassis/...` names the chassis tree on no containerized install - see #151 and the "Containerized installs" note in the template's path conventions:
 
 ```yaml
 schedule: daily 07:00
-gather: ${CHASSIS_HOME}/chassis/scripts/gather-memory-canary.sh
+gather: state/chassis-root/scripts/gather-memory-canary.sh
 condition: threshold count > 0
-prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/memory-canary-prompt.md
+prompt: state/chassis-root/scheduled-tasks/memory-canary-prompt.md
 model: sonnet
 budget: 1
 criticality: critical
