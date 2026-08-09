@@ -14,7 +14,14 @@
 # Env:
 #   MEMORY_FILE_PATH     required. Graph file, JSONL, same shape as the real one.
 #   STUB_PID_LOG         optional. Appends this process's PID on startup, so a
-#                        test can assert the canary really spawned two processes.
+#                        test can assert the canary really spawned one process
+#                        per phase.
+#   STUB_CALL_LOG        optional. Appends "<pid> <tool>" per tools/call, so a
+#                        test can assert each process handled exactly one
+#                        mutation. server-memory serves pipelined requests
+#                        concurrently over a lock-free read-modify-write of the
+#                        whole graph, so one-call-per-process is the ordering
+#                        barrier the canary depends on.
 #   STUB_IGNORE_DELETE   optional. When 1, delete_entities reports success but
 #                        changes nothing - simulates a write that does not
 #                        persist while the server keeps saying it worked.
@@ -41,6 +48,7 @@ respond_result() {
 
 handle_tool() {
     local id="$1" tool="$2" args="$3"
+    [[ -n "${STUB_CALL_LOG:-}" ]] && printf '%s %s\n' "$$" "$tool" >> "$STUB_CALL_LOG"
     case "$tool" in
         delete_entities)
             if [[ "${STUB_IGNORE_DELETE:-0}" != "1" ]]; then

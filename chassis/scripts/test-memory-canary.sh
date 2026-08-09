@@ -9,7 +9,8 @@
 #
 # Scenarios:
 #   1. healthy graph, current template shape           -> PASS
-#   2. write and read really are separate processes    -> two distinct PIDs
+#   1b. a SECOND consecutive run still passes          -> PASS (see case 2 note)
+#   2. write and read really are separate processes    -> three distinct PIDs
 #   3. .mcp.json points at a namespace-invalid abs path-> FAIL (precheck)
 #   4. graph dir not writable                          -> FAIL (precheck, skipped as root)
 #   5. read comes back empty despite a good write      -> FAIL (read)
@@ -136,18 +137,44 @@ fi
 #    cache while the file path was broken, which is the #145 bug inverted.
 h="$(make_home separate "$(stub_template_block)")"
 PIDLOG="$TMP/pids.txt"
+CALLLOG="$TMP/calls.txt"
 : > "$PIDLOG"
-out="$(STUB_PID_LOG="$PIDLOG" run_canary "$h")"
+: > "$CALLLOG"
+out="$(STUB_PID_LOG="$PIDLOG" STUB_CALL_LOG="$CALLLOG" run_canary "$h")"
 assert_case "separate-invocation: canary passes" "$out" pass verified
 spawns="$(wc -l < "$PIDLOG" | tr -d ' ')"
 distinct="$(sort -u "$PIDLOG" | grep -c . )"
-if [[ "$spawns" == "2" && "$distinct" == "2" ]]; then
-    printf '  ok   separate-invocation: 2 server spawns, 2 distinct PIDs\n'
+# Three: clear, write, read. One tool call per process - server-memory handles
+# pipelined requests concurrently over a lock-free read-modify-write of the
+# whole graph file, so process exit is the only ordering barrier available.
+if [[ "$spawns" == "3" && "$distinct" == "3" ]]; then
+    printf '  ok   separate-invocation: 3 server spawns, 3 distinct PIDs\n'
     pass=$((pass + 1))
 else
-    printf '  FAIL separate-invocation: %s spawns, %s distinct PIDs (want 2 and 2)\n' "$spawns" "$distinct"
+    printf '  FAIL separate-invocation: %s spawns, %s distinct PIDs (want 3 and 3)\n' "$spawns" "$distinct"
     fail=$((fail + 1))
 fi
+
+# One tool call per process, in order. Pipelining delete_entities and
+# create_entities into one process is what broke against the real server on
+# every run after the first: both handlers loadGraph concurrently, so create
+# read the pre-delete graph, found the entity still there and created nothing
+# while reporting success. This asserts the ordering barrier is still process
+# exit, which the stub is too well-behaved to catch on its own.
+call_sequence="$(awk '{print $2}' "$CALLLOG" | tr '\n' ',')"
+call_pids="$(awk '{print $1}' "$CALLLOG" | sort -u | grep -c .)"
+if [[ "$call_sequence" == "delete_entities,create_entities,open_nodes," && "$call_pids" == "3" ]]; then
+    printf '  ok   one tool call per process, in order (delete, create, read)\n'
+    pass=$((pass + 1))
+else
+    printf '  FAIL tool-call sequencing: %s across %s pids\n' "$call_sequence" "$call_pids"
+    fail=$((fail + 1))
+fi
+
+# A SECOND consecutive run must also pass. The first run has nothing to delete,
+# so it passes even when the delete/create sequencing is wrong - which is
+# exactly how the bug above hid until the canary ran twice.
+assert_case "second consecutive run on the same graph" "$(run_canary "$h")" pass verified
 
 # 3. The original bug: an absolute path baked in the other namespace. Must fail
 #    at precheck, and the message must carry the path so the alert names the

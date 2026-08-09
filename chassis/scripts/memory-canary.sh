@@ -34,17 +34,31 @@
 #      Gap 3 via _memory-graph.sh) and precheck the graph path in THIS
 #      namespace. A namespace-invalid path fails here, named, before any spawn.
 #   2. Spawn the server EXACTLY as .mcp.json declares it, cwd = customer root,
-#      and write the reserved entity `health:memory-canary` carrying a nonce
-#      unique to this run.
-#   3. Let that process exit. Spawn the server AGAIN, a separate OS process,
-#      and read the entity back.
-#   4. Assert the nonce read equals the nonce written.
+#      and clear the reserved entity `health:memory-canary`.
+#   3. Let that process exit. Spawn again and write the entity back with a
+#      nonce unique to this run.
+#   4. Let that process exit. Spawn a THIRD time and read the entity back.
+#   5. Assert the nonce read equals the nonce written.
 #
-# Step 3 is the load-bearing one. A same-process round trip would pass against
+# Step 4 is the load-bearing one. A same-process round trip would pass against
 # an in-memory cache while the file path was broken - a monitor that passes
 # while broken is the bug we just fixed wearing the opposite sign. Separate
-# invocation is guaranteed structurally here: two `spawn_memory_server` calls
-# are two independent process spawns with nothing shared but the graph file.
+# invocation is guaranteed structurally here: each `spawn_memory_server` call
+# is an independent process spawn with nothing shared but the graph file.
+#
+# Why the delete and the write are also separate invocations
+# ==========================================================
+# One tool call per invocation, always. @modelcontextprotocol/server-memory
+# 0.6.3 handles pipelined stdio requests CONCURRENTLY, and every mutation is a
+# read-modify-write of the whole graph file with no locking: `deleteEntities`
+# and `createEntities` each start with `loadGraph()`. Send both down one pipe
+# and `createEntities` can load the pre-delete graph, see the entity still
+# present, filter it out as already-existing and create nothing - while
+# reporting success. Observed against Sean's live install on the second run:
+# the first run passed (nothing to delete), every run after it failed with
+# "create_entities did not report creating". Process exit is the only ordering
+# barrier available without a stateful JSON-RPC client, so each mutation gets
+# its own process.
 #
 # It must be run INSIDE the container. A host-side check passed cleanly the
 # entire time the container was broken, so a host-only run proves nothing about
@@ -241,7 +255,7 @@ if ! touch "$MEMORY_GRAPH_PATH" 2>/dev/null; then
 fi
 
 # ------------------------------------------------------------------
-# Stage 3 - write, in invocation A
+# Stage 3 - write, in invocations 1 and 2
 # ------------------------------------------------------------------
 
 TMP="$(mktemp -d)"
@@ -255,13 +269,32 @@ WRITE_ARGS_DELETE="$(jq -nc --arg e "$ENTITY" '{entityNames:[$e]}')"
 WRITE_ARGS_CREATE="$(jq -nc --arg e "$ENTITY" --arg t "$ENTITY_TYPE" --arg note "$ENTITY_NOTE" --arg n "$NONCE" \
     '{entities:[{name:$e, entityType:$t, observations:[$note, ("nonce " + $n)]}]}')"
 
+# Invocation 1: clear the entity, so it stays exactly two observations wide
+# instead of growing one per day, and so create_entities in the NEXT invocation
+# returns the entity rather than filtering it out as already-present.
 {
     handshake_lines
-    # Delete first so the entity stays exactly two observations wide instead of
-    # growing one per day, and so create_entities returns the entity rather
-    # than filtering it out as already-present.
     tool_call_line 2 delete_entities "$WRITE_ARGS_DELETE"
-    tool_call_line 3 create_entities "$WRITE_ARGS_CREATE"
+} > "$TMP/clear.req"
+
+spawn_memory_server "$TMP/clear.req" "$TMP/clear.out" "$TMP/clear.err"
+CLEAR_RC=$?
+
+if [[ $CLEAR_RC -ne 0 ]]; then
+    die "write" "memory server exited $CLEAR_RC on the clear invocation ($SERVER_CMD, cwd $CUSTOMER_HOME): $(tr '\n' ' ' < "$TMP/clear.err" | head -c 400)"
+fi
+if [[ -z "$(rpc_result "$TMP/clear.out" 1)" ]]; then
+    die "write" "memory server never answered initialize ($SERVER_CMD, cwd $CUSTOMER_HOME): $(tr '\n' ' ' < "$TMP/clear.err" | head -c 400)"
+fi
+CLEAR_ERR="$(rpc_error_text "$TMP/clear.out" 2)"
+if [[ -n "$CLEAR_ERR" ]]; then
+    die "write" "delete_entities returned a JSON-RPC error: $CLEAR_ERR"
+fi
+
+# Invocation 2: write the nonce.
+{
+    handshake_lines
+    tool_call_line 2 create_entities "$WRITE_ARGS_CREATE"
 } > "$TMP/write.req"
 
 spawn_memory_server "$TMP/write.req" "$TMP/write.out" "$TMP/write.err"
@@ -276,11 +309,11 @@ if [[ -z "$INIT_RESULT" ]]; then
     die "write" "memory server never answered initialize ($SERVER_CMD): $(tr '\n' ' ' < "$TMP/write.err" | head -c 400)"
 fi
 
-CREATE_ERR="$(rpc_error_text "$TMP/write.out" 3)"
+CREATE_ERR="$(rpc_error_text "$TMP/write.out" 2)"
 if [[ -n "$CREATE_ERR" ]]; then
     die "write" "create_entities returned a JSON-RPC error: $CREATE_ERR"
 fi
-CREATE_RESULT="$(rpc_result "$TMP/write.out" 3)"
+CREATE_RESULT="$(rpc_result "$TMP/write.out" 2)"
 if [[ -z "$CREATE_RESULT" ]]; then
     die "write" "create_entities returned no result for $ENTITY"
 fi
@@ -296,7 +329,7 @@ if [[ -z "$CREATED_NAME" ]]; then
 fi
 
 # ------------------------------------------------------------------
-# Stage 4 - read back, in invocation B (a separate process)
+# Stage 4 - read back, in invocation 3 (a separate process)
 # ------------------------------------------------------------------
 
 {
