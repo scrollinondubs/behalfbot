@@ -58,6 +58,8 @@ Entity naming conventions:
 - `topic:slug-style-name`
 - `task:YYYY-MM-DD-description`
 
+**Reserved `health:` namespace.** Entities named `health:*` are owned by chassis monitors, not by you. `health:memory-canary` is rewritten every day by the `memory-canary` heartbeat and holds nothing but a note and a random nonce. Never write to the `health:` namespace, never surface those entities in recall, and never treat them as something {{INSTALLER_NAME}} told you. If one shows up in a `search_nodes` result, drop it.
+
 Memory file: `${CHASSIS_HOME}/memory/memory.jsonl` (gitignored — local only).
 
 Pre-seeded memory entries from your install interview live alongside. See `chassis/memory/WRITING_RULES.md` for the full type taxonomy + body structure rules.

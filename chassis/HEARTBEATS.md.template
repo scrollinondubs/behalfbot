@@ -226,6 +226,45 @@ criticality: critical
 
 ---
 
+## memory-canary (chassis-shipped, default-on)
+
+Daily write-read-verify against the memory MCP knowledge graph. Writes a nonce
+to the reserved entity `health:memory-canary`, then reads it back in a
+**separate** server invocation and asserts the two match. Fires only on
+mismatch, error, or an empty read.
+
+The failure it exists for: on Sean's install the graph was unreachable from
+inside the container for at least sixteen days (2026-07-24 to 2026-08-09)
+because `.mcp.json` baked an absolute host path that does not exist in the
+container namespace. Reads returned a well-formed empty graph, which reads as
+"no prior context" rather than "broken tool", so nothing alerted. Fixed in
+#142 / #143 - this is the detector for it.
+
+Deliberately NOT an mtime staleness threshold: memory writes are event-driven,
+so a quiet week is indistinguishable from a broken graph, and a threshold loose
+enough to avoid false alarms would not have caught the outage until late.
+
+`criticality: critical` - a silently amnesiac assistant is not a background
+concern, and the check must keep running in conservation mode.
+
+Costs three short-lived `npx @modelcontextprotocol/server-memory` spawns per
+run (clear, write, read - one tool call each), about 1.7s warm, which is why it
+is daily rather than every 15m.
+
+Issue: scrollinondubs/behalfbot#145.
+
+```yaml
+schedule: daily 07:00
+gather: ${CHASSIS_HOME}/chassis/scripts/gather-memory-canary.sh
+condition: threshold count > 0
+prompt: ${CHASSIS_HOME}/chassis/scheduled-tasks/memory-canary-prompt.md
+model: sonnet
+budget: 1
+criticality: critical
+```
+
+---
+
 ## Active heartbeats
 
 <!--

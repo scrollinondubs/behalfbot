@@ -30,6 +30,11 @@ on:
       - 'plugins/dating/tests/test-emulator-state.sh'
       - 'chassis/scripts/bootstrap-audit.sh'
       - 'chassis/scripts/test-bootstrap-audit-memory.sh'
+      - 'chassis/scripts/_memory-graph.sh'
+      - 'chassis/scripts/memory-canary.sh'
+      - 'chassis/scripts/gather-memory-canary.sh'
+      - 'chassis/scripts/test-memory-canary.sh'
+      - 'chassis/scripts/tests/stub-memory-server.sh'
       - 'chassis/scripts/gather-chassis-update-check.sh'
       - 'chassis/scripts/test-chassis-update-check.sh'
       - '.github/workflows/shell-tests.yml'
@@ -55,6 +60,11 @@ on:
       - 'plugins/dating/tests/test-emulator-state.sh'
       - 'chassis/scripts/bootstrap-audit.sh'
       - 'chassis/scripts/test-bootstrap-audit-memory.sh'
+      - 'chassis/scripts/_memory-graph.sh'
+      - 'chassis/scripts/memory-canary.sh'
+      - 'chassis/scripts/gather-memory-canary.sh'
+      - 'chassis/scripts/test-memory-canary.sh'
+      - 'chassis/scripts/tests/stub-memory-server.sh'
       - 'chassis/scripts/gather-chassis-update-check.sh'
       - 'chassis/scripts/test-chassis-update-check.sh'
       - '.github/workflows/shell-tests.yml'
@@ -120,6 +130,19 @@ jobs:
       # degrade into a check that passes everything.
       - run: bash chassis/scripts/test-bootstrap-audit-memory.sh
 
+  memory-canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for #145: bootstrap-audit Gap 3 proves the memory
+      # graph is WRITABLE, not that anything can write and read it back, so a
+      # reachable but broken graph passes it clean - the state Sean's install
+      # sat in for sixteen days. The suite stubs the MCP memory server (no
+      # network, no npx) and proves the canary fails on a namespace-invalid
+      # path, a non-writable graph, an empty read after a successful write, and
+      # a write that does not persist - plus that the read-back really does
+      # happen in a second process.
+      - run: bash chassis/scripts/test-memory-canary.sh
   chassis-update-check:
     runs-on: ubuntu-latest
     steps:
