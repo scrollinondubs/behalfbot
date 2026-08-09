@@ -35,6 +35,10 @@
 
 set -uo pipefail  # NOT -e: we want to continue auditing after a failed check
 
+AUDIT_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=chassis/scripts/_memory-graph.sh
+. "${AUDIT_SCRIPT_DIR}/_memory-graph.sh"
+
 CUSTOMER_HOME="${CUSTOMER_HOME:-${HOME}/.behalfbot}"
 BOT_NAME="${BOT_NAME:-}"
 
@@ -196,37 +200,6 @@ audit_gap_2_customer_remote() {
 # Gap 3 - .mcp.json has memory server with writable path
 # ============================================================
 
-# Substitute ${CHASSIS_HOME} / ${CUSTOMER_HOME}, including the ${VAR:-default}
-# form, in a path read out of .mcp.json. Deliberately limited to those two
-# names: the config is data, and a generic expansion would evaluate whatever a
-# hand-edited .mcp.json happens to contain. A set env var wins; otherwise the
-# inline default is used; otherwise the same fallback bootstrap.sh assumes.
-expand_home_tokens() {
-    local s="$1"
-    local re='\$\{(CHASSIS_HOME|CUSTOMER_HOME)(:-[^}]*)?\}'
-    local i=0
-    while [[ $i -lt 10 && "$s" =~ $re ]]; do
-        i=$((i + 1))
-        local token="${BASH_REMATCH[0]}"
-        local name="${BASH_REMATCH[1]}"
-        local inline="${BASH_REMATCH[2]:-}"
-        local value=""
-        case "$name" in
-            CHASSIS_HOME)  value="${CHASSIS_HOME:-}" ;;
-            CUSTOMER_HOME) value="${CUSTOMER_HOME:-}" ;;
-        esac
-        if [[ -z "$value" ]]; then
-            if [[ -n "$inline" ]]; then
-                value="${inline#:-}"
-            elif [[ "$name" == "CHASSIS_HOME" ]]; then
-                value="${HOME}/behalfbot"
-            fi
-        fi
-        s="${s//"$token"/$value}"
-    done
-    printf '%s' "$s"
-}
-
 audit_gap_3_memory_mcp() {
     group "Gap 3: memory MCP wired with writable path"
     local mcp="$CUSTOMER_HOME/.mcp.json"
@@ -240,46 +213,20 @@ audit_gap_3_memory_mcp() {
         hint "  brew install jq  (macOS) / apt-get install jq (Linux)"
         return
     fi
-    local mem_block
-    mem_block="$(jq -e '.mcpServers.memory' "$mcp" 2>/dev/null)"
-    if [[ -z "$mem_block" || "$mem_block" == "null" ]]; then
-        fail "mcpServers.memory missing from .mcp.json"
+    # Path resolution lives in _memory-graph.sh, shared with memory-canary.sh
+    # (#145). Both the install-time reachability check here and the continuous
+    # liveness canary must agree on where the graph is, or one of them is
+    # verifying a file the server never opens.
+    if ! memory_graph_resolve "$CUSTOMER_HOME"; then
+        fail "$MEMORY_GRAPH_ERROR"
         hint "Hydrator should have written this. Re-run:"
         hint "  python3 chassis/scripts/hydrate-mcp-json.py --config $CUSTOMER_HOME/chassis.config.yaml \\"
         hint "    --template chassis/.mcp.json.template --env $CUSTOMER_HOME/.env \\"
         hint "    --output $mcp"
         return
     fi
-    # Two config shapes are legitimate, so resolve the path rather than
-    # asserting a shape:
-    #
-    #   legacy  - env.MEMORY_FILE_PATH baked into the block, possibly carrying
-    #             a ${CHASSIS_HOME} / ${CUSTOMER_HOME} token.
-    #   current - no env block at all. The template wraps the server in
-    #             `sh -c 'export MEMORY_FILE_PATH="$(pwd)/memory/memory.jsonl"; ...'`
-    #             because the host and the chassis container see the same
-    #             bind-mounted directory at different absolute paths, so a
-    #             single baked absolute path is valid in only one namespace.
-    #             Claude Code spawns the server with cwd = the customer root in
-    #             both, so the resolved graph is $CUSTOMER_HOME/memory/memory.jsonl.
-    #
-    # Before this, Gap 3 read env.MEMORY_FILE_PATH only and therefore failed on
-    # every install running the current template - the check that exists to
-    # catch an unreachable memory graph could never pass (#142).
-    local mem_path shape
-    mem_path="$(jq -r '.mcpServers.memory.env.MEMORY_FILE_PATH // empty' "$mcp" 2>/dev/null)"
-    if [[ -n "$mem_path" ]]; then
-        shape="env.MEMORY_FILE_PATH"
-    else
-        mem_path="memory/memory.jsonl"
-        shape="cwd-resolved, no env block"
-    fi
-
-    local expanded
-    expanded="$(expand_home_tokens "$mem_path")"
-    # A relative path is resolved against the launch cwd, which is the
-    # customer root for both the host and the container.
-    [[ "$expanded" != /* ]] && expanded="$CUSTOMER_HOME/$expanded"
+    local expanded="$MEMORY_GRAPH_PATH"
+    local shape="$MEMORY_GRAPH_SHAPE"
 
     local parent
     parent="$(dirname "$expanded")"

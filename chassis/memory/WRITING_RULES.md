@@ -30,6 +30,8 @@ Plus per-plugin namespaced types (only when the relevant plugin is active):
 - Anything already documented in CLAUDE.md
 - Ephemeral task details: in-progress work, temporary state, current conversation context
 
+- Anything in the reserved `health:` namespace. Those entities belong to chassis monitors, not to you. `health:memory-canary` is rewritten daily by the `memory-canary` heartbeat with a fresh nonce and exists only to prove the graph can be written and read back. Never write a `health:` entity, never return one from recall, and drop it if it turns up in a search result.
+
 These exclusions apply EVEN WHEN the installer explicitly asks to save. If they ask to save a PR list or activity summary, ask what was *surprising* or *non-obvious* about it — that's the part worth keeping.
 
 ## How to save memories
