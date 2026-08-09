@@ -37,6 +37,7 @@ on:
       - 'chassis/scripts/tests/stub-memory-server.sh'
       - 'chassis/scripts/gather-chassis-update-check.sh'
       - 'chassis/scripts/test-chassis-update-check.sh'
+      - 'chassis/scripts/test-chassis-update-mode.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -67,6 +68,7 @@ on:
       - 'chassis/scripts/tests/stub-memory-server.sh'
       - 'chassis/scripts/gather-chassis-update-check.sh'
       - 'chassis/scripts/test-chassis-update-check.sh'
+      - 'chassis/scripts/test-chassis-update-mode.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
@@ -166,3 +168,17 @@ jobs:
       # locked from unlocked, the gather reports emulator_locked instead of
       # ready, and the recovery hook unlocks rather than restart-looping.
       - run: bash plugins/dating/tests/test-emulator-state.sh
+
+  chassis-update-mode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for #152: detect_mode read CHASSIS_HOME's git
+      # origin, so an overlay-mount install (a separate behalfbot clone mounted
+      # underneath the customer repo) fell through to vendored_subtree and
+      # planned a subtree pull into a foreign repository. The suite proves all
+      # three layouts classify, an unrecognised one refuses instead of
+      # defaulting to the destructive strategy, and the final status line no
+      # longer reports success for a run that pulled nothing. No docker daemon,
+      # no network - upstream is served over file:// and docker is stubbed.
+      - run: bash chassis/scripts/test-chassis-update-mode.sh
