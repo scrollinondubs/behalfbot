@@ -30,6 +30,8 @@ on:
       - 'plugins/dating/tests/test-emulator-state.sh'
       - 'chassis/scripts/bootstrap-audit.sh'
       - 'chassis/scripts/test-bootstrap-audit-memory.sh'
+      - 'chassis/scripts/gather-chassis-update-check.sh'
+      - 'chassis/scripts/test-chassis-update-check.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -53,6 +55,8 @@ on:
       - 'plugins/dating/tests/test-emulator-state.sh'
       - 'chassis/scripts/bootstrap-audit.sh'
       - 'chassis/scripts/test-bootstrap-audit-memory.sh'
+      - 'chassis/scripts/gather-chassis-update-check.sh'
+      - 'chassis/scripts/test-chassis-update-check.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
@@ -115,6 +119,19 @@ jobs:
       # every unreachable / non-writable graph still fails, so the fix cannot
       # degrade into a check that passes everything.
       - run: bash chassis/scripts/test-bootstrap-audit-memory.sh
+
+  chassis-update-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for #146: Gate 5 of the update check was
+      # documented as a weekly debounce and implemented as a permanent mute,
+      # so one unanswered notification opted the installer out of that version
+      # forever. The suite proves an aged offer re-offers, a fresh one stays
+      # silent, an explicit dismissal is still permanent, and every corrupt
+      # timestamp fails open. No docker, no network - upstream is served from
+      # a temp dir over file://.
+      - run: bash chassis/scripts/test-chassis-update-check.sh
 
   dating-emulator-state:
     runs-on: ubuntu-latest

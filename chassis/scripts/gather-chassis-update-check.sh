@@ -7,7 +7,12 @@
 # version delta. Fires Claude only when:
 #   1. Customer is behind by at least one version, AND
 #   2. The latest available version is not in the dismissed list, AND
-#   3. auto_update.check is true in chassis.config.yaml (default true)
+#   3. auto_update.check is true in chassis.config.yaml (default true), AND
+#   4. the same version was not already offered inside the cooldown window
+#
+# Gate 4 (dismissed) is permanent: the operator typed `skip update` and meant
+# it. Gate 5 (already offered) is a COOLDOWN, not a mute - an unanswered
+# notification is not a dismissal (#146).
 #
 # Cheap by design: one HTTP GET against raw.githubusercontent.com for VERSION,
 # plus one for CHANGELOG.md when behind. No paid API calls.
@@ -31,6 +36,21 @@ CONFIG_FILE="${CHASSIS_HOME}/chassis.config.yaml"
 STATE_DIR="${CUSTOMER_HOME}/state/chassis-update"
 DISMISSED_FILE="${STATE_DIR}/dismissed.json"
 LAST_OFFERED_FILE="${STATE_DIR}/last-offered.json"
+
+# How long a single offer suppresses re-offers of the SAME version.
+#
+# Six days, not seven, and the difference matters. The heartbeat is
+# `weekly monday 09:00` and the dispatcher fires at the first 15-minute tick
+# at or after that time, once per day-of-week. Consecutive checks are
+# therefore ~7 days apart give or take the tick alignment and any DST shift.
+# A 7-day cooldown races that: a tick landing a few minutes "early" leaves
+# the delta just under the window, the check stays silent, and the
+# once-per-day-of-week guard pushes the next attempt out a full week. A
+# weekly re-nag silently becomes fortnightly. Six days clears deterministically
+# before every weekly tick.
+#
+# Override with CHASSIS_UPDATE_OFFER_COOLDOWN_DAYS (used by the test suite).
+OFFER_COOLDOWN_DAYS="${CHASSIS_UPDATE_OFFER_COOLDOWN_DAYS:-6}"
 
 mkdir -p "$STATE_DIR"
 
@@ -105,11 +125,41 @@ if [[ -f "$DISMISSED_FILE" ]]; then
     fi
 fi
 
-# --- Gate 5: not already offered (avoid double-fire within the same week) ---
+# --- Gate 5: not offered inside the cooldown window ---
+# Reads the `offered_at` the emit step below has always written. Before #146
+# this gate matched on version alone, which made a single unanswered
+# notification a permanent mute for that version - the installer who was busy
+# the week they were offered an update never heard about it again.
+#
+# Timestamp parsing is deliberately fail-open: an absent, corrupt or
+# future-dated `offered_at` re-offers rather than staying silent. Silence is
+# the failure mode this gate exists to stop.
+iso_to_epoch() {
+    local ts="$1" out=""
+    # An empty string is not a timestamp, and GNU date happily reads it as
+    # midnight today (exit 0), which would mute a state file that has no
+    # offered_at at all. Reject it before date sees it.
+    [[ -z "$ts" ]] && return
+    # GNU date (chassis container), then BSD date (macOS host).
+    out=$(date -u -d "$ts" +%s 2>/dev/null) \
+        || out=$(date -u -j -f "%Y-%m-%dT%H:%M:%SZ" "$ts" +%s 2>/dev/null) \
+        || out=""
+    printf '%s' "$out"
+}
+
 if [[ -f "$LAST_OFFERED_FILE" ]]; then
     LAST_OFFERED=$(jq -r '.version // empty' "$LAST_OFFERED_FILE" 2>/dev/null || echo "")
+    LAST_OFFERED_AT=$(jq -r '.offered_at // empty' "$LAST_OFFERED_FILE" 2>/dev/null || echo "")
     if [[ "$LAST_OFFERED" == "$UPSTREAM_VERSION" ]]; then
-        emit_skip "already_offered"
+        OFFERED_EPOCH=$(iso_to_epoch "$LAST_OFFERED_AT")
+        if [[ "$OFFERED_EPOCH" =~ ^[0-9]+$ ]]; then
+            NOW_EPOCH=$(date -u +%s)
+            AGE=$(( NOW_EPOCH - OFFERED_EPOCH ))
+            COOLDOWN=$(( OFFER_COOLDOWN_DAYS * 86400 ))
+            if (( AGE >= 0 && AGE < COOLDOWN )); then
+                emit_skip "already_offered"
+            fi
+        fi
     fi
 fi
 
@@ -148,6 +198,9 @@ jq -n \
         "breaking": $breaking
     }'
 
-# Record what we offered so we don't double-fire within the week
+# Record what we offered. Rewriting `offered_at` on every emit is what restarts
+# the cooldown - without it a re-offer would fire on every subsequent tick.
+# Schema is fixed: chassis/skills/chassis-update.md reads `.version` off this
+# file to know which version an `update chassis` / `skip update` reply means.
 jq -n --arg v "$UPSTREAM_VERSION" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{"version": $v, "offered_at": $ts}' > "$LAST_OFFERED_FILE"
