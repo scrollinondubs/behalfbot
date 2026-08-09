@@ -26,8 +26,24 @@ This heartbeat's gather runs INSIDE the `behalfbot` container. When `behalfbot` 
 To catch a `behalfbot` that is fully down within one interval, run the SAME script from OUTSIDE the container - it is location-agnostic (pure docker CLI + a state file). Wire a host-side watcher against the host docker daemon:
 
 - macOS LaunchAgent / Linux systemd timer / cron running, every few minutes:
-  `CUSTOMER_HOME=<host-customer-dir> CHASSIS_LIVENESS_CONTAINERS=behalfbot bash <chassis>/scripts/gather-container-liveness.sh`
-  and paging (Discord webhook / `notify`) when `count > 0`.
+  `CUSTOMER_HOME=<host-customer-dir> CHASSIS_LIVENESS_CONTAINERS=behalfbot CHASSIS_LIVENESS_REQUIRE_SOCKET=1 bash <chassis>/scripts/gather-container-liveness.sh`
+  and paging (Discord webhook / `notify`) when `count > 0` **or** `blind` is true.
+
+  Two things a host-side caller must get right, both learned the hard way on
+  the reference install (new-jaxity#497):
+
+  1. **Gate on `blind`, not `count` alone.** `count: 0` means "nothing is
+     wrong" only when `blind` is false. A host watcher that read `count > 0`
+     by itself logged `ok` every five minutes while the docker daemon was
+     unreachable and nothing at all was being inspected. Set
+     `CHASSIS_LIVENESS_REQUIRE_SOCKET=1` from the host: a host that has no
+     reachable daemon has a real problem, unlike a socket-less container.
+  2. **Check that the page actually sent.** The same watcher posted to a
+     Discord webhook with python `urllib` and no `User-Agent`; Cloudflare
+     fronts discord.com and rejects that with HTTP 403 (`error code: 1010`).
+     It ignored the return value, logged `ALERTED`, and delivered nothing for
+     16 days. Send with `curl` (or set a `User-Agent`), check the HTTP status,
+     and only record the alert as sent on 200/204.
 - This is the belt-and-suspenders layer: in-container catches siblings + loops, host-side catches a dead `behalfbot`. An install that already runs a Discord-bridge watchdog LaunchAgent can fold this check into it.
 
 ## Heartbeat registration
