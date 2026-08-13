@@ -40,6 +40,8 @@ on:
       - 'chassis/scripts/test-chassis-update-check.sh'
       - 'chassis/scripts/_chassis-changelog.sh'
       - 'chassis/scripts/test-chassis-update-mode.sh'
+      - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
+      - 'chassis/scripts/test-discord-reply-param-fix.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -73,6 +75,8 @@ on:
       - 'chassis/scripts/test-chassis-update-check.sh'
       - 'chassis/scripts/_chassis-changelog.sh'
       - 'chassis/scripts/test-chassis-update-mode.sh'
+      - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
+      - 'chassis/scripts/test-discord-reply-param-fix.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
@@ -201,3 +205,18 @@ jobs:
       # advanced-tree check and the healthcheck) are only reachable by a REAL
       # run, so those scenarios pull for real against a local bare repo.
       - run: bash chassis/scripts/test-chassis-update-mode.sh
+
+  discord-reply-param-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for the four-hour Discord silence of 2026-08-13:
+      # the reply tool takes `text`, a call passing `message` fails inside the
+      # plugin's chunk() splitter, and the resulting error names a plugin
+      # internal rather than the parameter. The suite proves the rewrite fires
+      # and carries chat_id / reply_to / files across, that a correct call
+      # produces NO output (this hook runs ahead of every reply, so silence on
+      # the common path is the safety property), and that malformed stdin exits
+      # 0 rather than blocking - a hook that mutes the channel on bad input
+      # defeats its own purpose. No docker, no network.
+      - run: bash chassis/scripts/test-discord-reply-param-fix.sh

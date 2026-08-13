@@ -100,9 +100,56 @@ Plugins MUST NOT bypass the chassis-core hook. Per lesson #6 + #4 — hook-layer
 
 Intentionally out of scope. The hook is for hard limits the LLM might rationalize past; everything else lives in CLAUDE.md / skills / memory.
 
+## Registering the hooks
+
+Hooks ship in this repo but are wired up host-side, in the settings file Claude
+Code reads (`~/.claude/settings.json` for a user-scoped install). A hook that is
+present on disk and absent from that file does nothing, which is a failure mode
+worth stating plainly because nothing surfaces it.
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "<CHASSIS_HOME>/chassis/.claude/hooks/guardrails.sh", "timeout": 10 }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_discord_discord__reply",
+        "hooks": [
+          { "type": "command", "command": "<CHASSIS_HOME>/chassis/.claude/hooks/discord-reply-param-fix.sh", "timeout": 5 }
+        ]
+      }
+    ]
+  }
+}
+```
+
+An empty `matcher` runs on every tool call; a named one runs only for that tool.
+Keep `guardrails.sh` on the empty matcher - a safety hook that only fires for
+some tools is not a safety hook.
+
+## Beyond safety: the same layer, used for correctness
+
+`discord-reply-param-fix.sh` is a PreToolUse hook that denies nothing. It renames
+a `message` parameter to `text` on the Discord reply tool, because the tool takes
+`text` and a call passing `message` fails inside the plugin's own splitter with
+`undefined is not an object (evaluating 'text.length')` - an error naming a
+plugin internal rather than the parameter, so it reads as a plugin fault.
+
+It lives at the hook layer for the same reason the guardrails do: the alternative
+is a line in CLAUDE.md, read on every turn, guarding against a call the model has
+already decided how to make. On 2026-08-13 the reference install sent its
+installer nothing for four hours on exactly this bug, while the terminal
+transcript looked healthy throughout.
+
 ## Cross-references
 
-- `chassis/.claude/hooks/guardrails.sh` — the hook itself
+- `chassis/.claude/hooks/guardrails.sh` — the safety hook itself
+- `chassis/.claude/hooks/discord-reply-param-fix.sh` — the Discord reply param rewrite
 - `docs/architectural-anti-patterns.md` — pattern #4 + #13
 - `docs/LESSONS_FROM_V1.md` — full lesson list, especially #4, #6, #13, #27, #30
 - `docs/mcp-setup.md` — when adding a new MCP, also extend the HTTP allowlist
