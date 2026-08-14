@@ -222,8 +222,17 @@ entrypoint -> crash-loop), so an unmonitored loop is a live risk.
 
 Set `CHASSIS_LIVENESS_CONTAINERS` in the install's environment to the full
 stack (default `behalfbot,behalfbot-postgres`). Requires the docker socket
-bind-mount (same one `docker-prune` uses); docker-unreachable is a deliberate
-no-op so socket-less installs never false-alarm.
+bind-mount (same one `docker-prune` uses); docker-unreachable stays a
+deliberate no-op so socket-less installs never false-alarm.
+
+**Read `blind` before trusting `count`.** The gather emits `blind: true` when
+it could not inspect anything - no docker socket, or no containers configured.
+`count: 0` with `blind: true` is not a pass, it is a check that never happened,
+and the `threshold count > 0` condition below cannot tell the two apart. That
+is intentional for the in-container heartbeat on a socket-less install, where
+silence is the correct behaviour. Any caller that is supposed to have a working
+socket should set `CHASSIS_LIVENESS_REQUIRE_SOCKET=1`, which turns an
+unreachable daemon into a real `docker_unreachable` issue.
 
 **Structural caveat:** the dispatcher runs INSIDE `behalfbot`, so this
 in-container heartbeat cannot catch a `behalfbot` that never completes a tick
