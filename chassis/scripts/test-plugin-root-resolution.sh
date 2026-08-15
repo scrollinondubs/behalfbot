@@ -206,6 +206,29 @@ check "s9 _env.sh resolves overlay" "$CUSTOMER/state/plugins-root" "$RESOLVED_RO
 check "s9 fetched active via _env.sh" "0.2.0" \
     "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RESOLVED_ROOT/loom-vision/openclaw.plugin.json")"
 
+# --- scenario 10: composed symlinks resolve through a second mount path -----
+# THE regression test for the dangling-absolute-symlink bug: build the tree
+# under one path, then read the very same tree through a second path that
+# symlinks to it (a synthetic stand-in for the host/container bind mount) and
+# assert every composed entry still resolves. Absolute symlinks pass s1-s9
+# above (same path both times) but fail here.
+fresh_env s10
+FETCHED="$CUSTOMER/vendored-plugins"
+manifest "$FETCHED/loom-vision" "loom-vision" "0.2.0"
+run_resolver
+OTHER_MOUNT="$TMP/s10/othermount"
+mkdir -p "$OTHER_MOUNT"
+ln -s "$CUSTOMER" "$OTHER_MOUNT/customer"
+OTHER_ROOT="$OTHER_MOUNT/customer/state/plugins-root"
+check "s10 baked entry resolves via other mount" "0.1.0" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$OTHER_ROOT/bfl/openclaw.plugin.json" 2>/dev/null)"
+check "s10 fetched entry resolves via other mount" "0.2.0" \
+    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$OTHER_ROOT/loom-vision/openclaw.plugin.json" 2>/dev/null)"
+check "s10 symlinks are relative, not absolute" "relative" \
+    "$([[ "$(readlink "$RESOLVED_ROOT/loom-vision")" = /* ]] && echo absolute || echo relative)"
+check "s10 state records built_on" "yes" \
+    "$([[ -n "$(state_field "$CUSTOMER" built_on)" ]] && echo yes || echo no)"
+
 # ---------------------------------------------------------------------------
 echo
 echo "test-plugin-root-resolution: $pass passed, $fail failed"
