@@ -27,6 +27,15 @@
 # including plain globs. Composing also filters the non-plugin dirs the
 # fetched tree carries at its top level (docs/, tools/, registry.json).
 #
+# Composed symlinks are written RELATIVE to $CUSTOMER_HOME, not absolute.
+# CUSTOMER_HOME is the same directory on both sides of the host/container
+# bind mount but is reached through a different absolute path on each side,
+# so an absolute symlink written on one side dangles when read from the
+# other. A relative link resolves correctly through either mount path. This
+# does not help the baked tree when it lives outside CUSTOMER_HOME (i.e.
+# /app/plugins, container-only, never bind-mounted) - that half of the
+# overlay is expected to differ per side and is recorded via built_on below.
+#
 # Operator override contract: if CHASSIS_PLUGINS_ROOT is already set when
 # this script runs, that value is honoured VERBATIM - no overlay, no
 # reordering. The Dockerfile and entrypoint no longer default the variable,
@@ -41,7 +50,9 @@
 #
 # Output: the resolved root on stdout. All logging goes to stderr. Writes
 # $CUSTOMER_HOME/plugins-root.state.json (adjacent to plugins.lock)
-# recording mode, roots, and per-plugin provenance.
+# recording mode, roots, per-plugin provenance, and built_on (host or
+# container - whichever side ran this resolution), so a disagreement between
+# the two views of the composed tree is visible after the fact.
 #
 # Env seams:
 #   CHASSIS_BAKED_PLUGINS_ROOT - override the baked-tree location (tests,
@@ -69,6 +80,31 @@ usable() {
     compgen -G "$dir"/*/openclaw.plugin.json > /dev/null 2>&1
 }
 
+# relpath TARGET BASE - relative path from BASE to TARGET, POSIX-portable
+# (host is macOS/BSD, container is Linux; neither `realpath --relative-to`
+# nor GNU-only readlink flags can be assumed on both, so this shells out to
+# python3, already a hard dependency of this script via write_state).
+relpath() {
+    python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$1" "$2"
+}
+
+# resolved_path PATH - realpath, following symlinks. Used instead of `readlink`
+# so the post-compose assertion below compares fully-resolved absolute paths
+# rather than raw (now relative) link targets.
+resolved_path() {
+    python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+
+# Which side is resolving right now. Same probe write_state's BAKED_ROOT
+# detection uses below (/app/plugins only exists inside the container) -
+# recorded so a disagreement between the host and container view of
+# state/plugins-root is visible after the fact instead of just dangling.
+if [[ -d /app/plugins ]]; then
+    BUILT_ON="container"
+else
+    BUILT_ON="host"
+fi
+
 STATE_FILE="$CUSTOMER_HOME/plugins-root.state.json"
 
 # MODE is one of: explicit | baked | overlay
@@ -77,7 +113,7 @@ write_state() {
     local mode="$1" root="$2" error="${3:-}"
     MODE="$mode" ROOT="$root" ERROR="$error" \
     BAKED="${BAKED_ROOT:-}" FETCHED="${FETCHED_ROOT:-}" \
-    PROVENANCE="${PROVENANCE:-}" \
+    PROVENANCE="${PROVENANCE:-}" BUILT_ON="$BUILT_ON" \
     python3 - "$STATE_FILE" <<'PY' 2>/dev/null || log "WARN: could not write $STATE_FILE"
 import datetime, json, os, sys
 prov = {}
@@ -92,6 +128,7 @@ state = {
     "baked_root": os.environ["BAKED"] or None,
     "fetched_root": os.environ["FETCHED"] or None,
     "resolved_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "built_on": os.environ["BUILT_ON"],
     "plugins": prov,
     "error": os.environ["ERROR"] or None,
 }
@@ -153,7 +190,7 @@ if [[ -n "$staging" ]]; then
     if [[ -n "$BAKED_ROOT" ]]; then
         for d in "$BAKED_ROOT"/*/; do
             [[ -d "$d" ]] || continue
-            ln -s "${d%/}" "$staging/$(basename "$d")"
+            ln -s "$(relpath "${d%/}" "$staging")" "$staging/$(basename "$d")"
             PROVENANCE+="$(basename "$d")"$'\t'"baked"$'\n'
         done
     fi
@@ -168,7 +205,7 @@ if [[ -n "$staging" ]]; then
             continue
         fi
         rm -f "$staging/$name"
-        ln -s "${d%/}" "$staging/$name"
+        ln -s "$(relpath "${d%/}" "$staging")" "$staging/$name"
         PROVENANCE=$(printf '%s' "$PROVENANCE" | grep -v "^$name"$'\t' || true)
         PROVENANCE+=$'\n'"$name"$'\t'"fetched"$'\n'
     done
@@ -209,8 +246,8 @@ assert_error=""
 for d in "$FETCHED_ROOT"/*/; do
     [[ -f "$d/openclaw.plugin.json" ]] || continue
     name=$(basename "$d")
-    target=$(readlink "$COMPOSED_ROOT/$name" 2>/dev/null || true)
-    if [[ "$target" != "${d%/}" ]]; then
+    target=$(resolved_path "$COMPOSED_ROOT/$name" 2>/dev/null || true)
+    if [[ "$target" != "$(resolved_path "${d%/}")" ]]; then
         assert_error="fetched plugin '$name' is not active in $COMPOSED_ROOT (resolves to '${target:-missing}')"
         log "ERROR: PLUGIN ROOT ASSERTION FAILED - $assert_error"
         break
