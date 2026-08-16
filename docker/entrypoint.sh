@@ -14,8 +14,10 @@
 #
 # The dispatcher loop reads HEARTBEATS.md from /app/customer (bind-mounted)
 # and invokes /app/chassis/scheduled-tasks/heartbeat-dispatcher.sh on a fixed
-# tick. /tmp/dispatcher.alive is touched after each tick so the container
-# healthcheck stays green.
+# tick. /tmp/dispatcher.alive is touched at tick start, kept fresh by a
+# keepalive while the tick runs, and touched again at tick end - so the
+# container healthcheck reflects "the loop is alive", not "a tick recently
+# finished" (behalfbot#160).
 
 set -euo pipefail
 
@@ -143,9 +145,21 @@ run_dispatcher_once() {
         log "FATAL: dispatcher not found at $DISPATCHER_SCRIPT"
         exit 2
     fi
+    # Keep /tmp/dispatcher.alive fresh for the duration of the tick, not just
+    # at the end of it. Without this, the sentinel's age at the next touch is
+    # tick_duration + sleep interval - any tick over ~300s crosses the
+    # healthcheck's 1200s staleness threshold, flipping the container to
+    # unhealthy while the dispatcher is doing exactly what it should
+    # (behalfbot#160). If the loop dies, the keepalive subshell dies with it
+    # and the sentinel goes stale as intended.
+    touch /tmp/dispatcher.alive
+    ( while sleep 60; do touch /tmp/dispatcher.alive; done ) &
+    local keepalive=$!
     if ! CHASSIS_HOME="$CHASSIS_HOME" /usr/bin/zsh "$DISPATCHER_SCRIPT"; then
         log "dispatcher tick failed (continuing)"
     fi
+    kill "$keepalive" 2>/dev/null
+    wait "$keepalive" 2>/dev/null
     touch /tmp/dispatcher.alive
 }
 
