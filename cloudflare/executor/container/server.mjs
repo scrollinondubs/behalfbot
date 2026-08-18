@@ -18,6 +18,7 @@
 
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
+import { preScanPromotedARow } from './prescan-outcome.mjs'
 
 const PORT = 8080
 const REPO_ROOT = '/app/vibecodelisboa'
@@ -28,45 +29,6 @@ const TICK_HARD_TIMEOUT_MS = 35 * 60 * 1000
 
 let inFlight = null // { startedAt, mode } while a tick runs
 let lastRun = null // { startedAt, endedAt, exitCode, mode, stdoutTail }
-
-function runTick(mode) {
-  const startedAt = new Date().toISOString()
-  const script = mode === 'prescan' ? 'scripts/behalfbot-prescan-heartbeat.ts' : TICK_SCRIPT
-  const child = spawn(`${REPO_ROOT}/node_modules/.bin/tsx`, [script], {
-    cwd: REPO_ROOT,
-    env: process.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-
-  let tail = ''
-  const keepTail = chunk => {
-    tail = (tail + chunk.toString()).slice(-4000)
-  }
-  child.stdout.on('data', keepTail)
-  child.stderr.on('data', keepTail)
-
-  const killer = setTimeout(() => {
-    try {
-      child.kill('SIGKILL')
-    } catch {
-      // best-effort
-    }
-  }, TICK_HARD_TIMEOUT_MS)
-
-  inFlight = { startedAt, mode }
-  child.on('exit', code => {
-    clearTimeout(killer)
-    lastRun = {
-      startedAt,
-      endedAt: new Date().toISOString(),
-      exitCode: code,
-      mode,
-      stdoutTail: tail,
-    }
-    inFlight = null
-    console.log(JSON.stringify({ event: 'tick_done', ...lastRun, stdoutTail: undefined }))
-  })
-}
 
 const server = createServer((req, res) => {
   const respond = (status, body) => {
