@@ -77,14 +77,45 @@ POST_ENV_FILE=$(mktemp)
 TMP_BAKED=$(mktemp)
 trap 'rm -f "$PRE_ENV_FILE" "$POST_ENV_FILE" "$TMP_BAKED"' EXIT
 
-env | sort > "$PRE_ENV_FILE"
+# Both dumps run from the SAME scrubbed baseline, not from the caller's shell.
+#
+# This used to snapshot `env` directly and diff the caller's environment against
+# a subshell that had sourced .env. That works exactly once: from a shell that
+# has never loaded the install env. It fails from every shell that has, because
+# the vars are already present in the "before" side, the diff comes back empty,
+# and the script exits with
+#
+#     ERR: source produced no new application env vars — check .../.env format
+#
+# which sends the operator to inspect a .env file that is perfectly fine. The
+# state that triggers it is not exotic: an operator shell whose profile loads
+# the install env, any agent-driven shell, or simply the second bake in one
+# session. On a live install this also blocks every `compose.sh` command,
+# because Guard 5 refuses to run while .env is newer than .env.baked - so a
+# cosmetic diagnostic turns into a stuck deploy. Hit 2026-08-19 during an image
+# refresh; the workaround was to re-run the whole script under `env -i`.
+#
+# Doing that internally makes it deterministic. Only PATH, HOME and USER are
+# carried through (the hydration block needs a shell that can find `bw`/`rbw`
+# and resolve ~), plus the two path vars this script already requires. What the
+# caller happens to have exported is now irrelevant to the result, which is
+# also more correct: .env.baked should reflect .env, not whoever ran the bake.
+BAKE_BASE_ENV=(
+    "PATH=${PATH}"
+    "HOME=${HOME}"
+    "USER=${USER:-$(id -un)}"
+    "CHASSIS_HOME=${CHASSIS_HOME}"
+    "CUSTOMER_HOME=${CUSTOMER_HOME}"
+)
+
+env -i "${BAKE_BASE_ENV[@]}" bash -c 'env' | sort > "$PRE_ENV_FILE"
 
 # Source .env in a fresh subshell + dump resulting env. set -a auto-exports
 # every var the .env sets so they all reach the env dump. The 2>/dev/null
 # silences any chatter from hydration scripts (bw prompts, etc.). A failed
 # hydration block doesn't abort the bake — we still write what we have, but
 # warn the user.
-if ! bash -c "set -a; source '$SRC_ENV' 2>/dev/null || true; set +a; env" | sort > "$POST_ENV_FILE"; then
+if ! env -i "${BAKE_BASE_ENV[@]}" bash -c "set -a; source '$SRC_ENV' 2>/dev/null || true; set +a; env" | sort > "$POST_ENV_FILE"; then
     echo "WARN: source '$SRC_ENV' returned non-zero — baked file may be partial" >&2
 fi
 
