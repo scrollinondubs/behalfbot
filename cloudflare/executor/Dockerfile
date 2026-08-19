@@ -53,7 +53,27 @@ RUN cd /app/vibecodelisboa \
 COPY --chown=executor:executor build-context/vibecodelisboa /app/vibecodelisboa
 
 # In-container HTTP shim (trigger endpoint the Worker forwards to).
-COPY --chown=executor:executor container/server.mjs /app/server.mjs
+#
+# Copy the whole directory, not the single entrypoint file. server.mjs imports
+# ./prescan-outcome.mjs, which arrived with the pre-scan chaining work (#166)
+# while this line still copied exactly one file - so the first image built from
+# that code could not boot at all:
+#
+#   Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/app/prescan-outcome.mjs'
+#   imported from /app/server.mjs
+#
+# What made it expensive to find: the running instance stayed warm across the
+# deploy and kept serving the OLD image, so the deploy looked clean and three
+# subsequent runs succeeded. The break only surfaced on the next genuine cold
+# start - hours later, triggered by an unrelated secret update, with no obvious
+# link back to the deploy that caused it. Every restart after that failed, and
+# the platform reported the instance as `running` while the Worker could not
+# reach it.
+#
+# Copying the directory means the next module server.mjs imports ships with it
+# rather than breaking the image on first cold start. The .test.mjs file riding
+# along is harmless and keeps the rule simple.
+COPY --chown=executor:executor container/ /app/
 
 USER executor
 WORKDIR /app
