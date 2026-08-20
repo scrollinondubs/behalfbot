@@ -158,8 +158,14 @@ run_dispatcher_once() {
     if ! CHASSIS_HOME="$CHASSIS_HOME" /usr/bin/zsh "$DISPATCHER_SCRIPT"; then
         log "dispatcher tick failed (continuing)"
     fi
-    kill "$keepalive" 2>/dev/null
-    wait "$keepalive" 2>/dev/null
+    # `|| true` on BOTH is load-bearing under `set -e`. `wait` on a job we
+    # just SIGTERM'd returns 143, and `kill` returns 1 if the subshell already
+    # exited - either one takes PID 1 down and the container restarts. That is
+    # not theoretical: it shipped in the 2026-08-18 image and put this install
+    # into a ~19s restart loop for 25 hours (every boot ran one full tick, then
+    # died on the `wait` the moment the tick returned).
+    kill "$keepalive" 2>/dev/null || true
+    wait "$keepalive" 2>/dev/null || true
     touch /tmp/dispatcher.alive
 }
 
