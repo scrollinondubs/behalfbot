@@ -105,6 +105,7 @@ aws_audit() {
 }
 
 FINDINGS=()
+DRIFT_MSGS=()
 DRIFT=0
 
 note_finding() {
@@ -118,6 +119,7 @@ flag_drift() {
     local msg="$1"
     [[ $VERBOSE -eq 1 ]] && echo "drift: $msg" >&2
     FINDINGS+=("$(printf '"drift_%d": "%s"' "${#FINDINGS[@]}" "$msg")")
+    DRIFT_MSGS+=("$msg")
 }
 
 # 1. Versioning.
@@ -239,10 +241,29 @@ JOINED_FINDINGS=$(printf '%s,' "${FINDINGS[@]}")
 JOINED_FINDINGS="${JOINED_FINDINGS%,}"
 DRIFT_BOOL=$([[ $DRIFT -eq 0 ]] && echo "false" || echo "true")
 
+# Stable fingerprint of WHAT drifted, deliberately excluding ts_utc/bucket/
+# region so the dispatcher's repeat-alert cooldown ladder (new-jaxity#433)
+# can recognize "same drift as last run" instead of treating every run as
+# new just because the timestamp changed. Built from the drift messages
+# only - not the full FINDINGS blob - so a non-drift value shifting (e.g.
+# object_lock_days on a run with no drift) can't perturb the signature for
+# an unrelated drift condition. No drift -> a fixed sentinel, not a hash of
+# nothing.
+if [[ ${#DRIFT_MSGS[@]} -gt 0 ]]; then
+    if command -v sha256sum >/dev/null 2>&1; then
+        ALERT_SIG=$(printf '%s\n' "${DRIFT_MSGS[@]}" | sort | sha256sum | cut -c1-16)
+    else
+        ALERT_SIG=$(printf '%s\n' "${DRIFT_MSGS[@]}" | sort | shasum -a 256 | cut -c1-16)
+    fi
+else
+    ALERT_SIG="no_drift"
+fi
+
 cat <<JSON
 {
   "count": $DRIFT_COUNT,
   "drift": $DRIFT_BOOL,
+  "alert_signature": "$ALERT_SIG",
   "ts_utc": "$TS",
   "bucket": "$S3_BACKUP_BUCKET",
   "region": "$S3_BACKUP_REGION",
