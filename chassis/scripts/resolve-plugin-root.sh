@@ -55,9 +55,13 @@
 # the two views of the composed tree is visible after the fact.
 #
 # Env seams:
-#   CHASSIS_BAKED_PLUGINS_ROOT - override the baked-tree location (tests,
-#       host installs with a non-standard layout). Defaults to /app/plugins,
-#       then $CHASSIS_HOME/plugins.
+#   CHASSIS_BAKED_PLUGINS_ROOT - pin the baked tree to a single explicit
+#       root, bypassing the union below entirely (operator override, tests
+#       with a non-standard layout).
+#   CHASSIS_IMAGE_PLUGINS_ROOT - override the image-baked half of the union
+#       (tests only; real installs always have this at /app/plugins, which
+#       is the default). The other half is $CHASSIS_HOME/plugins, already
+#       reachable via CHASSIS_HOME in tests.
 #   CHASSIS_PLUGINS_FETCH_ROOT - override the fetched-tree location.
 #       Defaults to $CUSTOMER_HOME/vendored-plugins (matches fetch-plugins.sh).
 #
@@ -71,6 +75,11 @@
 set -uo pipefail
 
 : "${CUSTOMER_HOME:=${CHASSIS_HOME:-/app/customer}}"
+
+# Populated by the baked-root probe below. Declared here (empty) so
+# write_state can always expand it under `set -u`, even from the explicit
+# operator-override branch, which returns before the probe runs.
+BAKED_ROOTS=()
 
 log() { printf '[resolve-plugin-root] %s\n' "$*" >&2; }
 
@@ -95,8 +104,8 @@ resolved_path() {
     python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
 }
 
-# Which side is resolving right now. Same probe write_state's BAKED_ROOT
-# detection uses below (/app/plugins only exists inside the container) -
+# Which side is resolving right now. Same real /app/plugins probe the
+# image-baked half of the union below defaults to (container-only) -
 # recorded so a disagreement between the host and container view of
 # state/plugins-root is visible after the fact instead of just dangling.
 if [[ -d /app/plugins ]]; then
@@ -112,7 +121,8 @@ STATE_FILE="$CUSTOMER_HOME/plugins-root.state.json"
 write_state() {
     local mode="$1" root="$2" error="${3:-}"
     MODE="$mode" ROOT="$root" ERROR="$error" \
-    BAKED="${BAKED_ROOT:-}" FETCHED="${FETCHED_ROOT:-}" \
+    BAKED="${BAKED_ROOTS[0]:-}" FETCHED="${FETCHED_ROOT:-}" \
+    BAKED_ROOTS_LIST="$(printf '%s\n' "${BAKED_ROOTS[@]:-}")" \
     PROVENANCE="${PROVENANCE:-}" BUILT_ON="$BUILT_ON" \
     python3 - "$STATE_FILE" <<'PY' 2>/dev/null || log "WARN: could not write $STATE_FILE"
 import datetime, json, os, sys
@@ -121,11 +131,13 @@ for line in os.environ.get("PROVENANCE", "").splitlines():
     if "\t" in line:
         name, src = line.split("\t", 1)
         prov[name] = src
+baked_roots = [r for r in os.environ.get("BAKED_ROOTS_LIST", "").splitlines() if r]
 state = {
     "schema": 1,
     "mode": os.environ["MODE"],
     "resolved_root": os.environ["ROOT"],
     "baked_root": os.environ["BAKED"] or None,
+    "baked_roots": baked_roots,
     "fetched_root": os.environ["FETCHED"] or None,
     "resolved_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     "built_on": os.environ["BUILT_ON"],
@@ -140,7 +152,7 @@ PY
 
 # --- operator override: set means set, honour verbatim ----------------------
 if [[ -n "${CHASSIS_PLUGINS_ROOT:-}" ]]; then
-    BAKED_ROOT="" FETCHED_ROOT="${CHASSIS_PLUGINS_FETCH_ROOT:-$CUSTOMER_HOME/vendored-plugins}"
+    BAKED_ROOTS=() FETCHED_ROOT="${CHASSIS_PLUGINS_FETCH_ROOT:-$CUSTOMER_HOME/vendored-plugins}"
     if usable "$FETCHED_ROOT" && [[ "$CHASSIS_PLUGINS_ROOT" != "$FETCHED_ROOT" ]]; then
         log "operator override: CHASSIS_PLUGINS_ROOT=$CHASSIS_PLUGINS_ROOT (explicitly set)"
         log "note: a usable fetched tree exists at $FETCHED_ROOT and is being ignored BY EXPLICIT CHOICE"
@@ -150,20 +162,32 @@ if [[ -n "${CHASSIS_PLUGINS_ROOT:-}" ]]; then
     exit 0
 fi
 
-# --- locate the two source trees --------------------------------------------
-BAKED_ROOT=""
+# --- locate the baked root(s) -----------------------------------------------
+# /app/plugins (image-baked, container-only) and $CHASSIS_HOME/plugins
+# (host-side legacy layout) can both exist and hold DISJOINT plugin sets.
+# Picking one by elif branch order (the pre-#163 behaviour) meant the two
+# sides of the same bind mount answered differently and both exited 0 -
+# whichever plugin only lived in the root that lost silently vanished. Union
+# both instead, same shape as the baked-then-fetched overlay below: base
+# first, later root overlaid on top so a same-named plugin in the later root
+# wins. CHASSIS_BAKED_PLUGINS_ROOT is an explicit operator override and stays
+# a single root, not part of the union - explicit still beats inferred.
 if [[ -n "${CHASSIS_BAKED_PLUGINS_ROOT:-}" && -d "${CHASSIS_BAKED_PLUGINS_ROOT}" ]]; then
-    BAKED_ROOT="$CHASSIS_BAKED_PLUGINS_ROOT"
-elif [[ -d /app/plugins ]]; then
-    BAKED_ROOT="/app/plugins"
-elif [[ -n "${CHASSIS_HOME:-}" && -d "$CHASSIS_HOME/plugins" ]]; then
-    BAKED_ROOT="$CHASSIS_HOME/plugins"
+    BAKED_ROOTS=("$CHASSIS_BAKED_PLUGINS_ROOT")
+else
+    IMAGE_BAKED_ROOT="${CHASSIS_IMAGE_PLUGINS_ROOT:-/app/plugins}"
+    [[ -d "$IMAGE_BAKED_ROOT" ]] && BAKED_ROOTS+=("$IMAGE_BAKED_ROOT")
+    [[ -n "${CHASSIS_HOME:-}" && -d "$CHASSIS_HOME/plugins" ]] && BAKED_ROOTS+=("$CHASSIS_HOME/plugins")
 fi
 
 FETCHED_ROOT="${CHASSIS_PLUGINS_FETCH_ROOT:-$CUSTOMER_HOME/vendored-plugins}"
 
-# --- no usable fetched tree: baked only, exactly the pre-#82 behaviour ------
-if ! usable "$FETCHED_ROOT"; then
+# --- zero or one baked root, no usable fetched tree: pass through directly --
+# Exactly the pre-#82 behaviour (no filesystem writes) for the common case.
+# Two baked roots, or a usable fetched tree, both need a composed union and
+# fall through to the overlay below instead.
+if ! usable "$FETCHED_ROOT" && [[ "${#BAKED_ROOTS[@]}" -le 1 ]]; then
+    BAKED_ROOT="${BAKED_ROOTS[0]:-}"
     PROVENANCE=""
     if [[ -n "$BAKED_ROOT" ]]; then
         for d in "$BAKED_ROOT"/*/; do
@@ -187,13 +211,20 @@ fi
 
 PROVENANCE=""
 if [[ -n "$staging" ]]; then
-    if [[ -n "$BAKED_ROOT" ]]; then
-        for d in "$BAKED_ROOT"/*/; do
+    # Base first, each later root overlaid on top - same rm-then-relink
+    # pattern the fetched loop below uses, so a same-named plugin in a
+    # higher-precedence baked root wins instead of colliding.
+    for br in "${BAKED_ROOTS[@]:-}"; do
+        [[ -n "$br" ]] || continue
+        for d in "$br"/*/; do
             [[ -d "$d" ]] || continue
-            ln -s "$(relpath "${d%/}" "$staging")" "$staging/$(basename "$d")"
-            PROVENANCE+="$(basename "$d")"$'\t'"baked"$'\n'
+            name=$(basename "$d")
+            rm -f "$staging/$name"
+            ln -s "$(relpath "${d%/}" "$staging")" "$staging/$name"
+            PROVENANCE=$(printf '%s' "$PROVENANCE" | grep -v "^$name"$'\t' || true)
+            PROVENANCE+=$'\n'"$name"$'\t'"baked"$'\n'
         done
-    fi
+    done
     for d in "$FETCHED_ROOT"/*/; do
         [[ -d "$d" ]] || continue
         name=$(basename "$d")
@@ -229,12 +260,13 @@ else
 fi
 
 if [[ -n "$compose_failed" ]]; then
-    # Fetched tree is usable but we cannot activate it. Fall back to baked
-    # (the larger set) and fail LOUDLY - this is the exact silent-no-op class
-    # v0.2.0 shipped, so it must never pass quietly.
-    log "ERROR: fetched plugin tree at $FETCHED_ROOT is usable but could NOT be activated (compose failed under $CUSTOMER_HOME/state)"
-    write_state baked "$BAKED_ROOT" "compose failed - fetched tree present but not active"
-    printf '%s\n' "$BAKED_ROOT"
+    # The union/overlay is usable but we cannot activate it. Fall back to the
+    # single highest-precedence baked root and fail LOUDLY - this is the
+    # exact silent-no-op class v0.2.0 shipped, so it must never pass quietly.
+    fallback_root="${BAKED_ROOTS[-1]:-}"
+    log "ERROR: composed plugin tree (baked union and/or fetched overlay from $FETCHED_ROOT) is usable but could NOT be activated (compose failed under $CUSTOMER_HOME/state)"
+    write_state baked "$fallback_root" "compose failed - overlay present but not active"
+    printf '%s\n' "$fallback_root"
     exit 5
 fi
 
