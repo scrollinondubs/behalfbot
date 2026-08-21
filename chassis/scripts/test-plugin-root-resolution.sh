@@ -229,6 +229,38 @@ check "s10 symlinks are relative, not absolute" "relative" \
 check "s10 state records built_on" "yes" \
     "$([[ -n "$(state_field "$CUSTOMER" built_on)" ]] && echo yes || echo no)"
 
+# --- scenario 11: two baked roots holding disjoint plugin sets union -------
+# THE regression test for behalfbot#163: the image-baked root (/app/plugins,
+# container-only) and $CHASSIS_HOME/plugins (host-side legacy layout) can
+# both exist with DISJOINT plugin sets. Picking one by branch order made a
+# plugin that only lived in the other root vanish depending on which side
+# resolved. CHASSIS_IMAGE_PLUGINS_ROOT stands in for /app/plugins here since
+# the real path is container-only and not writable in this test harness.
+fresh_env s11
+IMAGE_BAKED="$TMP/s11/image-baked"
+manifest "$IMAGE_BAKED/angel-protocol" "angel-protocol" "0.1.0"
+manifest "$IMAGE_BAKED/bfl" "bfl" "0.1.0"
+CHASSIS_HOME_PLUGINS="$CUSTOMER/plugins"
+manifest "$CHASSIS_HOME_PLUGINS/midnight-oil" "midnight-oil" "0.1.0"
+RESOLVED_ROOT="$(env -u CHASSIS_PLUGINS_ROOT -u CHASSIS_BAKED_PLUGINS_ROOT     CUSTOMER_HOME="$CUSTOMER" CHASSIS_HOME="$CUSTOMER"     CHASSIS_IMAGE_PLUGINS_ROOT="$IMAGE_BAKED"     bash "$RESOLVER" 2>>"$TMP/resolver.log")"
+RESOLVER_RC=$?
+check "s11 exit" "0" "$RESOLVER_RC"
+check "s11 root is composed" "$CUSTOMER/state/plugins-root" "$RESOLVED_ROOT"
+check "s11 union plugin count" "3" "$(ls -d "$RESOLVED_ROOT"/*/ | wc -l | tr -d ' ')"
+check "s11 image-only plugin present" "yes" "$([[ -e "$RESOLVED_ROOT/angel-protocol" ]] && echo yes || echo no)"
+check "s11 chassis-home-only plugin present" "yes" "$([[ -e "$RESOLVED_ROOT/midnight-oil" ]] && echo yes || echo no)"
+check "s11 state names both baked roots" "2" "$(python3 -c '''import json,sys; print(len(json.load(open(sys.argv[1]))["baked_roots"]))''' "$CUSTOMER/plugins-root.state.json")"
+check "s11 state mode" "overlay" "$(state_field "$CUSTOMER" mode)"
+
+# --- scenario 12: same-named plugin in both baked roots - later root wins --
+fresh_env s12
+IMAGE_BAKED="$TMP/s12/image-baked"
+manifest "$IMAGE_BAKED/bfl" "bfl" "1.0.0"
+CHASSIS_HOME_PLUGINS="$CUSTOMER/plugins"
+manifest "$CHASSIS_HOME_PLUGINS/bfl" "bfl" "2.0.0"
+RESOLVED_ROOT="$(env -u CHASSIS_PLUGINS_ROOT -u CHASSIS_BAKED_PLUGINS_ROOT     CUSTOMER_HOME="$CUSTOMER" CHASSIS_HOME="$CUSTOMER"     CHASSIS_IMAGE_PLUGINS_ROOT="$IMAGE_BAKED"     bash "$RESOLVER" 2>>"$TMP/resolver.log")"
+check "s12 $CHASSIS_HOME/plugins wins over /app/plugins on collision" "2.0.0"     "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RESOLVED_ROOT/bfl/openclaw.plugin.json")"
+
 # ---------------------------------------------------------------------------
 echo
 echo "test-plugin-root-resolution: $pass passed, $fail failed"
