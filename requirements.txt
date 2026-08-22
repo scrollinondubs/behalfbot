@@ -20,6 +20,12 @@
 #   - openai         OpenAI fallback path (TTS, occasional non-Claude calls)
 #   - mcp            official MCP Python SDK - runs the chassis-owned
 #                    `secondbrain` server (chassis/second_brain/mcp_server.py)
+#   - yt-dlp         parse-youtube plugin - video metadata + fallback audio
+#                    download. Ships its own calendar-versioned releases
+#                    (YYYY.M.D), not semver; expect to bump this one more
+#                    often than the rest (behalfbot#169).
+#   - youtube-transcript-api  parse-youtube plugin - transcript fetch
+#                    (behalfbot#169)
 
 pyyaml==6.0.2
 requests==2.32.3
@@ -31,3 +37,5 @@ tzdata==2024.2
 pillow==11.0.0
 openai==1.54.5
 mcp==1.28.1
+yt-dlp==2026.8.19
+youtube-transcript-api==1.2.4
