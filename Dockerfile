@@ -115,6 +115,13 @@ RUN apt-get update \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
+# loom-dl — Node CLI that downloads a Loom share URL's mp4 + transcript.
+# Required by the loom-vision plugin; not on Homebrew or apt, ships via npm
+# only, so it installs here right after nodejs rather than in requirements.txt
+# (behalfbot#169).
+RUN npm install -g loom-dl \
+ && npm cache clean --force
+
 # GitHub CLI (gh) - not in Debian default repos so install via the official
 # GitHub Apt repository. Required by any heartbeat that triages issues,
 # manages PRs, or fans out a workflow from inside the container. V1 install
@@ -202,9 +209,11 @@ RUN set -eux; \
 # Used by the notebook-rw.sh script (read renders pages → SVG → PNG; write
 # composes typed-text pages and re-zips the bundle). Installed system-wide
 # so plugin scripts don't need per-user venvs. ImageMagick provides the
-# SVG → PNG raster step.
+# SVG → PNG raster step. pandoc is required by the perplexity-research
+# plugin to build the epub delivered to reMarkable - without it that
+# skill silently degrades (behalfbot#169).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends imagemagick \
+ && apt-get install -y --no-install-recommends imagemagick pandoc \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/* \
  && pip install --no-cache-dir 'rmscene>=0.6,<1' 'rmc>=0.3,<1'
