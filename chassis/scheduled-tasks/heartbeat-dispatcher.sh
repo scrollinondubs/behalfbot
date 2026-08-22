@@ -25,7 +25,16 @@
 #                             unreachable the dispatcher fails open (always
 #                             fires Claude on ask_model conditions).
 #   DISCORD_WEBHOOK_URL     — for #installer notifications.
-#   DISCORD_OPS_WEBHOOK_URL — for output-validator quarantine alerts.
+#   DISCORD_OPS_WEBHOOK_URL — for output-validator quarantine alerts, and for
+#                             the cross-heartbeat claude-failure alarm (#167).
+#                             Falls back to DISCORD_WEBHOOK_URL when unset.
+#   CLAUDE_GLOBAL_FAIL_THRESHOLD    — consecutive claude FIRE failures across
+#                             different heartbeats before the #167 alarm
+#                             fires. Default 3.
+#   CLAUDE_GLOBAL_DISTINCT_THRESHOLD — how many DIFFERENT heartbeats must be
+#                             among those failures before the #167 alarm
+#                             fires (guards against one flaky heartbeat
+#                             tripping a false "everything is down"). Default 2.
 #   ANTHROPIC_API_KEY       — see comment block below — INTENTIONALLY UNSET
 #                             at top of this script so `claude -p` uses OAuth
 #                             (subscription billing) not PAYG.
@@ -764,6 +773,22 @@ Fail on the most severe mode if multiple fire. Pass only if none fire.
 ARTIFACT:
 '
 
+# Post an operational alert to the ops webhook. Falls back to the main
+# install webhook so an unset ops webhook degrades to "noisier" rather than
+# "silent". Ported from new-jaxity's customer-side dispatcher (#167) - this
+# used to be inlined only in run_output_validator's quarantine path; the
+# cross-heartbeat claude-failure alarm below needs the same POST from a
+# second call site, so it is a helper now.
+alert_ops() {
+    local msg="$1"
+    local ops_webhook="${DISCORD_OPS_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
+    [[ -z "$ops_webhook" ]] && { log "WARN: no ops webhook set, alert dropped: $msg"; return; }
+    curl -sf -X POST "$ops_webhook" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -n --arg content "$msg" '{content: $content}')" \
+        >> "$LOG_FILE" 2>&1 || log "WARN: ops alert POST failed"
+}
+
 run_output_validator() {
     local name="$1" output_file="$2"
 
@@ -852,14 +877,7 @@ run_output_validator() {
 
     log "VALIDATOR $name — FAIL mode=$mode_val reason=$reason_val — artifact quarantined at $quarantine_file"
 
-    local ops_webhook="${DISCORD_OPS_WEBHOOK_URL:-${DISCORD_WEBHOOK_URL:-}}"
-    if [[ -n "$ops_webhook" ]]; then
-        local alert_msg="**Five Failure Modes validator blocked ${name}** — mode: \`${mode_val}\`\n${reason_val}\nArtifact at: \`${quarantine_file}\`"
-        curl -sf -X POST "$ops_webhook" \
-            -H "Content-Type: application/json" \
-            -d "$(jq -n --arg content "$alert_msg" '{content: $content}')" \
-            >> "$LOG_FILE" 2>&1 || true
-    fi
+    alert_ops "**Five Failure Modes validator blocked ${name}** — mode: \`${mode_val}\`\n${reason_val}\nArtifact at: \`${quarantine_file}\`"
 
     return 1
 }
@@ -1145,6 +1163,92 @@ ${gathered_data}
                 log "CIRCUIT-OPENED $name — streak=$fail_streak, skipping FIRE for $backoff_ticks ticks (~$((backoff_sec/60))min)"
             fi
 
+            # -----------------------------------------------------------------
+            # Cross-heartbeat failure detection (#167)
+            # -----------------------------------------------------------------
+            #
+            # The per-heartbeat breaker above is the right answer to ONE flaky
+            # heartbeat. It is the wrong answer to claude being unreachable at
+            # all, where it guarantees silence exactly when something is badly
+            # wrong.
+            #
+            # 2026-08-17 to 2026-08-19 (new-jaxity): every FIRE failed for 60
+            # hours, first on a missing .mcp.json and then on a zeroed OAuth
+            # credential. Eleven heartbeats opened their breakers and went
+            # quiet. The gathers kept running and kept reporting "no work", so
+            # from outside the install looked healthy. Nobody was told. Sean
+            # found it by asking about something else entirely.
+            #
+            # So: count failures across DIFFERENT heartbeats, and once that
+            # crosses the threshold, alert directly and bypass every breaker.
+            # Claude's own stderr is appended to the dispatcher log, and in
+            # both causes above it named the problem exactly, so the alert
+            # carries the last error line rather than making someone go read
+            # the log to find out what broke.
+            local global_streak
+            global_streak=$(get_state "_dispatcher" "claude_global_fail_streak")
+            global_streak=$(( ${global_streak:-0} + 1 ))
+            set_state "_dispatcher" "claude_global_fail_streak" "$global_streak"
+            set_state "_dispatcher" "claude_last_failed_heartbeat" "$name"
+
+            # Distinct-name tracking, so "everything is down" means what it
+            # says. A raw count alone can be reached by ONE flaky heartbeat
+            # failing three times with nothing else firing in between -
+            # plausible overnight, when other heartbeats are inside their
+            # breaker cooldowns - and an alarm that cries total outage over a
+            # single bad prompt gets muted, which costs more than it saves. So
+            # the alert needs failures spread across at least two different
+            # heartbeats as well as the raw count.
+            local failed_names
+            failed_names=$(get_state "_dispatcher" "claude_global_failed_names")
+            case " $failed_names " in
+                *" $name "*) : ;;
+                *) failed_names="${failed_names:+$failed_names }$name" ;;
+            esac
+            set_state "_dispatcher" "claude_global_failed_names" "$failed_names"
+            local distinct_count
+            distinct_count=$(printf '%s\n' ${=failed_names} | grep -c . || true)
+
+            local global_threshold="${CLAUDE_GLOBAL_FAIL_THRESHOLD:-3}"
+            local distinct_threshold="${CLAUDE_GLOBAL_DISTINCT_THRESHOLD:-2}"
+            if [[ $global_streak -ge $global_threshold && $distinct_count -ge $distinct_threshold ]]; then
+                local now_epoch last_alert alert_cooldown
+                now_epoch=$(date +%s)
+                last_alert=$(get_state "_dispatcher" "claude_global_alerted_at")
+                alert_cooldown="${CLAUDE_GLOBAL_ALERT_COOLDOWN_SECONDS:-14400}"
+
+                if [[ -z "$last_alert" ]] || (( now_epoch - last_alert >= alert_cooldown )); then
+                    # claude does not prefix everything with "Error:". The two
+                    # causes of the 60-hour new-jaxity outage read:
+                    #
+                    #   Error: Invalid MCP configuration:
+                    #   MCP config file not found: /app/customer/.mcp.json
+                    #
+                    #   Failed to authenticate: OAuth session expired and could
+                    #   not be refreshed
+                    #
+                    # Matching only /^Error/ would have carried the first and
+                    # missed the second entirely, which is the one that leaves
+                    # you staring at "(no error found)" while the install is
+                    # down. Match the openers claude actually uses, and take
+                    # the last two lines because the useful detail is often on
+                    # the continuation line.
+                    local err_line
+                    err_line=$(grep -aE '^(Error|error|Failed|Invalid|MCP config)' "$LOG_FILE" 2>/dev/null | tail -2)
+                    [[ -z "$err_line" ]] && err_line="(no recognisable error line in $(basename "$LOG_FILE") - read the log directly, the stderr of every attempt is appended there)"
+                    alert_ops "🚨 **claude -p is failing for every heartbeat.** ${global_streak} consecutive FIRE attempts have failed across different heartbeats, most recently \`${name}\`.
+
+Each one is now opening its own circuit breaker, which means this is the only notice you get - the install will look quiet rather than broken.
+
+Last error claude reported:
+\`\`\`
+${err_line}
+\`\`\`
+Nothing scheduled will run until this is fixed. Re-alerts at most every $((alert_cooldown / 3600))h."
+                    set_state "_dispatcher" "claude_global_alerted_at" "$now_epoch"
+                fi
+            fi
+
             continue
         fi
 
@@ -1156,6 +1260,16 @@ ${gathered_data}
         # transient failure starts fresh from streak=1.
         set_state "$name" "claude_fail_streak" "0"
         set_state "$name" "circuit_open_until" ""
+
+        # A single success proves claude is reachable, so the cross-heartbeat
+        # counter resets here too (#167). If we had alerted, say so - an alarm
+        # that never clears trains you to ignore it.
+        if [[ -n "$(get_state "_dispatcher" "claude_global_alerted_at")" ]]; then
+            alert_ops "**claude -p is working again.** First success after the outage: \`$name\`. Circuit breakers opened during the outage stay open until their cooldown expires or someone clears them in \`scheduled-tasks/heartbeat-state.json\` (fields \`circuit_open_until\` and \`claude_fail_streak\`)."
+            set_state "_dispatcher" "claude_global_alerted_at" ""
+        fi
+        set_state "_dispatcher" "claude_global_fail_streak" "0"
+        set_state "_dispatcher" "claude_global_failed_names" ""
 
         # Five Failure Modes post-output validator (#332)
         # Runs only when output_validator: true in HEARTBEATS.md for this heartbeat.
