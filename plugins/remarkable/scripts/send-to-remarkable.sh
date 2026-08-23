@@ -67,7 +67,7 @@ if [[ ! -x "$RMAPI" ]]; then
     echo "ERR: rmapi binary not found at $RMAPI" >&2
     echo "  Install with:" >&2
     echo "    curl -sSL -o /tmp/rmapi.zip \\" >&2
-    echo "      https://github.com/ddvk/rmapi/releases/download/v0.0.34/rmapi-macos-arm64.zip" >&2
+    echo "      https://github.com/ddvk/rmapi/releases/download/v0.0.35/rmapi-macos-arm64.zip" >&2
     echo "    cd /tmp && unzip rmapi.zip && mv rmapi $RMAPI && chmod +x $RMAPI" >&2
     exit 2
 fi
@@ -90,4 +90,8 @@ if "$RMAPI" put "$LOCAL_FILE" "$REMOTE_PATH" >&2; then
     exit 0
 fi
 echo "ERR: rmapi upload failed (network / API / unknown)" >&2
+echo "  If \`$RMAPI ls /\` above succeeded but this put returned HTTP 400," >&2
+echo "  the binary is stale, not the auth (behalfbot#175). Do NOT re-pair -" >&2
+echo "  check https://github.com/ddvk/rmapi/releases for a tag newer than" >&2
+echo "  what is installed (\`$RMAPI version\`) and reinstall from that." >&2
 exit 4

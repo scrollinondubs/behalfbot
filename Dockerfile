@@ -160,10 +160,18 @@ RUN curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
 # than `latest` so a future upstream change doesn't silently break the
 # image build.
 #
+# v0.0.34 lagged reMarkable's cloud API and every upload returned HTTP
+# 400 (ls/auth still worked, so it looked like a credential problem -
+# behalfbot#175). Upstream cut v0.0.35 on 2026-08-18 from the same
+# master commit that fixed it. The tag can drift again; if uploads
+# start 400ing while `rmapi ls` succeeds, check
+# https://github.com/ddvk/rmapi/tags for a newer release before
+# re-pairing.
+#
 # rmapi releases ship linux-amd64 and linux-arm64 separately. The
 # multi-arch chassis build picks the right asset via $TARGETARCH (set
 # automatically by buildx for each target platform).
-ARG RMAPI_VERSION=v0.0.34
+ARG RMAPI_VERSION=v0.0.35
 ARG TARGETARCH
 RUN set -eux; \
     case "${TARGETARCH}" in \
