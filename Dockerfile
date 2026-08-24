@@ -316,6 +316,22 @@ RUN if [ "${INSTALLER_UID}" != "${MACOS_INSTALLER_UID}" ]; then \
 # Bring in rbw from the builder stage.
 COPY --from=rbw-builder /rbw-out/bin/rbw /usr/local/bin/rbw
 
+# /home/chassis ownership, made explicit rather than assumed.
+# `useradd --create-home` above only takes ownership of the home dir if it
+# does not already exist. #180 moved the loom-dl npm install (behalfbot#169)
+# earlier in this file, and that RUN executes as root with HOME=/home/chassis
+# before useradd runs - npm creates /home/chassis as root to hold its cache,
+# useradd then finds the dir already there and leaves it root-owned. The
+# chassis user's own installs into $HOME below (bun, uv, npm -g claude-code)
+# then fail, e.g. `mkdir: cannot create directory '/home/chassis/.bun':
+# Permission denied` (behalfbot#181). This was masked on main by Docker layer
+# cache reuse across builds, not by the Dockerfile actually being correct -
+# a fresh `--no-cache` build reproduces it every time. Do not fix this by
+# reordering loom-dl back down the file; that only restores the cache
+# accident. chown it explicitly instead so ownership doesn't depend on
+# install order or cache state.
+RUN mkdir -p /home/chassis && chown -R chassis:chassis /home/chassis
+
 # Drop privileges for all subsequent tool installs so npm/bun caches land
 # in chassis user's home.
 USER chassis
