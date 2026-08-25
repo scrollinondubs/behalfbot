@@ -33,6 +33,12 @@ git clone --depth 1 \
   "https://x-access-token:${GITHUB_PAT}@github.com/scrollinondubs/vibecodelisboa.git" \
   "${REPO_DIR}"
 
+echo "[build] recording build identity (issue #173) before .git is scrubbed..."
+APP_COMMIT="$(git -C "${REPO_DIR}" rev-parse --short=7 HEAD)"
+BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+printf '{"appCommit":"%s","builtAt":"%s"}\n' "${APP_COMMIT}" "${BUILT_AT}" \
+  > "${CONTEXT_DIR}/build-info.json"
+
 echo "[build] scrubbing git metadata + any env files..."
 rm -rf "${REPO_DIR}/.git"
 find "${REPO_DIR}" -maxdepth 2 -name ".env*" -type f -delete

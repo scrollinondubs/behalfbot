@@ -75,6 +75,11 @@ COPY --chown=executor:executor build-context/vibecodelisboa /app/vibecodelisboa
 # along is harmless and keeps the rule simple.
 COPY --chown=executor:executor container/ /app/
 
+# Build identity (issue #173): appCommit + builtAt, written by build.sh
+# before it strips vibecodelisboa's .git. /healthz reads this at runtime
+# so "what is this executor running" is a curl, not a wrangler login.
+COPY --chown=executor:executor build-context/build-info.json /app/build-info.json
+
 USER executor
 WORKDIR /app
 

@@ -18,10 +18,22 @@
 
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { preScanPromotedARow } from './prescan-outcome.mjs'
 
 const PORT = 8080
 const REPO_ROOT = '/app/vibecodelisboa'
+
+// Written by build.sh (issue #173) before it strips vibecodelisboa's .git.
+// Absent on a local/dev run that skipped build.sh - healthz still answers,
+// just with null identity, rather than crashing the shim.
+let buildInfo = { appCommit: null, builtAt: null }
+try {
+  buildInfo = JSON.parse(readFileSync('/app/build-info.json', 'utf8'))
+} catch {
+  console.log(JSON.stringify({ event: 'build_info_missing' }))
+}
+
 const TICK_SCRIPT = 'scripts/behalfbot-heartbeat.ts'
 // Belt-and-braces above the executor's own 25-min CLI timeout and 30-min
 // row wallclock cap. If tsx itself wedges, kill it.
@@ -99,7 +111,12 @@ const server = createServer((req, res) => {
   }
 
   if (req.method === 'GET' && req.url === '/healthz') {
-    return respond(200, { ok: true, inFlight: inFlight !== null })
+    return respond(200, {
+      ok: true,
+      inFlight: inFlight !== null,
+      appCommit: buildInfo.appCommit,
+      builtAt: buildInfo.builtAt,
+    })
   }
 
   if (req.method === 'GET' && req.url === '/status') {
