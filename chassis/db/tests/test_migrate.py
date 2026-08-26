@@ -93,13 +93,25 @@ class TestDiscovery(unittest.TestCase):
 
 class TestApply(unittest.TestCase):
     def test_applies_pending_migrations(self):
-        conn = FakeConnection()
-        self.assertEqual(apply_migrations(conn), ["001_pacman_queue.sql"])
+        """Isolated tmp dir, not the real migrations/ - this must keep passing
+        as more migrations are added to the shipped directory."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "001_thing.sql").write_text("SELECT 1")
+            conn = FakeConnection()
+            self.assertEqual(apply_migrations(conn, directory), ["001_thing.sql"])
 
     def test_is_idempotent(self):
         """Migrations run on every container boot. The second boot is a no-op."""
-        conn = FakeConnection(already_applied={"001_pacman_queue.sql"})
-        self.assertEqual(apply_migrations(conn), [])
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "001_thing.sql").write_text("SELECT 1")
+            conn = FakeConnection(already_applied={"001_thing.sql"})
+            self.assertEqual(apply_migrations(conn, directory), [])
 
     def test_creates_the_ledger_table_before_reading_it(self):
         conn = FakeConnection()
@@ -109,10 +121,15 @@ class TestApply(unittest.TestCase):
         self.assertLess(ledger_index, select_index)
 
     def test_records_each_applied_migration_in_the_ledger(self):
-        conn = FakeConnection()
-        apply_migrations(conn)
-        inserts = [params for sql, params in conn.executed if "INSERT INTO chassis_schema_migrations" in sql]
-        self.assertEqual(inserts, [("001_pacman_queue.sql",)])
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "001_thing.sql").write_text("SELECT 1")
+            conn = FakeConnection()
+            apply_migrations(conn, directory)
+            inserts = [params for sql, params in conn.executed if "INSERT INTO chassis_schema_migrations" in sql]
+            self.assertEqual(inserts, [("001_thing.sql",)])
 
     def test_takes_and_releases_the_advisory_lock(self):
         """Two containers booting together serialize instead of racing."""
@@ -141,10 +158,15 @@ class TestApply(unittest.TestCase):
         self.assertIn(("SELECT pg_advisory_unlock(%s)", (ADVISORY_LOCK_ID,)), conn.executed)
 
     def test_dry_run_lists_without_applying(self):
-        conn = FakeConnection()
-        self.assertEqual(apply_migrations(conn, dry_run=True), ["001_pacman_queue.sql"])
-        self.assertFalse(any("CREATE TABLE IF NOT EXISTS chassis_pacman_queue" in s for s in conn.sql_log))
-        self.assertFalse(any("INSERT INTO chassis_schema_migrations" in s for s in conn.sql_log))
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "001_thing.sql").write_text("SELECT 1")
+            conn = FakeConnection()
+            self.assertEqual(apply_migrations(conn, directory, dry_run=True), ["001_thing.sql"])
+            self.assertFalse(any("SELECT 1" in s for s in conn.sql_log))
+            self.assertFalse(any("INSERT INTO chassis_schema_migrations" in s for s in conn.sql_log))
 
 
 class TestPacmanQueueSchema(unittest.TestCase):
