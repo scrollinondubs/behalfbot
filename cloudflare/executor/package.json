@@ -4,7 +4,8 @@
   "description": "Worker + Container scaffold for the Behalf.bot executor (behalfbot#41, behalfbot#66). Deploy is gated on Sean's approval.",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build-context": "bash build.sh"
+    "build-context": "bash build.sh",
+    "deploy": "bash deploy.sh"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.3.7"
