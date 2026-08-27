@@ -125,7 +125,7 @@ step() {
 # ============================================================
 
 validate_environment() {
-    step "1/14" "Validate environment + tool prerequisites"
+    step "1/15" "Validate environment + tool prerequisites"
 
     if [[ ! -d "$CHASSIS_HOME" ]]; then
         log "FAIL: CHASSIS_HOME ($CHASSIS_HOME) does not exist"
@@ -189,7 +189,7 @@ first_existing() {
 # ============================================================
 
 scaffold_customer_home() {
-    step "2/14" "Scaffold CUSTOMER_HOME"
+    step "2/15" "Scaffold CUSTOMER_HOME"
 
     # Per issue #6: never overwrite anything inside CUSTOMER_HOME on re-bootstrap.
     # Only create the dir structure if it doesn't already exist.
@@ -238,7 +238,7 @@ EOF
 # ============================================================
 
 hydrate_env() {
-    step "3/14" "Hydrate .env from password manager"
+    step "3/15" "Hydrate .env from password manager"
 
     local env_file="$CUSTOMER_HOME/.env"
     if [[ -f "$env_file" ]]; then
@@ -302,7 +302,7 @@ EOF
 # ============================================================
 
 validate_install_artifacts() {
-    step "4/14" "Validate INSTALL_PROFILE + chassis.config.yaml"
+    step "4/15" "Validate INSTALL_PROFILE + chassis.config.yaml"
 
     log "TODO: lint INSTALL_PROFILE.md for required sections"
     log "TODO: validate chassis.config.yaml against schema (yq + json-schema OR python jsonschema)"
@@ -322,7 +322,7 @@ validate_install_artifacts() {
 # ============================================================
 
 hydrate_mcp_json() {
-    step "5/14" "Hydrate .mcp.json from template"
+    step "5/15" "Hydrate .mcp.json from template"
 
     local template="$CHASSIS_HOME/chassis/.mcp.json.template"
     local hydrator="$CHASSIS_HOME/chassis/scripts/hydrate-mcp-json.py"
@@ -379,7 +379,7 @@ hydrate_mcp_json() {
 }
 
 hydrate_claude_md() {
-    step "6/14" "Hydrate CLAUDE.md from template"
+    step "6/15" "Hydrate CLAUDE.md from template"
 
     log "TODO: sed-based template-substitution from chassis/CLAUDE.md.template"
     log "  Read INSTALL_PROFILE.md + chassis.config.yaml for {{PLACEHOLDER}} values:"
@@ -392,7 +392,7 @@ hydrate_claude_md() {
 }
 
 initialize_heartbeats() {
-    step "7/14" "Initialize HEARTBEATS.md"
+    step "7/15" "Initialize HEARTBEATS.md"
 
     local template="$CHASSIS_HOME/chassis/HEARTBEATS.md.template"
     local rendered="$CUSTOMER_HOME/HEARTBEATS.md"
@@ -431,7 +431,7 @@ initialize_heartbeats() {
 # ============================================================
 
 render_customer_scripts() {
-    step "8/14" "Render customer-side scripts from chassis templates"
+    step "8/15" "Render customer-side scripts from chassis templates"
 
     local renderer="$CHASSIS_HOME/chassis/scripts/bootstrap-customer-scripts.sh"
     if [[ ! -x "$renderer" ]]; then
@@ -524,7 +524,7 @@ preflight_bot_identity() {
 }
 
 activate_plugins() {
-    step "9/14" "Activate enabled plugins"
+    step "9/15" "Activate enabled plugins"
 
     log "TODO: for each plugin in plugins/ directory:"
     log "  - Read its openclaw.plugin.json"
@@ -550,7 +550,7 @@ activate_plugins() {
 # ============================================================
 
 seed_memory() {
-    step "10/14" "Seed memory entries from INSTALL_PROFILE"
+    step "10/15" "Seed memory entries from INSTALL_PROFILE"
 
     log "TODO: per docs/memory-seeding.md — generate seed entries from interview signals"
     log ""
@@ -571,12 +571,43 @@ seed_memory() {
     log "  ↳ NO FABRICATION — only what installer told us OR observable from existing tooling"
 }
 
+
+# ============================================================
+# 11. Seed second-brain starter content
+# ============================================================
+
+seed_second_brain_content() {
+    step "11/15" "Seed second-brain starter content"
+
+    if [[ "$DRY_RUN" == "true" ]]; then
+        log "  DRY_RUN=true; skipping (would run: python3 -m chassis.second_brain.seed)"
+        return 0
+    fi
+
+    # new-jaxity#257. Writes a small PARA + Priorities + Mental Models +
+    # Introspection-template starter set through the second-brain adapter
+    # interface (chassis/second_brain/base.py), so it works unmodified
+    # whichever of siyuan/notion/obsidian this install configured. Idempotent
+    # by construction (chassis/second_brain/seed.py) - safe to re-run on a
+    # re-install, a no-op if the sentinel doc from a prior run is still there.
+    #
+    # Not fatal on failure: an install with second_brain.mode != adapter, or
+    # no backend configured yet, has nothing for this to write into. The
+    # module itself logs why and exits 0 rather than raising - this step
+    # mirrors that by not aborting the rest of bootstrap over it either.
+    if ! (cd "$CHASSIS_HOME" && python3 -m chassis.second_brain.seed); then
+        log "  second-brain seed step reported a non-zero exit - check the output above."
+        log "  Not fatal to bootstrap; re-run manually once the second brain is configured:"
+        log "    cd $CHASSIS_HOME && python3 -m chassis.second_brain.seed"
+    fi
+}
+
 # ============================================================
 # 10. Install OS deps
 # ============================================================
 
 install_os_deps() {
-    step "11/14" "Install OS-level dependencies"
+    step "12/15" "Install OS-level dependencies"
 
     if [[ "$SKIP_DEPS" == "true" ]]; then
         log "  SKIP_DEPS=true; assuming installer pre-installed everything"
@@ -695,7 +726,7 @@ migrate_stale_launchdaemons() {
 }
 
 setup_dispatcher_unit() {
-    step "12/14" "Set up dispatcher launchd / systemd unit"
+    step "13/15" "Set up dispatcher launchd / systemd unit"
 
     local os
     os="$(uname -s)"
@@ -822,7 +853,7 @@ run_bootstrap_audit() {
 }
 
 run_smoke_tests() {
-    step "13/14" "Run smoke tests + post-install audit"
+    step "14/15" "Run smoke tests + post-install audit"
 
     run_bootstrap_audit
 
@@ -845,7 +876,7 @@ run_smoke_tests() {
 # ============================================================
 
 report_status() {
-    step "14/14" "Install summary"
+    step "15/15" "Install summary"
 
     log ""
     log "Bootstrap transcript: $TRANSCRIPT"
@@ -881,6 +912,7 @@ main() {
     preflight_bot_identity
     activate_plugins
     seed_memory
+    seed_second_brain_content
     install_os_deps
     setup_dispatcher_unit
     run_smoke_tests
