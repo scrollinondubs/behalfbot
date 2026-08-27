@@ -15,7 +15,11 @@
 # Usage:
 #   GITHUB_PAT=... ./build.sh
 # Then, deploy-gated on Sean's approval:
-#   CLOUDFLARE_API_TOKEN=... npx wrangler deploy   # DO NOT run without approval
+#   CLOUDFLARE_API_TOKEN=... ./deploy.sh   # DO NOT run without approval
+#
+# Use deploy.sh rather than calling wrangler directly. It passes the
+# appCommit/builtAt recorded below to the Worker as vars so /healthz can
+# report them without waking the container (issue #173).
 
 set -euo pipefail
 
@@ -50,4 +54,4 @@ find "${REPO_DIR}" -maxdepth 2 -name ".env*" -type f -delete
 # instead, so platform-specific optional deps resolve for the container.
 
 echo "[build] build-context ready: ${REPO_DIR}"
-echo "[build] next (GATED ON SEAN'S APPROVAL): CLOUDFLARE_API_TOKEN in env, then 'npx wrangler deploy' from ${SCRIPT_DIR}"
+echo "[build] next (GATED ON SEAN'S APPROVAL): CLOUDFLARE_API_TOKEN in env, then './deploy.sh' from ${SCRIPT_DIR}"

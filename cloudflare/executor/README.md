@@ -107,8 +107,15 @@ fails closed instead of deploying to the wrong account.
 1. **Build**: `GITHUB_PAT=... ./build.sh` (stages build-context), then
    `npm install` here.
 2. **Secrets**: `wrangler secret put` the six names above.
-3. **Deploy**: `wrangler deploy` (builds the image via local Docker,
-   pushes to the Cloudflare-managed registry, deploys Worker + container).
+3. **Deploy**: `./deploy.sh` (builds the image via local Docker, pushes to
+   the Cloudflare-managed registry, deploys Worker + container). Use the
+   script, not a bare `wrangler deploy`: it reads `appCommit`/`builtAt` out
+   of `build-context/build-info.json` and passes them to the Worker as
+   vars, so `GET /healthz` reports which app commit is live (issue #173)
+   without waking a container. A bare `wrangler deploy` still works and
+   still ships correct code, but /healthz then answers
+   `appCommit: null` and the executor-drift heartbeat reports a deploy
+   owed.
 4. **Smoke test**: seed a test ask on a throwaway repo, `curl -X POST
    .../trigger -H "Authorization: Bearer ..."`, watch `GET /status` until
    the tick completes, confirm the PR opens and the queue row lands in

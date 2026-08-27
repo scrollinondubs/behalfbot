@@ -29,6 +29,15 @@ interface Env {
   // module load (resend-client constructs at import time) AFTER the PR has
   // shipped, retroactively marking completed jobs failed (#73).
   RESEND_API_KEY: string
+  // Build identity (issue #173). Set as plain vars at deploy time by
+  // deploy.sh, which reads them out of build-context/build-info.json so
+  // the Worker and the container image always report the same commit.
+  // Optional on purpose: a hand-rolled `wrangler deploy` that skips
+  // deploy.sh leaves them undefined and /healthz answers null, which is
+  // what the executor-drift monitor should see. A deploy with no
+  // provenance must look like a deploy with no provenance.
+  APP_COMMIT?: string
+  BUILT_AT?: string
 }
 
 export class ExecutorContainer extends Container<Env> {
@@ -61,8 +70,20 @@ export default {
 
     // Unauthenticated liveness probe for the Worker itself (does not wake
     // the container).
+    //
+    // It also carries build identity (issue #173). The container answers
+    // the same fields on its own /healthz, but nothing routes to that
+    // path: this handler returns before any container.fetch, deliberately,
+    // so a probe never wakes a standard-1 instance. Reading the vars here
+    // keeps the endpoint free and unauthenticated while still making
+    // "which app commit is live" answerable, which is the whole point of
+    // #173. Deploying without deploy.sh yields nulls rather than a lie.
     if (request.method === 'GET' && url.pathname === '/healthz') {
-      return Response.json({ ok: true })
+      return Response.json({
+        ok: true,
+        appCommit: env.APP_COMMIT ?? null,
+        builtAt: env.BUILT_AT ?? null,
+      })
     }
 
     const auth = request.headers.get('authorization') ?? ''
