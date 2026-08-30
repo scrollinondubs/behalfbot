@@ -1,8 +1,24 @@
 # Behalf.bot executor on Cloudflare Containers
 
 Scaffold for behalfbot#41 (executor off the Mac mini) and the shared
-foundation for behalfbot#66 (VCL support agent). **Nothing here is
-deployed.** Deploy and cutover are gated on Sean's explicit approval.
+foundation for behalfbot#66 (VCL support agent).
+
+**This is live.** It shipped 2026-07-16 and has been the production
+execution path since. The line that used to
+sit here said "nothing here is deployed", which stayed on the page for six
+weeks after the cutover and is part of why a month-old build ran unnoticed
+(see the post-mortem linked below). Each deploy still needs Sean's explicit
+approval - that gate is real, it is just not the same claim as "unshipped".
+
+Ask what is running rather than reading this file for it:
+
+```bash
+curl -s https://behalfbot-executor.sean-8a1.workers.dev/healthz
+# {"ok":true,"appCommit":"<vibecodelisboa sha>","builtAt":"<utc>"}
+```
+
+Post-mortem on the stale build: `docs/postmortems/2026-08-19-executor-stale-since-july.md`
+in `scrollinondubs/new-jaxity`.
 
 Go/no-go analysis: [docs/cloudflare-containers-eval.md](../../docs/cloudflare-containers-eval.md).
 Verdict: GO-WITH-CAVEAT (no enforced duration cap; host restarts covered by
