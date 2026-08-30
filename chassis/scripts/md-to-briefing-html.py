@@ -46,8 +46,8 @@ except ImportError:
 
 CALLOUT_TRIGGERS = {
     "attention": (
-        r"\b(ask|asks|waiting on|needs? sean|needs? your|action needed|awaiting|required|decisions?)\b",
-        "Sections that need the installer's attention — decisions, approvals, follow-ups.",
+        r"\b(ask|asks|waiting on|needs? your|action needed|awaiting|required|decisions?)\b",
+        "Sections that need the installer's attention - decisions, approvals, follow-ups.",
     ),
     "warning": (
         r"\b(broke|break|failed|failure|error|incident|gap|stale|missed|warning)\b",

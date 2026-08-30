@@ -39,7 +39,7 @@ class TestDsnResolution(unittest.TestCase):
         self.assertEqual(get_dsn({"BEHALFBOT_PG_DSN": DSN}), DSN)
 
     def test_falls_back_to_jax_pg_dsn(self):
-        """Host-side legacy fallback, per the reference install's docs/jax-db.md."""
+        """Host-side legacy fallback, per the reference install's DB docs."""
         self.assertEqual(get_dsn({"JAX_PG_DSN": DSN}), DSN)
 
     def test_resolution_order_matches_the_documented_constant(self):

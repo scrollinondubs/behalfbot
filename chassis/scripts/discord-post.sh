@@ -20,13 +20,13 @@
 #
 # Examples:
 #   # Plain text message
-#   discord-post.sh 1487067385159487588 "Briefing for $(date +%F) ready: $URL"
+#   discord-post.sh "$DISCORD_BRIEFINGS_CHANNEL_ID" "Briefing for $(date +%F) ready: $URL"
 #
 #   # Read text body from a file (handy for prose with newlines/markdown/$)
-#   discord-post.sh 1487067385159487588 @/tmp/synopsis.txt
+#   discord-post.sh "$DISCORD_BRIEFINGS_CHANNEL_ID" @/tmp/synopsis.txt
 #
 #   # With one or more file attachments
-#   discord-post.sh 1487067385159487588 "Morning briefing $(date +%F)" \
+#   discord-post.sh "$DISCORD_BRIEFINGS_CHANNEL_ID" "Morning briefing $(date +%F)" \
 #       /app/customer/briefings/$(date +%F)-morning-briefing.md
 #
 # Exit codes:

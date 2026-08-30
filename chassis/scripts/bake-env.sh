@@ -134,7 +134,7 @@ NEW_VARS=$(comm -13 "$PRE_ENV_FILE" "$POST_ENV_FILE")
 # rationale on keeping these unset at runtime.
 #
 # Concrete incident 2026-05-22 (scrollinondubs/new-jaxity 3h BFL pipeline
-# outage): a stale ANTHROPIC_API_KEY leaked into Sean's .env.baked from some
+# outage): a stale ANTHROPIC_API_KEY leaked into the reference install's .env.baked from some
 # transient shell env on a past bake-env.sh run. Container restart loaded
 # .env.baked → ANTHROPIC_API_KEY became set in container process env →
 # claude -p preferred it over OAuth → 'Invalid API key' on every claude
@@ -146,7 +146,7 @@ SHELL_NOISE_REGEX='^(SHLVL|PWD|OLDPWD|SHELL|TERM|TERM_PROGRAM|TERM_PROGRAM_VERSI
 # Dispatcher-toxic var blocklist (loud WARN — operator should know if these
 # were silently dropped). Concrete incident 2026-05-22 (scrollinondubs/
 # new-jaxity 3h BFL pipeline outage): a stale ANTHROPIC_API_KEY leaked into
-# Sean's .env.baked from some transient shell env on a past bake-env.sh run.
+# the reference install's .env.baked from some transient shell env on a past bake-env.sh run.
 # Container restart loaded .env.baked → ANTHROPIC_API_KEY became set in
 # container process env → claude -p preferred it over OAuth → 'Invalid API
 # key' on every claude invocation → dispatcher cycle blocked 2.5h on

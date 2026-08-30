@@ -148,8 +148,8 @@ criticality: background
 
 ## daily-log (chassis-shipped gather + prompt template, opt-in)
 
-Nightly synthesis of the day's work across every operational surface Jax
-touched (GitHub / Gmail / SiYuan / Discord postmortems). See
+Nightly synthesis of the day's work across every operational surface the
+assistant touched (GitHub / Gmail / SiYuan / Discord postmortems). See
 `chassis/docs/heartbeats/daily-log.md` for the full env var contract and
 setup.
 
@@ -253,7 +253,7 @@ to the reserved entity `health:memory-canary`, then reads it back in a
 **separate** server invocation and asserts the two match. Fires only on
 mismatch, error, or an empty read.
 
-The failure it exists for: on Sean's install the graph was unreachable from
+The failure it exists for: on the V1 reference install the graph was unreachable from
 inside the container for at least sixteen days (2026-07-24 to 2026-08-09)
 because `.mcp.json` baked an absolute host path that does not exist in the
 container namespace. Reads returned a well-formed empty graph, which reads as

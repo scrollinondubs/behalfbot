@@ -15,7 +15,7 @@
 #
 # Required environment (set by the install runbook, NOT this script):
 #   CHASSIS_HOME    — absolute path to the installer's chassis directory
-#                     (e.g. /home/installer/behalfbot or /Users/sean/<v1-reference-install>)
+#                     (e.g. /home/installer/behalfbot or /Users/<user>/behalfbot)
 #   HOME            — installer's home directory (for tool paths, .ssh, etc.)
 #   PATH            — set up by the launchd plist / systemd unit; this script
 #                     does not assume any particular Homebrew prefix.
@@ -101,7 +101,7 @@ fi
 # unset, it falls back to OAuth stored in ~/.claude/.credentials.json or the
 # OS keychain → subscription billing.
 #
-# In the V1 reference install (Sean's `$CHASSIS_HOME/`), the .env file's Vaultwarden
+# In the V1 reference install, the .env file's Vaultwarden
 # hydration block exported ANTHROPIC_API_KEY for legitimate non-Claude-Code
 # uses (OpenAI fallback shims, etc.). That silently routed every heartbeat
 # through PAYG and caused a measurable cost spike — confirmed root cause of
@@ -1023,7 +1023,7 @@ main() {
             # broken in state but were green in logs. Writing `success` on a
             # clean PASS is mildly semantically loose (no FIRE happened) but
             # matches the existing "success" semantics elsewhere in this loop
-            # and is the minimal-change fix Sean approved 2026-05-30.
+            # and is the minimal-change fix approved 2026-05-30.
             set_state "$name" "last_result" "success"
             continue
         fi
@@ -1172,12 +1172,12 @@ ${gathered_data}
             # all, where it guarantees silence exactly when something is badly
             # wrong.
             #
-            # 2026-08-17 to 2026-08-19 (new-jaxity): every FIRE failed for 60
+            # 2026-08-17 to 2026-08-19 (V1 reference install): every FIRE failed for 60
             # hours, first on a missing .mcp.json and then on a zeroed OAuth
             # credential. Eleven heartbeats opened their breakers and went
             # quiet. The gathers kept running and kept reporting "no work", so
-            # from outside the install looked healthy. Nobody was told. Sean
-            # found it by asking about something else entirely.
+            # from outside the install looked healthy. Nobody was told. The
+            # operator found it by asking about something else entirely.
             #
             # So: count failures across DIFFERENT heartbeats, and once that
             # crosses the threshold, alert directly and bypass every breaker.

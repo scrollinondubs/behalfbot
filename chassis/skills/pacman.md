@@ -208,7 +208,7 @@ Three properties, each load-bearing:
 
 - **No digits, so it can never collide with `approve N`.** The outreach flow uses `approve 1 3 5` to approve drafts by list position. A token containing no digits is structurally incapable of being read as a number, so the two forms can never be confused. This is a guarantee, not a probability.
 - **No vowels and no `y`, so it can never spell a word.** English has no six-letter vowel-free words, which keeps `approve later` and similar from ever parsing as a token.
-- **Six characters, one case, no `i`/`l`/`1` or `o`/`0` ambiguity.** Sean approves from his phone. A 32-character Notion UUID is unusable there.
+- **Six characters, one case, no `i`/`l`/`1` or `o`/`0` ambiguity.** The operator approves from a phone. A 32-character Notion UUID is unusable there.
 
 Full reasoning and the canonical regex: `chassis/pacman/tokens.py`.
 

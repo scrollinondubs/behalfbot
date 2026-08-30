@@ -2,7 +2,7 @@
 
 The daily `memory-canary` check could not complete a write-read-verify round trip against this install's memory MCP knowledge graph. Until this is fixed, the assistant is amnesiac: every session starts with no prior context, every memory write is discarded, and nothing about that is visible in normal operation. A read from a broken graph returns a well-formed empty result, which is indistinguishable from "nothing has been saved yet".
 
-This is not hypothetical. Sean's install ran in exactly this state from at least 2026-07-24 to 2026-08-09 - sixteen days - because `.mcp.json` baked an absolute host path that does not exist inside the container namespace. Fixed in #142 / #143; this canary exists so the next one is caught in a day.
+This is not hypothetical. The V1 reference install ran in exactly this state from at least 2026-07-24 to 2026-08-09 - sixteen days - because `.mcp.json` baked an absolute host path that does not exist inside the container namespace. Fixed in #142 / #143; this canary exists so the next one is caught in a day.
 
 ## What the gather gives you
 
@@ -14,7 +14,7 @@ This is not hypothetical. Sean's install ran in exactly this state from at least
 
 `resolved_path` is where the memory server was configured to keep the graph, resolved in the namespace the check ran in. `shape` says how that path was derived: `cwd-resolved, no env block` (the current template) or `env.MEMORY_FILE_PATH` (legacy, an absolute path baked into `.mcp.json`).
 
-Lead your report with `resolved_path` and `error`. "Memory is broken" is not actionable; "the graph resolves to `/Users/jax/.behalfbot/memory/memory.jsonl`, which does not exist in this container namespace" is.
+Lead your report with `resolved_path` and `error`. "Memory is broken" is not actionable; "the graph resolves to `/Users/<host-user>/.behalfbot/memory/memory.jsonl`, which does not exist in this container namespace" is.
 
 ## Triage by stage
 

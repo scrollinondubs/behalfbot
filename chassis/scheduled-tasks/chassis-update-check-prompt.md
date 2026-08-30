@@ -32,7 +32,7 @@ The gather script has already filtered out:
 
 ### Step 1 - Resolve the alerts channel
 
-Read `chassis.config.yaml` at `${CHASSIS_HOME}/chassis.config.yaml`. The customer's alerts channel comes from `discord_channels.alerts_label` (display name, e.g. `#alerts` or `#jax-ops`). The runtime channel ID is in the `.env` as `DISCORD_ALERTS_CHANNEL_ID`. Use `chassis/scripts/post-to-channel.sh` (or the equivalent) with the alerts channel ID.
+Read `chassis.config.yaml` at `${CHASSIS_HOME}/chassis.config.yaml`. The customer's alerts channel comes from `discord_channels.alerts_label` (display name, e.g. `#alerts` or `#<installer>-ops`). The runtime channel ID is in the `.env` as `DISCORD_ALERTS_CHANNEL_ID`. Use `chassis/scripts/post-to-channel.sh` (or the equivalent) with the alerts channel ID.
 
 If neither is configured, fall back to `DISCORD_PRIMARY_CHANNEL_ID`. Do NOT silently drop the notification.
 

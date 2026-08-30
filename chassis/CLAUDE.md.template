@@ -126,8 +126,8 @@ Pattern (the chassis enforces; each trigger fills in the body):
 4. Hand off to the handler script / plugin
 
 The chassis ships ZERO triggers by default. Add your own under this section in your installer-specific CLAUDE.md (this file). Examples from V1:
-- `Pacman <url>` — URL self-improvement filter (Sean's V1 reference; lives in his V1 install only)
-- `Backfill: <description>` — manual meal entry (BFL plugin; activates when bfl module enabled)
+- `Pacman <url>` - URL self-improvement filter (chassis-core; see `chassis/skills/pacman.md`)
+- `Backfill: <description>` - manual meal entry (BFL plugin; activates when bfl module enabled)
 
 ## Scheduled Tasks — Heartbeat Dispatcher
 

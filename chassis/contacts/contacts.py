@@ -8,7 +8,7 @@ The whole surface:
     update(contact_id, ...)         change fields on a live contact
     delete(contact_id)              soft delete (sets deleted_at)
 
-Relational integrity, per Sean's answers on scrollinondubs/behalfbot#110:
+Relational integrity, per the design decisions in scrollinondubs/behalfbot#110:
 one-way references (everything else points at Postgres, never the reverse),
 soft delete only, and a resolver returns a tombstone rather than an error or a
 silent empty result. That is why `get()` has no include_deleted flag - it
@@ -17,7 +17,7 @@ holding a stale id can tell "deleted" apart from "never existed" apart from
 "unreachable" (the last one still raises ChassisDBUnavailable, same contract
 as every other chassis-core module).
 
-`search()` defaults to excluding tombstoned rows (Sean's stated default) with
+`search()` defaults to excluding tombstoned rows (the documented default) with
 an explicit `include_deleted=True` to opt in. There is no hard-delete path in
 this slice - GDPR erasure is a real requirement but a separate issue.
 """
@@ -126,7 +126,7 @@ def search(
 ) -> list[dict[str, Any]]:
     """Find contacts by name/email/phone. Empty query lists, newest first.
 
-    Excludes tombstoned contacts by default - Sean's stated default in the
+    Excludes tombstoned contacts by default - the documented default in the
     issue thread. Pass include_deleted=True to see them too (e.g. to confirm
     a delete happened, or to audit).
     """

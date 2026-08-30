@@ -395,7 +395,7 @@ def main():
     #
     # SiYuan and Notion work on defaults; only Obsidian needs an extra key
     # nobody is prompted for. Force it rather than emit a technically-correct
-    # config that cannot work (Sean's call, 2026-07-20).
+    # config that cannot work (decided 2026-07-20).
     sb = config.get('second_brain') if isinstance(config, dict) else None
     if isinstance(sb, dict) and sb.get('backend') == 'obsidian':
         mode = sb.get('mode')

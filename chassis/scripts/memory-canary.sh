@@ -4,7 +4,7 @@
 # The failure this exists for
 # ===========================
 # Between at least 2026-07-24 and 2026-08-09 the memory knowledge graph on
-# Sean's install was unreachable from inside the chassis container. `.mcp.json`
+# the V1 reference install was unreachable from inside the chassis container. `.mcp.json`
 # baked an absolute HOST path; the container sees that same bind-mounted file
 # at a different absolute path, so every container-side read returned
 # `{"entities":[],"relations":[]}` and every write went nowhere. Sixteen days,
@@ -54,7 +54,7 @@
 # and `createEntities` each start with `loadGraph()`. Send both down one pipe
 # and `createEntities` can load the pre-delete graph, see the entity still
 # present, filter it out as already-existing and create nothing - while
-# reporting success. Observed against Sean's live install on the second run:
+# reporting success. Observed against the V1 reference install on the second run:
 # the first run passed (nothing to delete), every run after it failed with
 # "create_entities did not report creating". Process exit is the only ordering
 # barrier available without a stateful JSON-RPC client, so each mutation gets

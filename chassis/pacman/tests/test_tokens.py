@@ -54,7 +54,7 @@ class TestTokenShape(unittest.TestCase):
             self.assertNotIn(vowel, TOKEN_ALPHABET)
 
     def test_alphabet_excludes_visually_ambiguous_characters(self):
-        """Sean retypes these on a phone. i/l/1 and o/0 must not appear."""
+        """These get retyped on a phone. i/l/1 and o/0 must not appear."""
         for ambiguous in "ilo":
             self.assertNotIn(ambiguous, TOKEN_ALPHABET)
 

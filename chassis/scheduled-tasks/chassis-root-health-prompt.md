@@ -13,7 +13,7 @@ The runtime resolved the BAKED tree (`mode: baked`) but a usable LIVE tree exist
 1. Confirm the live tree is genuinely usable: `VERSION` readable, `scripts/` present, `scheduled-tasks/heartbeat-dispatcher.sh` present. Compare `live_version` vs `baked_version` from the gather output.
 2. The fix is a container restart so the entrypoint re-runs `resolve-chassis-root.sh` and picks the live tree: `docker compose pull && docker compose up -d` (or the install's `compose.sh` wrapper if an override is in play - never a bare `up -d` when an override exists, per the #100 fix).
 3. After the restart, re-read `$CUSTOMER_HOME/chassis-root.state.json` and confirm `mode` flipped to `live` and `error` is null. Do not mark the work done until it has.
-4. If a restart is disruptive (mid-task), post the finding to the ops channel and ask Sean before bouncing the container.
+4. If a restart is disruptive (mid-task), post the finding to the ops channel and ask the operator before bouncing the container.
 
 ### `chassis_root_assertion_failed`
 
@@ -31,7 +31,7 @@ The resolver hit an exit-5 assertion. The `error` field in the gather output tel
 
 1. Read the `error` field and the version fields; identify which failure mode above applies.
 2. Post a one-line summary to the install's ops channel: which tag fired, `mode`, `live_version` vs `baked_version`, and the fix you propose.
-3. Container restarts on the production stack are operator-visible - surface the fix for Sean's go-ahead rather than bouncing the container autonomously. Non-disruptive diagnosis (reading the state file, `docker inspect`) needs no approval.
+3. Container restarts on the production stack are operator-visible - surface the fix for the operator's go-ahead rather than bouncing the container autonomously. Non-disruptive diagnosis (reading the state file, `docker inspect`) needs no approval.
 
 ## Important
 

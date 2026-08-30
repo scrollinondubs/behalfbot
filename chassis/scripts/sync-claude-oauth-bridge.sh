@@ -45,7 +45,7 @@ set -euo pipefail
 
 CRED_FILE="${HOME}/.claude/.credentials.json"
 TMP="${CRED_FILE}.tmp"
-LOG_DIR="${LOG_DIR:-${HOME}/work/new-jaxity/logs/scheduled}"
+LOG_DIR="${LOG_DIR:-${CUSTOMER_HOME:-${HOME}/.behalfbot}/logs/scheduled}"
 LOG="${LOG_DIR}/claude-oauth-bridge-sync.log"
 
 mkdir -p "$LOG_DIR" "$(dirname "$CRED_FILE")"

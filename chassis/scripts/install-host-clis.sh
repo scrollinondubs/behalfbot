@@ -6,10 +6,11 @@
 # brew (macOS) or apt (Linux). Idempotent: re-running re-checks each CLI
 # and skips ones already installed.
 #
-# Why this exists (Sean's 2026-05-25 directive, <v1-reference-install>#700 follow-up):
-# Different installs need different CLIs. Sean's install needs vercel,
-# turso, stripe (in addition to gh + awscli which the chassis image bakes).
-# Ben's may not. Marc's may use a fourth combo. Baking every possible CLI
+# Why this exists (2026-05-25, <v1-reference-install>#700 follow-up):
+# Different installs need different CLIs. One install may need vercel, turso
+# and stripe (in addition to gh + awscli, which the chassis image bakes); the
+# next needs none of them, and a third needs a combination of its own. Baking
+# every possible CLI
 # into the image bloats the image and forces every installer to update on
 # every CLI version bump. Instead: per-instance install at bootstrap time
 # based on what the install profile says the customer needs.

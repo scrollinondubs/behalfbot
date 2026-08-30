@@ -56,7 +56,7 @@ CUSTOMER_HOME="${CUSTOMER_HOME:-${HOME}/.behalfbot}"
 # Resolve VERSION + CHANGELOG paths RELATIVE TO THIS SCRIPT, not $CHASSIS_HOME.
 # Survives both install layouts:
 #   - vendored-subtree (chassis lives at ${CHASSIS_HOME}/chassis/)
-#   - overlay-mount (Jax-style #136, chassis lives at ${CHASSIS_HOME}/chassis/chassis/)
+#   - overlay-mount (reference-install layout #136, chassis lives at ${CHASSIS_HOME}/chassis/chassis/)
 # Either way, this script is at <chassis>/scripts/, so VERSION is at ../VERSION.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOCAL_VERSION_FILE="${SCRIPT_DIR}/../VERSION"

@@ -7,7 +7,7 @@
 #     (i.e. don't start with `/` and don't start with `~`). The chassis
 #     dispatcher cd's to $CHASSIS_HOME before evaluating gather_cmd, so
 #     relative paths resolve correctly under both host and container.
-#     Absolute paths (Sean's V1 install had `$CHASSIS_HOME/scripts/...`)
+#     Absolute paths (the V1 reference install had `$CHASSIS_HOME/scripts/...`)
 #     are non-portable and break inside the chassis container.
 #
 #   - Referenced gather scripts have portable shebangs:
