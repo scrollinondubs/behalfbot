@@ -6,7 +6,7 @@ carries its own selector until the chassis grows one." Pacman is chassis-core,
 not a plugin, so it cannot carry a third copy of that selector.
 
 Deliberately NOT an ORM and deliberately not a backend selector. The chassis
-already decided Postgres is canonical (Sean's "Postgres from start" call,
+already decided Postgres is canonical (the "Postgres from start" call,
 docker-compose.yml line 9). The dating plugin's selector exists because BFL
 predates that call and still has a SQLite mirror to keep alive; core code has
 no such history and should not inherit the branch.
@@ -23,7 +23,7 @@ DSN resolution order (first non-empty wins):
                            accepted here so an install that set only that one
                            does not need a second variable.
   3. JAX_PG_DSN          - host-side legacy fallback, per the reference
-                           install's docs/jax-db.md. Present so host-run
+                           install's DB docs. Present so host-run
                            scripts (migrations, one-off drains) work outside
                            the container without re-exporting.
 

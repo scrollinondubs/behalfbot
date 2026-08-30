@@ -16,7 +16,7 @@ You will receive the gather output as JSON: `{"count": N, "issues": [...], "chec
 
 1. `docker logs <c> --tail 100` and `docker inspect <c>` to establish the cause.
 2. Post a one-line summary to the install's ops channel: which container, which tag, the exit cause from the logs.
-3. Restarting production containers is operator-visible - surface the fix for Sean's go-ahead unless it is an obvious transient that has already self-recovered. Diagnosis (logs, inspect) needs no approval.
+3. Restarting production containers is operator-visible - surface the fix for the operator's go-ahead unless it is an obvious transient that has already self-recovered. Diagnosis (logs, inspect) needs no approval.
 4. If `behalfbot` itself was the down container, note how long it was down (from `docker inspect .State.StartedAt` / `FinishedAt`) - a dead dispatcher means every heartbeat was silent for that window.
 
 ## STRUCTURAL coverage note - the fully-dead-behalfbot blind spot

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """daily-log-gather.py - Multi-surface daily activity gather for the daily-log heartbeat.
 
-Pre-fetches the day's activity across every operational surface the customer's
-Jax touches, then emits a single JSON payload on stdout for the prompt to
+Pre-fetches the day's activity across every operational surface the install's
+assistant touches, then emits a single JSON payload on stdout for the prompt to
 consume. Runs on the host / dispatcher context (not inside Claude), so all
 API access uses env vars + shell tools, never MCP.
 
@@ -13,12 +13,12 @@ Contract (per chassis gather-script template):
   - non-zero exit ONLY on invariant violations (e.g. can't emit JSON)
 
 Design goals:
-  1. Repo scope is DYNAMIC: query jacketyjax's viewer graph for every repo
-     with recent activity, not scrollinondubs-only. Rationale: customer
-     installs on the VCL platform will have students assigning tasks to Jax
-     on their own project repos.
-  2. Postmortem source is Discord #jax message mining (regex patterns
-     against bot-authored messages in the last 24h).
+  1. Repo scope is DYNAMIC: query DAILY_LOG_GH_USER's viewer graph for every
+     repo with recent activity, not one hardcoded org. Rationale: collaborators
+     assign work to the assistant on their own project repos, and a static org
+     allowlist would silently drop it.
+  2. Postmortem source is message mining in the install's primary Discord
+     channel (regex patterns against bot-authored messages in the last 24h).
   3. Reflection section is prompt-side; this script only supplies raw
      material.
   4. Operational surfaces scanned: GitHub, Gmail, second brain, Discord.
@@ -46,9 +46,9 @@ The backend now decides which path runs:
 
 Env var contract (chassis is generic; customer install sets these):
   CHASSIS_HOME                     - customer install root (required)
-  DAILY_LOG_GH_USER                - GitHub username Jax pushes as
-  DAILY_LOG_GMAIL_IDENTITY         - Gmail address Jax sends from
-  DAILY_LOG_DISCORD_CHANNEL_ID     - #jax channel ID for postmortem mining
+  DAILY_LOG_GH_USER                - GitHub username the assistant pushes as
+  DAILY_LOG_GMAIL_IDENTITY         - Gmail address the assistant sends from
+  DAILY_LOG_DISCORD_CHANNEL_ID     - primary channel ID for postmortem mining
   DAILY_LOG_SIYUAN_URL             - SiYuan HTTP API URL (default: $SIYUAN_URL)
   DAILY_LOG_SIYUAN_TOKEN           - SiYuan API token   (default: $SIYUAN_TOKEN)
   DAILY_LOG_EXTRA_METRICS_SCRIPT   - path to a customer-side script that emits
@@ -277,8 +277,8 @@ def gather_github(gh_user: str, since: datetime, until: datetime, *, verbose: bo
                 "closed_unmerged": closed_unmerged,
             }
 
-        # Step 3: open issues where Jax commented but someone else spoke last,
-        # OR Jax spoke last and is waiting. Best-effort search.
+        # Step 3: open issues where the assistant commented but someone else
+        # spoke last, OR it spoke last and is waiting. Best-effort search.
         issue_data = run_json(
             [
                 "gh", "issue", "list",
@@ -532,7 +532,7 @@ def gather_via_adapter(backend: str, since: datetime, until: datetime,
 
 def gather_discord_postmortems(channel_id: str, token: str, since: datetime,
                                *, verbose: bool) -> tuple[list[dict], list[str]]:
-    """Fetch recent messages from `#jax` and regex-extract postmortem candidates."""
+    """Fetch recent channel messages and regex-extract postmortem candidates."""
     warnings: list[str] = []
     postmortems: list[dict] = []
     url = (

@@ -1,6 +1,6 @@
 # Bootstrap audit triage
 
-The chassis `bootstrap-audit.sh` routine has flagged one or more failing checks on this install. Each failure represents a silent install gap that, left unfixed, will surface later as a behavior bug the installer notices and Jax has to chase down.
+The chassis `bootstrap-audit.sh` routine has flagged one or more failing checks on this install. Each failure represents a silent install gap that, left unfixed, will surface later as a behavior bug the installer notices and the assistant has to chase down.
 
 ## What you have
 
@@ -18,17 +18,17 @@ The transcript walks five known install gaps:
 
 1. **Read the transcript file** to see exactly which checks failed and what fix commands the audit suggested.
 2. **Triage by severity.** A missing `origin` or missing backup row is recoverable any time. A non-loaded LaunchDaemon means the bot has been silent on Discord since the failure started - higher priority.
-3. **Propose a fix plan** in a Discord message to `#jax-ops`. Include:
+3. **Propose a fix plan** in a Discord message to the install's ops channel (`discord_channels.ops_label` in `chassis.config.yaml`; runtime ID in `DISCORD_OPS_CHANNEL_ID`). Include:
    - Which gap failed
    - The fix command from the transcript
-   - Whether you need Sean's `sudo` (LaunchDaemon installs do; backup row does not)
+   - Whether you need the operator's `sudo` (LaunchDaemon installs do; backup row does not)
    - An estimate of any ongoing impact (e.g. "Discord has been routing to a dead session for N days")
-4. **Do not auto-execute** a `sudo` command. Surface for Sean's approval first. Non-sudo fixes (HEARTBEATS.md append, `git remote set-url`) can be done via PR following the normal workflow.
+4. **Do not auto-execute** a `sudo` command. Surface for the operator's approval first. Non-sudo fixes (HEARTBEATS.md append, `git remote set-url`) can be done via PR following the normal workflow.
 
 ## Important
 
-- The audit ran on a recurring weekly schedule. Same failure two weeks in a row means the first triage didn't stick. Read the prior week's discord message (search `#jax-ops` for `bootstrap-audit`) before suggesting the same fix again.
-- If you can't make sense of a failure, ask Sean in `#jax-ops` rather than guessing. Better to escalate than auto-fix the wrong thing.
+- The audit ran on a recurring weekly schedule. Same failure two weeks in a row means the first triage didn't stick. Read the prior week's discord message (search the ops channel for `bootstrap-audit`) before suggesting the same fix again.
+- If you can't make sense of a failure, ask the operator in the ops channel rather than guessing. Better to escalate than auto-fix the wrong thing.
 
 ## Out of scope
 

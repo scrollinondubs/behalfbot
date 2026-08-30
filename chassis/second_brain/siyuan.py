@@ -1,6 +1,6 @@
 """SiYuan adapter — block-based notes via SiYuan's HTTP kernel API.
 
-Ports the call patterns Sean's V1 <v1-reference-install> instance uses (briefing-siyuan-crosslink.py,
+Ports the call patterns the V1 <v1-reference-install> instance uses (briefing-siyuan-crosslink.py,
 generate-dossier.py, pacman-queue-add.py). Every operation hits the local SiYuan
 kernel, typically reverse-proxied through a per-install host for phone-clickable
 deeplinks (see SIYUAN_DEEPLINK_BASE below - the host is never hardcoded here).

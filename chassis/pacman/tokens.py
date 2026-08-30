@@ -38,7 +38,7 @@ Three constraints drove it, in order of how expensive they are to get wrong:
    ever being read as a token, and keeps generated tokens from being obscene
    or confusing.
 
-3. **Sean approves from his phone.** Six characters, one case, no digits to
+3. **The operator approves from a phone.** Six characters, one case, no digits to
    confuse with letters, and no visually ambiguous pairs - the alphabet has no
    `i`/`l`/`1`, no `o`/`0`. A 32-character Notion UUID fails this badly enough
    that the design note called it out by name.

@@ -1,7 +1,7 @@
 # daily-log heartbeat
 
-Nightly synthesis of every operational surface Jax touched over the past 24
-hours. Produces a structured markdown log under SiYuan that the morning
+Nightly synthesis of every operational surface the assistant touched over the
+past 24 hours. Produces a structured markdown log under SiYuan that the morning
 briefing consumes for context.
 
 Ships in chassis as of PR
@@ -23,15 +23,15 @@ Ships in chassis as of PR
 Uses `gh api graphql` to list every repo the `DAILY_LOG_GH_USER` viewer has
 push access to, ordered by recent push. Any repo pushed in the last 14
 days gets its PRs + open issues scanned. This is deliberately dynamic:
-on the VCL platform, customers will have students assigning tasks on
-their own repos, and the daily log needs to capture that activity without
+customers routinely have collaborators assigning work on repos outside
+their own org, and the daily log needs to capture that activity without
 a hardcoded org allowlist.
 
 For each active repo:
 
 - PRs merged / opened / closed-unmerged in the 24h window by
   `DAILY_LOG_GH_USER`
-- Open issues where Jax has commented (candidate "awaiting input")
+- Open issues where the assistant has commented (candidate "awaiting input")
 
 ### Gmail
 
@@ -51,7 +51,7 @@ first 300 chars of first-paragraph content as a hint for the prompt.
 
 Fetches the last 100 messages from `DAILY_LOG_DISCORD_CHANNEL_ID` via the
 Discord HTTP API. Regex-filters bot-authored messages against a fixed
-pattern set that captures Jax's usual postmortem shape:
+pattern set that captures the assistant's usual postmortem shape:
 
 - `Surprises:` / `Sanity-check priorities:` / `Review priorities:`
 - `deviated from spec` / `didn't work` / `broke because`
@@ -65,9 +65,9 @@ to turn into `Learnings & Tribal Knowledge` bullets.
 | Var | Required | Purpose |
 |---|---|---|
 | `CHASSIS_HOME` | yes | Customer install root (already set by dispatcher) |
-| `DAILY_LOG_GH_USER` | recommended | GitHub username Jax pushes as (e.g. `jacketyjax`). If unset, GitHub scan is skipped with a warning. |
-| `DAILY_LOG_DISCORD_CHANNEL_ID` | recommended | The `#jax` channel ID for postmortem mining. If unset, Discord scan is skipped. |
-| `DAILY_LOG_GMAIL_IDENTITY` | optional | Gmail address Jax sends from (e.g. `jax@vibecodelisboa.com`). Enables prompt-side Gmail MCP search. |
+| `DAILY_LOG_GH_USER` | recommended | GitHub username the assistant pushes as (e.g. `<your-agent-gh-user>`). If unset, GitHub scan is skipped with a warning. |
+| `DAILY_LOG_DISCORD_CHANNEL_ID` | recommended | The primary conversation channel ID (`DISCORD_PRIMARY_CHANNEL_ID`) for postmortem mining. If unset, Discord scan is skipped. |
+| `DAILY_LOG_GMAIL_IDENTITY` | optional | Gmail address the assistant sends from (e.g. `<your-agent>@<your-domain>`). Enables prompt-side Gmail MCP search. |
 | `DAILY_LOG_SIYUAN_URL` | optional | SiYuan HTTP API base URL. Falls back to `SIYUAN_URL`. |
 | `DAILY_LOG_SIYUAN_TOKEN` | optional | SiYuan API token. Falls back to `SIYUAN_TOKEN`. |
 | `DAILY_LOG_EXTRA_METRICS_SCRIPT` | optional | Path to a customer-side executable that emits extra metrics as JSON. Chassis calls it and merges output under `metrics.custom`. |
@@ -88,7 +88,7 @@ The gather never crashes.
 
 2. Fill in the four `{{ ... }}` placeholders in the copied prompt:
 
-   - `{{ CUSTOMER_JAX_IDENTITY }}` - `"Sean Tierney's autonomous assistant"`, etc.
+   - `{{ CUSTOMER_AGENT_IDENTITY }}` - `"<principal full name>'s autonomous assistant"`
    - `{{ CUSTOMER_ORG_HANDLES }}` - space-separated org/domain handles
      for the Gmail `in:sent from:` filter
    - `{{ CUSTOMER_DAILY_LOG_PARENT_ID }}` - SiYuan block ID of the parent
@@ -116,7 +116,7 @@ The gather never crashes.
 
    ```bash
    DAILY_LOG_GH_USER=your-gh-username
-   DAILY_LOG_GMAIL_IDENTITY=jax@your-domain.com
+   DAILY_LOG_GMAIL_IDENTITY=your-agent@your-domain.com
    DAILY_LOG_DISCORD_CHANNEL_ID=1234567890123456789
    ```
 
@@ -138,45 +138,42 @@ The gather never crashes.
 without touching chassis. The script should emit a single JSON object on
 stdout; chassis merges it under `metrics.custom`.
 
-Example for Sean's install (adds dating funnel + outreach counts):
+The script lives customer-side, under `${CUSTOMER_HOME}/scripts/`. Shape:
 
 ```bash
 #!/bin/bash
-# scripts/daily-log-extra-metrics.sh
-# Emits Sean-install-specific metrics for the daily-log gather.
+# ${CUSTOMER_HOME}/scripts/daily-log-extra-metrics.sh
+# Emits install-specific metrics for the daily-log gather.
 
 set -euo pipefail
-: "${CHASSIS_HOME:?CHASSIS_HOME must be set}"
+: "${CUSTOMER_HOME:?CUSTOMER_HOME must be set}"
 
 YESTERDAY=$(date -v-1d +%Y-%m-%d 2>/dev/null || date -d 'yesterday' +%Y-%m-%d)
 
-dating_swipes=$(grep -h '"action":"swipe"' \
-    "${CHASSIS_HOME}/logs/dating/${YESTERDAY}-"*.jsonl 2>/dev/null | wc -l | tr -d ' ')
-outreach_sent=$(sqlite3 "${CHASSIS_HOME}/state/outreach.db" \
-    "SELECT COUNT(*) FROM email_outreach_log WHERE date(sent_at) = '${YESTERDAY}'" \
+# Count whatever this install cares about. One line per metric, then emit a
+# single flat JSON object. Anything unreadable must degrade to 0 rather than
+# fail - a crashing extras script must not take the whole gather down.
+widgets_shipped=$(sqlite3 "${CUSTOMER_HOME}/state/your-app.db" \
+    "SELECT COUNT(*) FROM shipments WHERE date(shipped_at) = '${YESTERDAY}'" \
     2>/dev/null || echo 0)
 
-jq -n \
-    --argjson swipes "${dating_swipes:-0}" \
-    --argjson outreach "${outreach_sent:-0}" \
-    '{dating_swipes: $swipes, outreach_sent: $outreach}'
+jq -n --argjson widgets "${widgets_shipped:-0}" '{widgets_shipped: $widgets}'
 ```
 
-Then in `.env`:
+Then in `.env`, pointing at your own copy:
 
 ```bash
-DAILY_LOG_EXTRA_METRICS_SCRIPT=/Users/jax/.behalfbot/scripts/daily-log-extra-metrics.sh
+DAILY_LOG_EXTRA_METRICS_SCRIPT=${CUSTOMER_HOME}/scripts/daily-log-extra-metrics.sh
 ```
 
 ## Design decisions
 
-- **Dynamic repo discovery** over a static allowlist. Rationale: on the VCL
-  platform, students will start assigning tasks to Jax on their own project
-  repos. Hardcoding the customer's own org would silently drop that
-  activity.
+- **Dynamic repo discovery** over a static allowlist. Rationale: collaborators
+  assign work to the assistant on their own project repos. Hardcoding the
+  customer's own org would silently drop that activity.
 - **Postmortem mining from Discord** over an every-subagent-writes log
-  pipeline. Rationale: postmortems already surface in `#jax` when Jax
-  reports back on PRs and heartbeats. Adding a parallel log write in every
+  pipeline. Rationale: postmortems already surface in the primary channel
+  when the assistant reports back on PRs and heartbeats. Adding a parallel log write in every
   subagent is deferred until that first path proves insufficient.
 - **Reflection header stays even when empty.** Rationale: consistency
   across daily logs makes the SiYuan tree scannable at a glance. An empty

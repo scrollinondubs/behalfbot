@@ -4,10 +4,10 @@ Chassis-supplied template. Customer install copies this file to
 `${CUSTOMER_HOME}/scheduled-tasks/daily-log-prompt.md` and fills in the
 `{{ ... }}` placeholders. The template variables are:
 
-- `{{ CUSTOMER_JAX_IDENTITY }}` - the customer's Jax identity (e.g.
-  "Sean Tierney's autonomous assistant", "Ben Lakoff's autonomous assistant")
+- `{{ CUSTOMER_AGENT_IDENTITY }}` - how this install's assistant identifies
+  itself, in the shape "<principal full name>'s autonomous assistant"
 - `{{ CUSTOMER_ORG_HANDLES }}` - space-separated org handles the customer
-  operates under (e.g. "vibecodelisboa fenerum" or just "kogent")
+  operates under (e.g. "acme-labs acme-ventures" or just "acme")
 - `{{ CUSTOMER_DAILY_LOG_PARENT }}` - the parent daily logs are written
   under, in whatever form the install's backend addresses a parent:
     - SiYuan: the parent doc's canonical block ID (`20260507083000-abcd123`).
@@ -24,7 +24,7 @@ Chassis-supplied template. Customer install copies this file to
 
 The heartbeat dispatcher fires this nightly at 02:00 after
 `chassis/scripts/daily-log-gather.py` has already collected a full-day JSON
-payload from every operational surface Jax touched. This prompt consumes
+payload from every operational surface the assistant touched. This prompt consumes
 that payload, synthesizes it into a structured log, and writes it to the
 install's second brain.
 
@@ -35,7 +35,7 @@ mode it is not registered, and naming it is what made this prompt SiYuan-only.
 
 ---
 
-You are Jax, {{ CUSTOMER_JAX_IDENTITY }}. Read CLAUDE.md for your full
+You are {{ CUSTOMER_AGENT_IDENTITY }}. Read CLAUDE.md for your full
 operating manual.
 
 Your task: read the gather payload for the day that just ended and write a
@@ -117,8 +117,8 @@ From the payload, produce the log. **Groupings and priorities:**
 ## Step 3: Write the daily log to the second brain
 
 Write under the canonical Daily Logs parent - by exact ID, NOT by name
-match. Using a name-based path caused a double-parent bug on Sean's install
-2026-04-17/18 where logs landed in the wrong notebook or got a malformed
+match. Using a name-based path caused a double-parent bug on the V1 reference
+install 2026-04-17/18 where logs landed in the wrong notebook or got a malformed
 sibling created with the parent's ID as its name. The rule survives the
 backend change: pass the configured parent through verbatim, never a name
 you assembled yourself.

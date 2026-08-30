@@ -8,10 +8,10 @@
 # starts, so the installer sees the emit in the ops channel immediately on
 # first container start.
 #
-# Why this exists: installer-2 install + installer-1 install both stalled on "what is
-# my bot's user ID?" during Phase 2 of the Discord channel pattern (PR #51).
-# The ID is only visible in Discord Developer Portal and was unknown until Sean
-# fished it out of screenshots. This script makes it self-reported.
+# Why this exists: two early installs both stalled on "what is my bot's user
+# ID?" during Phase 2 of the Discord channel pattern (PR #51). The ID is only
+# visible in the Discord Developer Portal, and on both installs it had to be
+# fished out of screenshots by hand. This script makes it self-reported.
 # See issue #53 item 4.
 #
 # Flow:
@@ -80,9 +80,9 @@ fi
 # Build the three-line message (or a degraded version when ID unavailable).
 if [[ -n "$BOT_USER_ID" ]]; then
     OAUTH_URL="https://discord.com/oauth2/authorize?client_id=${BOT_USER_ID}&scope=bot+applications.commands&permissions=379968"
-    LINE1="Behalfbot connected as ${BOT_USERNAME} (Discord user ID: ${BOT_USER_ID}). Share this with Sean to add me to the install channel."
+    LINE1="Behalfbot connected as ${BOT_USERNAME} (Discord user ID: ${BOT_USER_ID}). You need this ID to add me to the install channel."
     LINE2="OAuth invite URL: ${OAUTH_URL}"
-    LINE3="Once added: run \`/discord:access group add <channel_id> --no-mention --allow <SEAN_ID>,<JAXBOT_ID>\` on this host to allowlist the channel."
+    LINE3="Once added: run \`/discord:access group add <channel_id> --no-mention --allow <INSTALLER_DISCORD_USER_ID>,<BOT_USER_ID>\` on this host to allowlist the channel."
     if [[ -n "$IDENTITY_WARNING" ]]; then
         LINE3="${LINE3}\n\n${IDENTITY_WARNING}"
     fi

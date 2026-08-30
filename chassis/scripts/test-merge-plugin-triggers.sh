@@ -99,7 +99,7 @@ check "s1 alpha trigger merged" "1" "$(grep -c 'name: alpha-trigger' <<<"$MERGED
 check "s1 beta trigger merged" "1" "$(grep -c 'name: beta-trigger' <<<"$MERGED_OUT")"
 
 # --- scenario 2: one plugin only in customer-local plugins/ -----------------
-# The behaviour that DID work pre-fix (e.g. Sean's midnight-oil) must keep
+# The behaviour that DID work pre-fix (e.g. the midnight-oil plugin) must keep
 # working: a plugin with no manifest in the resolved root but a manifest
 # under $CUSTOMER_HOME/plugins/<name>.
 fresh_env s2

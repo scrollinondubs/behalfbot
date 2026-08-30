@@ -2,8 +2,8 @@
 """pacman-migrate-siyuan-queue.py - One-time backfill of the live SiYuan queue.
 
 Reads the URL blocks under the SiYuan /To Investigate parent and writes one
-chassis_pacman_queue row per URL. Runs once per install; Sean's is the only
-install with a populated queue.
+chassis_pacman_queue row per URL. Runs once per install, and is a
+no-op on any install whose SiYuan queue is empty.
 
 Idempotent. Every row it writes carries `legacy_block_id`, and the partial
 unique index ux_pacman_queue_legacy_block_url on (legacy_block_id, url) makes

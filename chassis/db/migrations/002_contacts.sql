@@ -7,7 +7,7 @@
 -- every other surface references a contact by ID instead of copying its
 -- fields.
 --
--- Slice 1 scope, per Sean's answers in the issue thread on 2026-07-22:
+-- Slice 1 scope, per the issue thread on 2026-07-22:
 --   - Soft delete only, no hard-delete path yet. A deleted contact keeps its
 --     row and gets `deleted_at` set, so a reference from a note degrades to
 --     "this contact was deleted" instead of erroring or silently resolving to
@@ -45,8 +45,8 @@ CREATE INDEX IF NOT EXISTS ix_contacts_email
     ON chassis_contacts (email)
     WHERE email IS NOT NULL;
 
--- Search excludes tombstoned contacts by default (Sean's default from the
--- issue thread), so the common-path query only ever scans live rows.
+-- Search excludes tombstoned contacts by default (the documented default from
+-- the issue thread), so the common-path query only ever scans live rows.
 CREATE INDEX IF NOT EXISTS ix_contacts_live
     ON chassis_contacts (name)
     WHERE deleted_at IS NULL;

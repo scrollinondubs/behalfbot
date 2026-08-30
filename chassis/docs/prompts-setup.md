@@ -80,7 +80,7 @@ If any required value is empty or still has a `<placeholder>` shape, the script 
 Currently rendered:
 
 - `plugins/angel-protocol/scheduled-tasks/welfare-check-prompt.md`
-- `plugins/angel-protocol/scheduled-tasks/dormant-sean-prenudge-prompt.md`
+- `plugins/angel-protocol/scheduled-tasks/dormant-operator-prenudge-prompt.md`
 - `plugins/remarkable/scheduled-tasks/remarkable-health-alert-prompt.md`
 
 The script discovers `*.md.template` by glob — add new templates by dropping them next to existing prompts. They render on the next `bootstrap-prompts.sh` invocation.

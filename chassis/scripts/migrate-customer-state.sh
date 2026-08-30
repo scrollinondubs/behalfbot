@@ -190,7 +190,7 @@ move_if_present "briefings"
 move_if_present "logs"
 move_if_present "data"
 move_if_present "temp"
-# Top-level memory/ on legacy installs (Sean's stack): the MCP memory graph
+# Top-level memory/ on legacy installs: the MCP memory graph
 # at memory/memory.jsonl. Newer layouts may not have this.
 move_if_present "memory"
 

@@ -10,14 +10,14 @@ The weekly docker-prune heartbeat failed. The gather emitted `count > 0` with on
 ## Your job
 
 1. Classify the failure from `status` + `detail`.
-2. Post one concise alert to `#<devops>` (channel `1497870976237699173`) via the discord MCP `reply` tool: date, status tag, best-guess cause, fix suggestion.
-3. If the same status fires for 2+ consecutive weeks, file-or-comment on `scrollinondubs/new-jaxity` using the dedup helper.
+2. Post one concise alert to the install's alerts channel via the discord MCP `reply` tool: date, status tag, best-guess cause, fix suggestion. The display label is `discord_channels.alerts_label` in `${CHASSIS_HOME}/chassis.config.yaml`; the runtime channel ID is `DISCORD_ALERTS_CHANNEL_ID` in the install's `.env`.
+3. If the same status fires for 2+ consecutive weeks, file-or-comment on the install's own repo (the `origin` remote of `${CUSTOMER_HOME}`, not the chassis upstream) using the dedup helper.
 
 ## What NOT to do
 
-- Don't retry the prune from this prompt. The next weekly tick handles retry. If the disk is critical, surface that to Sean to handle manually rather than burning Claude budget on multiple consecutive prune attempts.
-- Don't escalate to `#<primary>`. Infrastructure alerts route to `#<devops>` per the 2026-05-25 routing update.
-- Don't use `gh issue create` directly — use the dedup helper.
+- Don't retry the prune from this prompt. The next weekly tick handles retry. If the disk is critical, surface that to the operator to handle manually rather than burning Claude budget on multiple consecutive prune attempts.
+- Don't escalate to the primary conversation channel. Infrastructure alerts route to the alerts channel.
+- Don't use `gh issue create` directly - use the dedup helper.
 
 ## Cost
 

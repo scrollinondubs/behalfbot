@@ -9,7 +9,7 @@
 # project_behalfbot_install_checklist_gaps_2026_06_11.md):
 #
 #   Gap 1 - HEARTBEATS.md is missing an `s3-backup` row.
-#           Discovered on Ben Lakoff's install 2026-06-11. S3 backup runs
+#           Discovered on a beta install 2026-06-11. S3 backup runs
 #           once at bootstrap then never again, no alert.
 #   Gap 2 - `git remote -v` returns no customer-owned URL.
 #           Same install. Means customizations only exist on the install
@@ -149,8 +149,8 @@ audit_gap_1_backup_heartbeat() {
         return
     fi
     # Accept any heartbeat whose section header or table row contains "backup"
-    # (Sean's install uses siyuan-backup, turso-backup, n8n-backup; Lakoff's
-    # was s3-backup; future installs may use restic-backup, b2-backup, etc.)
+    # (installs in the wild use siyuan-backup, turso-backup, n8n-backup,
+    # s3-backup; future installs may use restic-backup, b2-backup, etc.)
     if grep -qiE '^(## |\| *)[a-z0-9_-]*backup' "$hb"; then
         local found
         found="$(grep -ioE '^(## |\| *)[a-z0-9_-]*backup[a-z0-9_-]*' "$hb" | sed -E 's/^(## |\| *)//' | sort -u | tr '\n' ' ')"

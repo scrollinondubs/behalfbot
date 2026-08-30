@@ -9,7 +9,7 @@
 # only removes images currently NOT used by any container.
 #
 # Why in-container rather than host launchd:
-# Per Sean's 2026-05-25 directive: "any interaction with the [docker daemon]
+# Per the 2026-05-25 operator directive: "any interaction with the [docker daemon]
 # that can run in the container should be there. Dating is the only thing
 # that should run external to the container." This script + the matching
 # heartbeat entry move what was previously a host-resident launchd job

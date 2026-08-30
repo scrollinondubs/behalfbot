@@ -5,7 +5,7 @@
 # debounce and implemented as a permanent mute. It matched on version alone
 # and never read the `offered_at` the script itself writes, so an installer
 # who was busy the week they were offered an update was silently opted out of
-# that version forever. Sean's install was offered 0.4.0 on 2026-08-03, did
+# that version forever. The V1 reference install was offered 0.4.0 on 2026-08-03, did
 # not apply it, and returned `{"count": 0, "reason": "already_offered"}` on
 # every check after that.
 #

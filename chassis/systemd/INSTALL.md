@@ -90,7 +90,7 @@ Findings JSONL lands at `${CHASSIS_HOME}/logs/scheduled/heartbeat-reconciler-fin
 
 ### Permission denied on `~/behalfbot/...`
 
-If you used `User=behalfbot` (system-scoped) but the chassis tree lives at `/home/sean/behalfbot/`, systemd won't have permission. Either:
+If you used `User=behalfbot` (system-scoped) but the chassis tree lives at `/home/<your-user>/behalfbot/`, systemd won't have permission. Either:
 - Re-clone the chassis as the `behalfbot` user, OR
 - Drop `User=` (runs as root — not recommended), OR
 - Switch to user-scoped systemd (`systemctl --user`)
