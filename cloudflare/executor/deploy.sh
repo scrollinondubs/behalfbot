@@ -21,10 +21,12 @@
 #   CLOUDFLARE_API_TOKEN=... ./deploy.sh
 #
 # The API token is the account-owned "behalfbot-fable-cf-containers" item in
-# Vaultwarden. The ambient CLOUDFLARE_API_TOKEN in the Jax install env
-# belongs to the AllBets account and targets the WRONG account; the
-# account_id pin in wrangler.jsonc forces the right one regardless, but
-# check `npx wrangler whoami` if a deploy looks odd.
+# Vaultwarden. There is no ambient CLOUDFLARE_API_TOKEN in the Jax install
+# env any more - the AllBets mapping that used to shadow this one was
+# removed on 2026-08-19 (verified again 2026-08-30), so the export is now
+# the only source rather than an override. The account_id pin in
+# wrangler.jsonc forces the right account regardless, but check
+# `npx wrangler whoami` if a deploy looks odd.
 #
 # DO NOT run without Sean's explicit approval.
 

@@ -88,9 +88,13 @@ only (Workers Scripts:Edit, Workers Containers:Edit, Cloudchamber:Edit,
 Workers R2 Storage:Edit, Account Settings:Read). Wrangler reads it from
 the `CLOUDFLARE_API_TOKEN` env var; it is never hardcoded anywhere.
 
-**Trap:** the ambient `CLOUDFLARE_API_TOKEN` in the Jax install
-environment belongs to the AllBets account. Every deploy shell must
-override it from Vaultwarden first:
+**History:** the Jax install environment used to carry an ambient
+`CLOUDFLARE_API_TOKEN` belonging to the AllBets account, which shadowed
+this one. It was removed from the Vaultwarden hydration manifest on
+2026-08-19 (post-mortem `docs/postmortems/2026-08-19-executor-stale-since-july.md`
+in new-jaxity) and `.env` / `.env.baked` carry no `CLOUDFLARE_*` key as of
+2026-08-30. Every deploy shell still exports it from Vaultwarden - that is
+now the only source, not an override:
 
 ```bash
 export BW_SESSION="$(bash /Users/jax/.behalfbot/scripts/bw-unlock.sh)"
