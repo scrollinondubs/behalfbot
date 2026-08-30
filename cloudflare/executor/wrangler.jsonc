@@ -5,12 +5,14 @@
 // "behalfbot-fable-cf-containers", stored in Vaultwarden). The token is
 // never written to this repo or baked into any file.
 //
-// AUTH TRAP: the ambient CLOUDFLARE_API_TOKEN in the Jax install env
-// (.env.baked) belongs to the AllBets account and targets the WRONG
-// account. Before any wrangler call, export the Vaultwarden token per
-// README.md and confirm `wrangler whoami` shows account
-// 8a119b24123c444dddea567ffde1a405. The account_id pin below forces the
-// correct account regardless.
+// HISTORICAL TRAP (resolved 2026-08-19): the Jax install env used to carry
+// an ambient CLOUDFLARE_API_TOKEN belonging to the AllBets account, which
+// shadowed this deploy token. That mapping was removed from the Vaultwarden
+// hydration manifest on 2026-08-19 and .env / .env.baked carry no
+// CLOUDFLARE_* key today (re-verified 2026-08-30). Still export the
+// Vaultwarden token per README.md and confirm `wrangler whoami` shows
+// account 8a119b24123c444dddea567ffde1a405 before deploying - the check is
+// cheap and the account_id pin below forces the correct account regardless.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "behalfbot-executor",
