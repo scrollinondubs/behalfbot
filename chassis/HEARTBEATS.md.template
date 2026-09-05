@@ -287,6 +287,50 @@ criticality: critical
 
 ---
 
+## credential-expiry (chassis-shipped, default-on)
+
+Hourly check that the credentials this install depends on are not about to
+expire. Alerts at T-7d and T-1d before an expiry, immediately on anything
+already expired or missing, and stays quiet in between - repeat suppression is
+per-check and keyed on the STAGE, never on the day count.
+
+The failure it exists for (scrollinondubs/new-jaxity#550): between 2026-09-01
+and 2026-09-05 the reference install's operator was off-grid and four
+credentials expired within days of each other. The Tailscale node key hit its
+180-day default expiry, which killed ssh and VNC in one move because the ssh
+hostname resolves to the Tailscale IP. The same morning the macOS Keychain
+entry `Claude Code-credentials` lost `claudeAiOauth.accessToken`, killing the
+host interactive Claude session. An iCloud trust token went three days later.
+Every channel for reporting any of it depended on one of them. Nothing warned,
+and `sync-claude-oauth-bridge.sh` had in fact detected the Keychain loss and
+logged it 288 times into a file nobody reads.
+
+Free: no model call, no paid API, no network beyond a local `tailscale
+status`. Built-in checks cover Tailscale (self plus every peer with a key
+expiry) and the two Claude credential stores; installs add their own via
+executable drop-ins in `${CUSTOMER_HOME}/scheduled-tasks/credential-checks.d/`.
+
+**Read the coverage note before trusting this.** The dispatcher runs inside
+the container, where there is no macOS Keychain and no tailscaled, so this
+registration alone covers only the credentials file, the refresh loop and the
+drop-ins. On a containerized install pair it with the host-side runner
+`credential-expiry-alert.sh`, which runs the same gather from a LaunchAgent
+and posts straight to the ops webhook with no model call - which also means it
+still works when the expired credential is Claude's own. Full setup:
+`chassis/docs/heartbeats/credential-expiry.md`.
+
+```yaml
+schedule: every 1h
+gather: state/chassis-root/scripts/gather-credential-expiry.sh
+condition: threshold count > 0
+prompt: state/chassis-root/scheduled-tasks/credential-expiry-prompt.md
+model: sonnet
+budget: 1
+criticality: critical
+```
+
+---
+
 ## Active heartbeats
 
 <!--
