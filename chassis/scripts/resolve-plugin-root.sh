@@ -268,10 +268,7 @@ if [[ -n "$compose_failed" ]]; then
     # negative subscripts need bash 4.3 and the macOS host runs /bin/bash 3.2,
     # where that expansion errors and silently yields the empty string - which
     # is exactly the empty-root outcome the exit-5 path exists to prevent.
-    fallback_root=""
-    if [[ "${#BAKED_ROOTS[@]}" -gt 0 ]]; then
-        fallback_root="${BAKED_ROOTS[$(( ${#BAKED_ROOTS[@]} - 1 ))]}"
-    fi
+    fallback_root="${BAKED_ROOTS[-1]:-}"
     log "ERROR: composed plugin tree (baked union and/or fetched overlay from $FETCHED_ROOT) is usable but could NOT be activated (compose failed under $CUSTOMER_HOME/state)"
     write_state baked "$fallback_root" "compose failed - overlay present but not active"
     printf '%s\n' "$fallback_root"
