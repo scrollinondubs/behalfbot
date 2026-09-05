@@ -35,6 +35,11 @@
 #                             among those failures before the #167 alarm
 #                             fires (guards against one flaky heartbeat
 #                             tripping a false "everything is down"). Default 2.
+#   DEDUPE_CHURN_WARN_THRESHOLD - consecutive fires with a CHANGED dedup
+#                             fingerprint before the dispatcher warns that a
+#                             heartbeat's dedupe_key is reading something
+#                             volatile and realert_after is therefore
+#                             suppressing nothing. Default 3.
 #   ANTHROPIC_API_KEY       — see comment block below — INTENTIONALLY UNSET
 #                             at top of this script so `claude -p` uses OAuth
 #                             (subscription billing) not PAYG.
@@ -46,6 +51,8 @@
 #   #20 cheap no-op gates short-circuit before any paid API call
 #   #24 trigger conditions matter more than query logic when debugging
 #   #26 LaunchDaemons survive reboot; LaunchAgents pause without GUI session
+#   #550 (new-jaxity) budget: is per-invocation, so it cannot stop a heartbeat
+#        whose condition never clears - see the fire-caps section below
 
 set -euo pipefail
 
@@ -231,8 +238,14 @@ get_state() {
 # the dispatcher firing pulse-triage twice 4s apart on 2026-07-30 - the
 # signature of a lost state write, most likely from two dispatcher runs
 # overlapping (acquire_lock's PID-file check is itself non-atomic).
+#
+# Takes an optional target path so the suppression ledger (new-jaxity#550) can
+# reuse the identical mutex rather than growing a second, subtly-different copy
+# of it. Defaults to $STATE_FILE, so every existing call site and
+# tests/test_state_write_race.sh are unchanged.
 _state_lock_acquire() {
-    local lock_dir="${STATE_FILE}.lock"
+    local target="${1:-$STATE_FILE}"
+    local lock_dir="${target}.lock"
     local waited_ms=0
     # Declared once, outside the loop - zsh prints "holder=<value>" to stdout
     # (like a bare `typeset holder` would) if `local holder` re-runs on a
@@ -260,7 +273,8 @@ _state_lock_acquire() {
 }
 
 _state_lock_release() {
-    rm -rf "${STATE_FILE}.lock"
+    local target="${1:-$STATE_FILE}"
+    rm -rf "${target}.lock"
 }
 
 set_state() {
@@ -489,16 +503,16 @@ evaluate_condition() {
         local op=$(echo "$rest" | awk '{print $2}')
         local target=$(echo "$rest" | awk '{print $3}')
 
-        local actual=0
         # Try JSON array length, then JSON object field. Reject non-JSON:
         # the old wc -l fallback treated any single-line output (including
         # `count=0`) as actual=1, which fired briefings every 10 min when
         # a gather script used key=value instead of JSON (PR #206 incident).
-        if echo "$gathered_data" | jq -e 'type == "array"' &>/dev/null; then
-            actual=$(echo "$gathered_data" | jq 'length')
-        elif echo "$gathered_data" | jq -e 'type == "object"' &>/dev/null; then
-            actual=$(echo "$gathered_data" | jq --arg f "$field" '.[$f] // 0')
-        else
+        #
+        # The read itself lives in threshold_actual() so the dedup fingerprint
+        # (new-jaxity#550) hashes the exact number this decision was made on,
+        # rather than a second, independently-drifting reading of the payload.
+        local actual=0
+        if ! actual=$(threshold_actual "$field" "$gathered_data"); then
             log "WARN $name — gather output is not JSON, treating as count=0 (first line: $(echo "$gathered_data" | head -1))"
             actual=0
         fi
@@ -882,6 +896,417 @@ run_output_validator() {
     return 1
 }
 
+# --- Daily fire caps, alert dedup, suppression ledger (new-jaxity#550) ---
+#
+# 2026-09-01 to 09-05, reference install: `repo-drift` fired 514 times in five
+# days for $45.79, 66% of all scheduled spend, and posted 50+ near-identical
+# alerts. Nothing here was broken. The gather correctly reported a dirty
+# working tree, the condition correctly evaluated true, and the auto-heal
+# correctly refused to touch a dirty tree. The condition simply could not
+# self-clear without a human, and the human was off-grid.
+#
+# `budget:` did not help: it is a per-invocation cap, so 514 runs at ~$0.089
+# each never came near it. Two things were missing and are added here.
+#
+#   1. A daily ceiling per heartbeat - `max_fires_per_day`, `max_usd_per_day`.
+#      Absolute: once hit, no more model runs for that heartbeat until the date
+#      rolls, and a changed condition does not lift it. A cap with an escape
+#      hatch is not a cap.
+#   2. An identity for the condition being alerted on - `realert_after`, plus
+#      an optional `dedupe_key` - so the same unresolved condition alerts once
+#      per window instead of once per tick.
+#
+# Both are opt-in. A heartbeat carrying none of these keys behaves exactly as
+# it did before, which is the backwards-compatibility contract for chassis
+# config fields.
+#
+# The fingerprint must not move while the underlying condition holds still.
+# This is the whole ballgame and it is easy to get wrong: repo-drift's own
+# alerts read "unresolved for 4 days", then "5 days", then "131h", then "180
+# hours", and its gather emits `condition_age_hours`, `dirty_oldest_age_hours`
+# and `ahead_newest_age_hours` alongside the actual finding. Hashing the gather
+# output, or the rendered alert prose, produces a fingerprint that never
+# matches itself and a cooldown that silently never fires. So the default
+# identity is the value the dispatcher's own threshold condition tested - the
+# number it made its fire/no-fire decision on - and anything more precise is
+# supplied explicitly as a jq expression. There is deliberately no
+# strip-the-volatile-looking-field-names heuristic: guessing which keys are
+# volatile from their names is the same bug wearing a different hat.
+
+DEDUPE_FINGERPRINT=""
+DEDUPE_REASON=""
+CAP_REASON=""
+
+SUPPRESSION_LEDGER="$CUSTOMER_HOME/scheduled-tasks/heartbeat-suppressions.json"
+
+# sha256 differs by platform: Debian/container ships `sha256sum`, macOS ships
+# `shasum -a 256`. Same resolution dance as the md5 lookup in schedule_matches.
+# With neither available the fingerprint comes back empty and every caller
+# treats that as "cannot dedupe, fire anyway" - the fail-open direction.
+_sha256_stdin() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 | awk '{print $1}'
+    else
+        cat >/dev/null
+        echo ""
+    fi
+}
+
+# Read a state field as a non-negative integer. get_state returns "" for an
+# absent field, and zsh arithmetic on "" is a fatal "bad math expression"
+# under set -e, so every counter read goes through this.
+_state_int() {
+    local v
+    v=$(get_state "$1" "$2")
+    [[ "$v" =~ ^[0-9]+$ ]] || v=0
+    echo "$v"
+}
+
+# Numeric >= for decimal dollar amounts. [[ -ge ]] is integer-only and would
+# silently compare "0.6" as a syntax error rather than a number.
+_num_ge() {
+    awk -v a="$1" -v b="$2" 'BEGIN { exit !(a + 0 >= b + 0) }'
+}
+
+# "24h" / "90m" / "2d" / "300s" / bare seconds -> seconds. Non-zero exit on
+# anything unparseable so the caller can warn rather than silently treating a
+# typo as "no window".
+parse_duration_seconds() {
+    local s="$1" n
+    if [[ -z "$s" ]]; then
+        echo 0
+        return 1
+    fi
+    n="${s%[smhd]}"
+    if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+        echo 0
+        return 1
+    fi
+    case "$s" in
+        *s) echo $(( n )) ;;
+        *m) echo $(( n * 60 )) ;;
+        *h) echo $(( n * 3600 )) ;;
+        *d) echo $(( n * 86400 )) ;;
+        *)  echo $(( n )) ;;
+    esac
+    return 0
+}
+
+# The number a `threshold` condition tests. Shared with evaluate_condition so
+# the fire decision and the dedup identity can never drift apart on how a
+# gather payload is read. Non-zero exit means the payload was not JSON.
+threshold_actual() {
+    local field="$1" data="$2"
+    if echo "$data" | jq -e 'type == "array"' &>/dev/null; then
+        echo "$data" | jq 'length'
+        return 0
+    fi
+    if echo "$data" | jq -e 'type == "object"' &>/dev/null; then
+        echo "$data" | jq --arg f "$field" '.[$f] // 0'
+        return 0
+    fi
+    return 1
+}
+
+# Stable identity of the condition this heartbeat is alerting on.
+#
+# Precedence:
+#   1. `dedupe_key: <jq expression>` - explicit projection of the gather
+#      output. Use this whenever "the same problem" means something more
+#      specific than "the count is still N", e.g.
+#      `dedupe_key: .needs_sean | map({repo, reason})`.
+#   2. `condition: threshold <field> <op> <value>` - the tested value.
+#   3. Nothing. `always` and `ask_model` have no machine-readable identity,
+#      so dedup is refused loudly instead of guessed at.
+heartbeat_fingerprint() {
+    local name="$1" condition="$2" data="$3"
+    local key_expr="" identity="" rest="" field="" actual=""
+
+    key_expr=$(get_config_field "$name" "dedupe_key")
+
+    if [[ -n "$key_expr" ]]; then
+        # -S sorts object keys so two payloads that differ only in key order
+        # hash the same; -c keeps it one line.
+        identity=$(printf '%s' "$data" | jq -S -c "$key_expr" 2>/dev/null) || identity=""
+        if [[ -z "$identity" ]]; then
+            return 1
+        fi
+        printf 'key:%s' "$identity" | _sha256_stdin
+        return 0
+    fi
+
+    if [[ "$condition" == threshold\ * ]]; then
+        rest="${condition#threshold }"
+        field=$(echo "$rest" | awk '{print $1}')
+        if actual=$(threshold_actual "$field" "$data"); then
+            printf 'threshold:%s=%s' "$field" "$actual" | _sha256_stdin
+            return 0
+        fi
+        return 1
+    fi
+
+    return 1
+}
+
+# Returns 0 to SUPPRESS this fire, 1 to let it through. Sets
+# DEDUPE_FINGERPRINT (stored by the caller only on a fire that succeeded) and
+# DEDUPE_REASON (for the log line).
+dedupe_check() {
+    local name="$1" condition="$2" data="$3"
+    local realert_after="" window=0 fp="" last_fp="" last_at=0 now=0 elapsed=0 churn=0
+
+    DEDUPE_FINGERPRINT=""
+    DEDUPE_REASON=""
+
+    realert_after=$(get_config_field "$name" "realert_after")
+    [[ -z "$realert_after" ]] && return 1
+
+    if ! window=$(parse_duration_seconds "$realert_after") || [[ $window -le 0 ]]; then
+        log "WARN $name - realert_after '$realert_after' is not a duration (expected 24h, 90m, 2d). Not deduping."
+        return 1
+    fi
+
+    if ! fp=$(heartbeat_fingerprint "$name" "$condition" "$data") || [[ -z "$fp" ]]; then
+        log "WARN $name - realert_after is set but this heartbeat has no stable condition identity (condition: $condition). Firing. Add a dedupe_key: <jq expression> to dedupe it."
+        return 1
+    fi
+    DEDUPE_FINGERPRINT="$fp"
+
+    last_fp=$(get_state "$name" "dedupe_fingerprint")
+    last_at=$(_state_int "$name" "dedupe_fired_at")
+    now=$(date +%s)
+
+    if [[ "$last_fp" == "$fp" ]]; then
+        # Same condition as the last alert. The fingerprint held still, so
+        # whatever churn we were tracking is over.
+        set_state "$name" "dedupe_churn" "0"
+        elapsed=$(( now - last_at ))
+        if [[ $elapsed -lt $window ]]; then
+            DEDUPE_REASON="identical condition, last alerted $(( elapsed / 60 ))min ago, realert_after=$realert_after"
+            return 0
+        fi
+        return 1
+    fi
+
+    # Fingerprint moved. That is normal once; every tick is a misconfiguration.
+    # A dedupe_key that reads an age, a timestamp or a monotonic counter never
+    # matches itself, so the cooldown never fires and nothing says so - which
+    # is exactly the silent failure this feature exists to prevent, rebuilt.
+    if [[ -n "$last_fp" ]]; then
+        churn=$(( $(_state_int "$name" "dedupe_churn") + 1 ))
+        set_state "$name" "dedupe_churn" "$churn"
+        if [[ $churn -ge ${DEDUPE_CHURN_WARN_THRESHOLD:-3} ]]; then
+            log "WARN $name - dedupe fingerprint changed on $churn consecutive fires, so realert_after has suppressed nothing. The dedupe_key is reading a value that moves every tick (an age, a timestamp, a counter). See docs/heartbeat-dispatcher.md."
+        fi
+    fi
+    return 1
+}
+
+# Model invocations this heartbeat has spent today. Counted per fire decision,
+# not per retry attempt, and reset by date rather than by a timer.
+fires_today() {
+    local name="$1"
+    if [[ "$(get_state "$name" "fires_date")" != "$DATE" ]]; then
+        echo 0
+        return 0
+    fi
+    _state_int "$name" "fires_today"
+}
+
+note_fire() {
+    local name="$1" n=1
+    if [[ "$(get_state "$name" "fires_date")" == "$DATE" ]]; then
+        n=$(( $(_state_int "$name" "fires_today") + 1 ))
+    else
+        set_state "$name" "fires_date" "$DATE"
+    fi
+    set_state "$name" "fires_today" "$n"
+}
+
+# Dollars this heartbeat has spent today, read from the telemetry the
+# dispatcher already writes rather than from a counter of our own. Telemetry
+# is the surface an operator audits after the fact, so a cap that disagrees
+# with it would be worse than no cap. Includes the heartbeat's output-validator
+# rows: that spend is caused by this heartbeat. Missing file, malformed lines
+# and null costs all read as 0.
+usd_today() {
+    local name="$1"
+    local tfile="$CUSTOMER_HOME/logs/telemetry/$DATE-usage.jsonl"
+    if [[ ! -f "$tfile" ]]; then
+        echo 0
+        return 0
+    fi
+    jq -R -s --arg n "$name" '
+        [ split("\n")[]
+          | select(length > 0)
+          | (fromjson? // empty)
+          | select(.heartbeat == $n or .heartbeat == ($n + "-validator"))
+          | (.cost_usd // 0) ]
+        | add // 0
+    ' "$tfile" 2>/dev/null || echo 0
+}
+
+# Returns 0 when this heartbeat is CAPPED (do not fire), 1 when it may fire.
+# Sets CAP_REASON.
+fire_cap_check() {
+    local name="$1"
+    local max_fires="" max_usd="" fired=0 spent=0
+
+    CAP_REASON=""
+    max_fires=$(get_config_field "$name" "max_fires_per_day")
+    max_usd=$(get_config_field "$name" "max_usd_per_day")
+    [[ -z "$max_fires" && -z "$max_usd" ]] && return 1
+
+    if [[ -n "$max_fires" ]]; then
+        if [[ ! "$max_fires" =~ ^[0-9]+$ ]]; then
+            log "WARN $name - max_fires_per_day '$max_fires' is not a whole number. Ignoring."
+        else
+            fired=$(fires_today "$name")
+            if [[ $fired -ge $max_fires ]]; then
+                CAP_REASON="max_fires_per_day reached: $fired of $max_fires model invocations already spent today"
+                return 0
+            fi
+        fi
+    fi
+
+    if [[ -n "$max_usd" ]]; then
+        if [[ ! "$max_usd" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+            log "WARN $name - max_usd_per_day '$max_usd' is not a number. Ignoring."
+        else
+            spent=$(usd_today "$name")
+            if _num_ge "$spent" "$max_usd"; then
+                CAP_REASON="max_usd_per_day reached: \$$spent of \$$max_usd already spent today"
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
+# --- Suppression ledger ---
+#
+# A suppressed alert that exists only as a log line is the failure this whole
+# change is a response to: the OAuth bridge logged the same warning 288 times
+# over four days into a file nobody reads. So every suppression is also
+# recorded as one updatable record per heartbeat in a small JSON object beside
+# heartbeat-state.json, cheap for a weekly rollup to read with no model call,
+# and REMOVED the moment the condition clears - so "quiet because it was
+# fixed" and "quiet because it was muted" are distinguishable.
+#
+# Schema, keyed by heartbeat name:
+#   reason                  fire_cap | usd_cap | dedup
+#   detail                  human-readable one-liner (the cap arithmetic, or
+#                           the dedup window)
+#   fingerprint             condition identity, "" when dedup is not in play
+#   first_suppressed_at     ISO local time of the first suppressed tick in
+#                           this unbroken run of suppressions
+#   first_suppressed_epoch  same instant, for arithmetic
+#   last_suppressed_at      ISO local time of the most recent suppressed tick
+#   last_suppressed_epoch   same instant, for arithmetic
+#   suppressed_ticks        how many checks have been suppressed in this run
+#   last_decision           the condition verdict at the last suppressed tick
+#
+# The two _epoch fields exist because `date -j -f` is macOS-only; a consumer
+# that has to parse the ISO strings to do date maths is not portable.
+
+ledger_note() {
+    local name="$1" reason="$2" detail="$3" fingerprint="$4" decision="$5"
+    local tmp="${SUPPRESSION_LEDGER}.$$.${name}.tmp"
+    local now_epoch now_iso
+    now_epoch=$(date +%s)
+    now_iso=$(date +%Y-%m-%dT%H:%M:%S)
+
+    mkdir -p "$(dirname "$SUPPRESSION_LEDGER")"
+    [[ -f "$SUPPRESSION_LEDGER" ]] || echo '{}' > "$SUPPRESSION_LEDGER"
+
+    # Same read-modify-write mutex the state file uses, for the same reason.
+    if _state_lock_acquire "$SUPPRESSION_LEDGER"; then
+        jq --arg n "$name" --arg r "$reason" --arg d "$detail" \
+           --arg fp "$fingerprint" --arg dec "$decision" \
+           --arg iso "$now_iso" --arg ep "$now_epoch" '
+            .[$n] = ((.[$n] // {}) as $prev | {
+                reason: $r,
+                detail: $d,
+                fingerprint: $fp,
+                first_suppressed_at: ($prev.first_suppressed_at // $iso),
+                first_suppressed_epoch: ($prev.first_suppressed_epoch // $ep),
+                last_suppressed_at: $iso,
+                last_suppressed_epoch: $ep,
+                suppressed_ticks: (($prev.suppressed_ticks // 0) + 1),
+                last_decision: $dec
+            })' "$SUPPRESSION_LEDGER" > "$tmp" && mv "$tmp" "$SUPPRESSION_LEDGER"
+        _state_lock_release "$SUPPRESSION_LEDGER"
+    else
+        jq --arg n "$name" --arg r "$reason" --arg d "$detail" \
+           --arg fp "$fingerprint" --arg dec "$decision" \
+           --arg iso "$now_iso" --arg ep "$now_epoch" '
+            .[$n] = ((.[$n] // {}) as $prev | {
+                reason: $r,
+                detail: $d,
+                fingerprint: $fp,
+                first_suppressed_at: ($prev.first_suppressed_at // $iso),
+                first_suppressed_epoch: ($prev.first_suppressed_epoch // $ep),
+                last_suppressed_at: $iso,
+                last_suppressed_epoch: $ep,
+                suppressed_ticks: (($prev.suppressed_ticks // 0) + 1),
+                last_decision: $dec
+            })' "$SUPPRESSION_LEDGER" > "$tmp" && mv "$tmp" "$SUPPRESSION_LEDGER"
+    fi
+
+    jq -r --arg n "$name" '.[$n].suppressed_ticks // 1' "$SUPPRESSION_LEDGER" 2>/dev/null || echo 1
+}
+
+# Drop a heartbeat's ledger entry. Called when the condition evaluates false
+# and when a fire actually goes through, so a fixed problem stops showing up in
+# the weekly rollup without anyone having to clear it by hand.
+ledger_clear() {
+    local name="$1"
+    local tmp="${SUPPRESSION_LEDGER}.$$.${name}.clr"
+    [[ -f "$SUPPRESSION_LEDGER" ]] || return 0
+    jq -e --arg n "$name" 'has($n)' "$SUPPRESSION_LEDGER" >/dev/null 2>&1 || return 0
+
+    if _state_lock_acquire "$SUPPRESSION_LEDGER"; then
+        jq --arg n "$name" 'del(.[$n])' "$SUPPRESSION_LEDGER" > "$tmp" \
+            && mv "$tmp" "$SUPPRESSION_LEDGER"
+        _state_lock_release "$SUPPRESSION_LEDGER"
+    else
+        jq --arg n "$name" 'del(.[$n])' "$SUPPRESSION_LEDGER" > "$tmp" \
+            && mv "$tmp" "$SUPPRESSION_LEDGER"
+    fi
+    return 0
+}
+
+# One notice per heartbeat per day when a cap trips. The notice itself has to
+# be capped or it recreates the 50-alert problem in miniature.
+cap_alert_once() {
+    local name="$1" reason="$2" ticks="$3" decision="$4"
+    local remedy=""
+    [[ "$(get_state "$name" "cap_alert_date")" == "$DATE" ]] && return 0
+    set_state "$name" "cap_alert_date" "$DATE"
+
+    # Clearing fires_today lifts a fire-count cap. It does nothing to a dollar
+    # cap, which is measured from telemetry rather than from state, so naming
+    # it there would send an operator to a file that cannot help them.
+    if [[ "$reason" == max_usd_per_day* ]]; then
+        remedy="To lift it now, raise \`max_usd_per_day\` for \`${name}\` in HEARTBEATS.md. Today's spend is measured from \`logs/telemetry/${DATE}-usage.jsonl\`, so clearing state will not reset it."
+    else
+        remedy="To lift it now, clear \`fires_today\` for \`${name}\` in \`scheduled-tasks/heartbeat-state.json\`, or raise \`max_fires_per_day\` in HEARTBEATS.md."
+    fi
+
+    alert_ops "🔇 **\`${name}\` hit its daily cap. It will not invoke the model again today.**
+${reason}
+
+The condition is still true and the gather still runs every tick, so this is the only notice you get today. A change in the condition does not lift a cap; only the date rolling does.
+
+Last verdict: \`${decision}\`
+Checks suppressed so far today: ${ticks}
+
+${remedy} Everything currently suppressed is listed in \`scheduled-tasks/heartbeat-suppressions.json\`."
+    return 0
+}
+
 # --- Plugin Recovery Hooks ---
 #
 # Plugins (dating, bfl, etc.) can register recovery hooks here that run on
@@ -1025,6 +1450,44 @@ main() {
             # matches the existing "success" semantics elsewhere in this loop
             # and is the minimal-change fix approved 2026-05-30.
             set_state "$name" "last_result" "success"
+            # The condition cleared, so the dedup identity of the last alert is
+            # stale: an identical condition recurring next week is news again
+            # and must not be swallowed by a cooldown from the previous
+            # episode. Dropping the ledger entry here is what makes "quiet
+            # because it was fixed" distinguishable from "quiet because it was
+            # capped" in the weekly rollup (new-jaxity#550).
+            set_state "$name" "dedupe_fingerprint" ""
+            set_state "$name" "dedupe_churn" "0"
+            ledger_clear "$name"
+            continue
+        fi
+
+        # --- Alert dedup, then daily fire caps (new-jaxity#550) ---
+        #
+        # Both run BEFORE the DRY_RUN branch so a dry run reports exactly what
+        # a live run would suppress, and both suppress the FIRE rather than
+        # just the Discord post: the model invocation is the expensive half,
+        # and an alert nobody is allowed to see is not worth paying for.
+        #
+        # Dedup first. It asks "is this the same problem we already reported",
+        # which is a cheaper and more informative reason to stay quiet than
+        # "we are out of budget"; when both would suppress, the dedup reason is
+        # the one an operator wants in the ledger.
+        local suppressed_ticks=""
+        if dedupe_check "$name" "$condition" "$gathered_data"; then
+            log "DEDUPED $name - $DEDUPE_REASON"
+            suppressed_ticks=$(ledger_note "$name" "dedup" "$DEDUPE_REASON" "$DEDUPE_FINGERPRINT" "$decision")
+            set_state "$name" "last_result" "alert_deduped"
+            continue
+        fi
+
+        if fire_cap_check "$name"; then
+            local cap_kind="fire_cap"
+            [[ "$CAP_REASON" == max_usd_per_day* ]] && cap_kind="usd_cap"
+            suppressed_ticks=$(ledger_note "$name" "$cap_kind" "$CAP_REASON" "$DEDUPE_FINGERPRINT" "$decision")
+            log "CAPPED $name - $CAP_REASON (checks suppressed today: $suppressed_ticks)"
+            set_state "$name" "last_result" "fire_capped"
+            cap_alert_once "$name" "$CAP_REASON" "$suppressed_ticks" "$decision"
             continue
         fi
 
@@ -1081,6 +1544,12 @@ main() {
             set_state "$name" "last_result" "dry_run"
             continue
         fi
+
+        # One count per fire decision, not per retry attempt: the three
+        # attempts in the loop below are one piece of work, and a heartbeat
+        # whose claude calls fail still spends tokens, so a failed fire counts
+        # against the daily ceiling too (new-jaxity#550).
+        note_fire "$name"
 
         local output_dir="$CUSTOMER_HOME/briefings"
         local output_file="$output_dir/${DATE}-${name}.md"
@@ -1253,6 +1722,14 @@ Nothing scheduled will run until this is fixed. Re-alerts at most every $((alert
         fi
 
         log "SUCCESS $name — output at $output_file"
+        # The dedup cooldown starts at the alert that actually went out, not at
+        # the attempt: a fire that failed reached nobody, so starting the
+        # window there would mute the first real alert (new-jaxity#550).
+        if [[ -n "$DEDUPE_FINGERPRINT" ]]; then
+            set_state "$name" "dedupe_fingerprint" "$DEDUPE_FINGERPRINT"
+            set_state "$name" "dedupe_fired_at" "$(date +%s)"
+        fi
+        ledger_clear "$name"
         set_state "$name" "last_fired" "$(date +%Y-%m-%dT%H:%M:%S)"
         set_state "$name" "last_result" "success"
         increment_fire_count "$name"

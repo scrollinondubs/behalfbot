@@ -33,6 +33,12 @@ launchd / systemd
         │       │   │
         │       │   └── true
         │       │       │
+        │       │       ├── dedupe_check() - realert_after + condition identity
+        │       │       │   └── same condition, inside window ──→ log, ledger, skip
+        │       │       │
+        │       │       ├── fire_cap_check() - max_fires_per_day / max_usd_per_day
+        │       │       │   └── capped ──→ log, ledger, one notice/day, skip
+        │       │       │
         │       │       ├── invoke_claude() with model + budget + cwd
         │       │       │
         │       │       ├── (optional) run_output_validator()
@@ -97,6 +103,65 @@ Daily and weekly heartbeats also support a `jitter:` field that adds a determini
 `ask_model` requires Ollama running (default at `http://localhost:11434`). When Ollama is unreachable the dispatcher fails open (always fires). The `OLLAMA_URL` env var overrides the default.
 
 Reference: `LESSONS_FROM_V1.md` #25 (silent dormancy via missed gates).
+
+---
+
+## Runaway control: a condition that cannot clear
+
+`budget:` is a per-invocation ceiling, and per-invocation ceilings do not bound a loop.
+
+The failure, on the reference install, 2026-09-01 to 09-05, with the operator off-grid: `repo-drift` fires when a watched repo's working tree is dirty on runtime paths, and its auto-heal correctly refuses to touch a dirty tree. Five files sat uncommitted for a week. The gather returned `count > 0` on every tick, forever, and only a human could clear it.
+
+```
+repo-drift        runs= 514   $45.79      <-- 66% of ALL scheduled spend
+telegram-groups   runs=  39   $ 7.58
+pulse-triage      runs=   4   $ 4.16
+TOTAL                         $69.45
+```
+
+Plus 50+ near-identical alerts into a channel the operator could not reach. `budget: 0.10` was set and was never exceeded once: 514 runs at about $0.089 each.
+
+Nothing was broken. The gather was right, the condition was right, the refusal to touch a dirty tree was right. What was missing was a ceiling on the loop and a notion of "I already said this".
+
+Four optional fields, all opt-in, all documented in `chassis/HEARTBEATS.md.template`:
+
+| Field | Bounds |
+|---|---|
+| `max_fires_per_day` | model invocations per calendar day |
+| `max_usd_per_day` | dollars per calendar day, read from the dispatcher's own telemetry |
+| `realert_after` | how long an unchanged condition stays quiet after alerting |
+| `dedupe_key` | jq expression naming the condition's identity |
+
+Design decisions worth keeping:
+
+- **Caps are absolute.** A changed condition does not lift one; only the date rolling does. A cap with an escape hatch is not a cap, and the condition here changes constantly (the ages climb) while the problem does not.
+- **Dedup suppresses the FIRE, not the notification.** The model invocation is the expensive half, and an alert nobody is allowed to see is not worth paying for. This means the identity has to come from the gather output, before any model runs.
+- **The dollar cap reads telemetry rather than a counter of its own.** Telemetry is the surface an operator audits after the fact; a cap that disagreed with it would be worse than no cap. The cost is one `jq` pass over the day's JSONL per checked heartbeat.
+- **A failed fire counts against the cap. A failed fire does not start the dedup window.** It spent tokens, so it counts; it reached nobody, so the next real alert must not be muted by it.
+
+### Why the fingerprint is not a hash of the gather output
+
+This is the part that silently fails if you get it wrong.
+
+`repo-drift`'s alerts read "unresolved for 4 days", then "5 days", then "131h", then "180 hours". Its gather emits `condition_age_hours`, `dirty_oldest_age_hours` and `ahead_newest_age_hours` alongside the finding. A content hash over the gather output, or over the rendered alert, never matches itself. The cooldown then never fires, and the only symptom is that nothing changed.
+
+So the identity is either supplied (`dedupe_key`, a jq projection) or taken from the value the dispatcher's own `threshold` condition tested. There is no fallback that guesses which fields are volatile from their names: that heuristic is the same bug with better manners, and on this exact payload it would have hashed `behind` and `ahead`, which move whenever upstream moves.
+
+The runtime detector for a bad key: if the fingerprint changes on three consecutive fires (`DEDUPE_CHURN_WARN_THRESHOLD`), the dispatcher logs a warning naming the heartbeat. A dedup that suppresses nothing should not be able to look like a dedup that has nothing to suppress.
+
+### Suppressed is not silent
+
+The same outage had a credential-sync bridge that detected the real problem and logged it 288 times over four days into a file nobody reads. Muting an alert into total silence rebuilds that.
+
+Three surfaces, in increasing order of how likely a human is to look at them:
+
+1. Every suppressed tick logs `CAPPED <name>` or `DEDUPED <name>` with the reason, and sets `last_result` to `fire_capped` / `alert_deduped` in `heartbeat-state.json`.
+2. A tripped cap posts exactly one notice per heartbeat per day, naming the arithmetic, the last verdict, how many checks have been swallowed, and how to lift it.
+3. `scheduled-tasks/heartbeat-suppressions.json` holds one live record per suppressed heartbeat, deleted the moment the condition clears, so a weekly rollup can render "here is what has been failing quietly all week" from a single cheap read. `chassis/scripts/gather-heartbeat-suppressions.sh` prints it as JSON and doubles as a heartbeat gather. Schema in `chassis/HEARTBEATS.md.template`.
+
+Point 3 is what makes "quiet because it was fixed" distinguishable from "quiet because it was muted". Without it, a cap is just a slower way to lose the signal.
+
+Issue: new-jaxity#550.
 
 ---
 
