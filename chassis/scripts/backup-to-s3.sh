@@ -12,7 +12,7 @@
 #   - $CHASSIS_HOME/.env                  -> env.txt   (renamed; secrets, encrypted)
 #   - $CHASSIS_HOME/memory/               -> memory/   (knowledge graph + auto-memory)
 #   - $CHASSIS_HOME/data/                 -> data/     (runtime state, sqlite, etc.)
-#   - $CHASSIS_HOME/scheduled-tasks/{heartbeat-state,conservation-mode,triaged-issues}.json
+#   - $CHASSIS_HOME/scheduled-tasks/{heartbeat-state,conservation-mode,halt,triaged-issues}.json
 #                                         -> scheduled-tasks/
 #   - $CHASSIS_HOME/backups/{postgres,siyuan,vaultwarden,n8n,turso}/<today>
 #                                         -> sibling-backups/  (today only)
@@ -127,7 +127,7 @@ if [[ -d "${CHASSIS_HOME}/data" ]]; then
 fi
 
 mkdir -p "${STAGING}/scheduled-tasks"
-for f in heartbeat-state.json conservation-mode.json triaged-issues.json; do
+for f in heartbeat-state.json conservation-mode.json halt.json triaged-issues.json; do
     [[ -f "${CHASSIS_HOME}/scheduled-tasks/$f" ]] && \
         cp "${CHASSIS_HOME}/scheduled-tasks/$f" "${STAGING}/scheduled-tasks/" || true
 done

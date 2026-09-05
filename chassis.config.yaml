@@ -53,6 +53,17 @@ identity:
 #   INSTALLER_DISCORD_USER_ID     - principal's Discord user_id (snowflake).
 #                                   Allowlisted on every channel populated above.
 #                                   Required by chassis/scripts/bootstrap-discord-access.sh.
+#   CHASSIS_PRINCIPAL_USER_ID     - same snowflake, read by the principal-policy
+#                                   hook and by the remote kill switch
+#                                   (chassis/scripts/discord-control-listener.py).
+#                                   The listener falls back to
+#                                   INSTALLER_DISCORD_USER_ID, and REFUSES TO ARM
+#                                   if neither is set - an install with no
+#                                   principal id cannot be stopped from Discord.
+#                                   See docs/remote-kill-switch.md.
+#   CHASSIS_CONTROL_CHANNEL_IDS   - optional. Channels the kill switch listens on
+#                                   (comma or space separated). Defaults to
+#                                   DISCORD_PRIMARY_CHANNEL_ID.
 #
 # Labels are user-facing strings for prompt prose (e.g. "#<primary>",
 # "#installer-devops"); they CAN live here since they're non-secret display strings.
