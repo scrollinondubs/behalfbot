@@ -50,8 +50,12 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=chassis/scripts/_alert.sh
-source "${SCRIPT_DIR}/_alert.sh"
+if [[ -f "${SCRIPT_DIR}/_alert.sh" ]]; then
+    # shellcheck source=chassis/scripts/_alert.sh
+    source "${SCRIPT_DIR}/_alert.sh"
+else
+    chassis_alert() { return 1; }
+fi
 
 : "${CUSTOMER_HOME:=${CHASSIS_HOME:-${HOME}/.behalfbot}}"
 

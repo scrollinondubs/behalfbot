@@ -205,8 +205,32 @@ dispatcher tick.
 | `KEYCHAIN_ACCOUNT` | `$USER` | keychain account. Same var the oauth bridge reads |
 | `CLAUDE_CREDENTIALS_FILE` | `$HOME/.claude/.credentials.json` | |
 | `CHASSIS_CREDENTIAL_REFRESH_GRACE_HOURS` | `24` | how long the access token may sit expired before the refresh loop counts as dead |
-| `CHASSIS_ALERT_CHANNEL` | `ops` | channel key for the host runner, resolved by `post-to-channel.sh` |
 | `CHASSIS_ALERT_CMD` | unset | full command line to deliver alerts instead, e.g. `post-to-slack.sh ops` |
+| `CHASSIS_ALERT_CHANNEL` | `ops` | channel key for the webhook path, resolved by `post-to-channel.sh` |
+| `CHASSIS_ALERT_CHANNEL_ID` | unset | explicit Discord channel ID for the bot-token path |
+
+## How the alert actually gets delivered
+
+`_alert.sh` tries three paths in order, and stops at the first that works:
+
+1. `$CHASSIS_ALERT_CMD`, when set. The message is the final argv element, so
+   `CHASSIS_ALERT_CMD="<chassis>/scripts/post-to-telegram.sh ops"` works.
+2. `post-to-channel.sh $CHASSIS_ALERT_CHANNEL`, which resolves a webhook URL
+   out of the install's `.env`.
+3. `discord-post.sh` with `DISCORD_BOT_TOKEN` and a channel ID from
+   `$CHASSIS_ALERT_CHANNEL_ID`, then `DISCORD_ALERTS_CHANNEL_ID`,
+   `DISCORD_OPS_CHANNEL_ID`, `DISCORD_PRIMARY_CHANNEL_ID` - the convention
+   `chassis.config.yaml` and the shipped prompts already use.
+
+**Step 3 is not redundant.** An install can have a bot token and channel IDs
+and no webhook URL at all. The reference install is exactly that shape, which
+is also why `alert_ops()` in the dispatcher has been dropping its own alerts
+there with `WARN: no ops webhook set`. A helper that stopped at step 2 would be
+one more monitor firing into a log, which is the failure this whole change
+exists to remove.
+
+If none of the three resolves, the caller logs the delivery failure and carries
+on. Alerting never breaks the thing that was trying to alert.
 
 ## Secrets
 
@@ -219,7 +243,7 @@ directly.
 
 ```bash
 bash chassis/scripts/test-credential-expiry.sh              # 58 cases
-bash chassis/scripts/test-claude-oauth-bridge-alert.sh      # 27 cases
+bash chassis/scripts/test-claude-oauth-bridge-alert.sh      # 36 cases
 ```
 
 Both stub `tailscale` and `security` on PATH and need no network, no docker,

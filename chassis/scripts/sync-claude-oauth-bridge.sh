@@ -80,8 +80,19 @@ ts() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 log() { echo "[$(ts)] $*" >> "$LOG"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=chassis/scripts/_alert.sh
-source "${SCRIPT_DIR}/_alert.sh"
+# Guarded, and the guard is load-bearing. This script runs under
+# `set -euo pipefail` every 30 minutes and is the ONLY thing keeping the
+# container authenticated. An unguarded `source` of a sibling would kill the
+# sync outright on any install running a copy of this file from somewhere
+# else - making the most critical script in the install more fragile, in a
+# change about resilience. Missing helper degrades to the old log-only
+# behaviour instead.
+if [[ -f "${SCRIPT_DIR}/_alert.sh" ]]; then
+    # shellcheck source=chassis/scripts/_alert.sh
+    source "${SCRIPT_DIR}/_alert.sh"
+else
+    chassis_alert() { return 1; }
+fi
 
 ALERT_STATE_FILE="${CHASSIS_OAUTH_BRIDGE_ALERT_STATE:-${CUSTOMER_HOME:-${HOME}/.behalfbot}/state/claude-oauth-bridge-alert.state}"
 

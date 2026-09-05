@@ -248,6 +248,91 @@ run_bridge
 assert_not_contains "the token never reaches the alert channel" "$(alert_text)" "SUPERSECRET"
 assert_not_contains "the token never reaches the log" "$(log_text)" "SUPERSECRET"
 
+# --- 11. the bridge survives _alert.sh not being there ---------------------
+# This script runs under `set -euo pipefail` every 30 minutes and is the only
+# thing keeping the container authenticated. An unguarded `source` of a
+# sibling would kill the sync outright on any install running a copy of it
+# from somewhere else, which would make the most critical script in the
+# install more fragile in a change about resilience.
+reset
+ISOLATED="$TMP/isolated"
+mkdir -p "$ISOLATED"
+cp "$BRIDGE" "$ISOLATED/"
+plant_keychain "sk-ant-oat-HEALTHY"
+env -i PATH="$SAFE_PATH" HOME="$TMP" USER="tester" STUB_STATE="$STUB_STATE" \
+    CUSTOMER_HOME="$TMP" LOG_DIR="$TMP/logs" KEYCHAIN_ACCOUNT="tester" \
+    bash "$ISOLATED/sync-claude-oauth-bridge.sh" >/dev/null 2>&1
+RC=$?
+if [[ "$RC" == "0" ]]; then ok; else bad "orphaned bridge" "exited $RC with no _alert.sh sibling"; fi
+assert_contains "an orphaned bridge still syncs" "$(log_text)" "synced: keychain"
+
+reset
+plant_keychain ""
+env -i PATH="$SAFE_PATH" HOME="$TMP" USER="tester" STUB_STATE="$STUB_STATE" \
+    CUSTOMER_HOME="$TMP" LOG_DIR="$TMP/logs" KEYCHAIN_ACCOUNT="tester" \
+    bash "$ISOLATED/sync-claude-oauth-bridge.sh" >/dev/null 2>&1
+RC=$?
+if [[ "$RC" == "0" ]]; then ok; else bad "orphaned bridge in a fault" "exited $RC with no _alert.sh sibling"; fi
+assert_contains "an orphaned bridge still logs the WARN" "$(log_text)" "WARN: keychain JSON missing"
+
+# --- 12. _alert.sh delivery fallbacks --------------------------------------
+# An install can have a bot token and channel IDs and NO webhook URL - the
+# reference install is exactly that shape, which is why the dispatcher's own
+# `alert_ops()` has been dropping alerts there. A helper that stopped at the
+# webhook would be one more monitor firing into a log.
+LIBDIR="$TMP/lib"
+mkdir -p "$LIBDIR"
+cp "${SCRIPT_DIR}/_alert.sh" "$LIBDIR/"
+
+cat > "$LIBDIR/post-to-channel.sh" <<'STUB'
+#!/bin/bash
+[[ -n "${WEBHOOK_CONFIGURED:-}" ]] || exit 1
+printf 'webhook:%s:%s
+' "$1" "$2" >> "${RECORD_FILE:?}"
+STUB
+cat > "$LIBDIR/discord-post.sh" <<'STUB'
+#!/bin/bash
+printf 'bot:%s:%s
+' "$1" "$2" >> "${RECORD_FILE:?}"
+STUB
+chmod +x "$LIBDIR/post-to-channel.sh" "$LIBDIR/discord-post.sh"
+
+try_alert() {
+    # $1..$n are KEY=VALUE pairs for the alert environment.
+    env -i PATH="$SAFE_PATH" HOME="$TMP" RECORD_FILE="$TMP/record.txt" \
+        CUSTOMER_HOME="$TMP" "$@" \
+        bash -c 'source "$0"; chassis_alert "hello"' "$LIBDIR/_alert.sh"
+}
+
+rm -f "$TMP/record.txt"
+try_alert WEBHOOK_CONFIGURED=1 CHASSIS_ALERT_CHANNEL=ops >/dev/null 2>&1
+assert_contains "a configured webhook is used first" "$(cat "$TMP/record.txt" 2>/dev/null)" "webhook:ops:hello"
+
+rm -f "$TMP/record.txt"
+printf 'DISCORD_BOT_TOKEN=bot-token-fixture
+DISCORD_ALERTS_CHANNEL_ID=111222333
+' > "$TMP/.env"
+try_alert >/dev/null 2>&1
+assert_contains "no webhook falls through to the bot token" "$(cat "$TMP/record.txt" 2>/dev/null)" "bot:111222333:hello"
+
+rm -f "$TMP/record.txt"
+printf 'DISCORD_BOT_TOKEN=bot-token-fixture
+DISCORD_PRIMARY_CHANNEL_ID=999888777
+' > "$TMP/.env"
+try_alert >/dev/null 2>&1
+assert_contains "the primary channel is the last resort" "$(cat "$TMP/record.txt" 2>/dev/null)" "bot:999888777:hello"
+
+rm -f "$TMP/record.txt"
+printf 'NOTHING_USEFUL=1
+' > "$TMP/.env"
+if try_alert >/dev/null 2>&1; then
+    bad "no delivery path" "chassis_alert reported success with nothing configured"
+else
+    ok
+fi
+if [[ ! -f "$TMP/record.txt" ]]; then ok; else bad "no delivery path" "something was posted anyway: $(cat "$TMP/record.txt")"; fi
+rm -f "$TMP/.env"
+
 echo ""
 echo "test-claude-oauth-bridge-alert: $pass passed, $fail failed"
 [[ $fail -eq 0 ]] || exit 1
