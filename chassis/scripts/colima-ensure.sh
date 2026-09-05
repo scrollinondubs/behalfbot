@@ -196,11 +196,29 @@ release_lock() {
 }
 
 lock_age_seconds() {
-    local now mtime
+    local now mtime=""
     now="$(date +%s)"
-    # BSD stat (macOS) and GNU stat (Linux, where the test suite runs) differ.
-    mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null || stat -c %Y "$LOCK_DIR" 2>/dev/null || printf '')"
-    if [[ -z "$mtime" ]]; then
+
+    # BSD stat (macOS) and GNU stat (Linux, where the CI suite runs) spell this
+    # differently, and the two spellings are NOT safely chainable inside one
+    # command substitution. GNU `stat -f %m <dir>` does not error out: -f means
+    # "filesystem status" there, `%m` is read as another FILE operand, and stat
+    # prints a whole filesystem block for <dir> on stdout before exiting 1 for
+    # the missing `%m`. Chained with `||` in a single `$(...)`, both commands'
+    # stdout concatenates and the result is a multi-line block with an epoch
+    # glued on the end. That parsed as age 0, every stale lock read as fresh,
+    # and the recycled-pid branch below became unreachable on Linux.
+    #
+    # So: one substitution per assignment, and validate that what came back is
+    # actually a number before trusting it.
+    mtime="$(stat -c %Y "$LOCK_DIR" 2>/dev/null)" || mtime=""
+    if [[ ! "$mtime" =~ ^[0-9]+$ ]]; then
+        mtime="$(stat -f %m "$LOCK_DIR" 2>/dev/null)" || mtime=""
+    fi
+    if [[ ! "$mtime" =~ ^[0-9]+$ ]]; then
+        # Age is unknowable. Report 0 (fresh), which makes the caller respect
+        # the lock. Standing down for one 300s tick is cheap; breaking a lock a
+        # live recovery is holding is not.
         printf '0'
         return 0
     fi
@@ -224,6 +242,7 @@ acquire_lock() {
     holder="$(cat "$LOCK_DIR/pid" 2>/dev/null || printf '')"
     age="$(lock_age_seconds)"
 
+    [[ "$age" =~ ^[0-9]+$ ]] || age=0
     if [[ "$age" -lt "$LOCK_MAX_AGE" ]] && [[ -n "$holder" ]] && kill -0 "$holder" 2>/dev/null; then
         log "another colima-ensure run holds $LOCK_DIR (pid $holder, age ${age}s). Standing down; it is doing this work."
         return 1
