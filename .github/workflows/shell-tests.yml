@@ -42,6 +42,11 @@ on:
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
       - 'chassis/scripts/test-discord-reply-param-fix.sh'
+      - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
+      - 'chassis/scheduled-tasks/tests/test_fire_caps.sh'
+      - 'chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh'
+      - 'chassis/scheduled-tasks/tests/test_state_write_race.sh'
+      - 'chassis/scripts/gather-heartbeat-suppressions.sh'
       - 'chassis/scripts/colima-ensure.sh'
       - 'chassis/scripts/test-colima-ensure.sh'
       - 'chassis/scripts/_control-flags.sh'
@@ -82,6 +87,11 @@ on:
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
       - 'chassis/scripts/test-discord-reply-param-fix.sh'
+      - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
+      - 'chassis/scheduled-tasks/tests/test_fire_caps.sh'
+      - 'chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh'
+      - 'chassis/scheduled-tasks/tests/test_state_write_race.sh'
+      - 'chassis/scripts/gather-heartbeat-suppressions.sh'
       - 'chassis/scripts/colima-ensure.sh'
       - 'chassis/scripts/test-colima-ensure.sh'
       - 'chassis/scripts/_control-flags.sh'
@@ -231,6 +241,32 @@ jobs:
       # defeats its own purpose. No docker, no network.
       - run: bash chassis/scripts/test-discord-reply-param-fix.sh
 
+  heartbeat-fire-caps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for new-jaxity#550: `repo-drift` fired 514 times
+      # in five days for $45.79, 66% of all scheduled spend, on a condition
+      # that could not clear without a human. `budget:` is per-invocation, so
+      # nothing stopped it. These suites cover the daily caps, the alert dedup
+      # and the suppression ledger.
+      #
+      # The load-bearing case is fingerprint stability: the real repo-drift
+      # gather emits condition_age_hours, so a hash over the gather output
+      # never matches itself and the cooldown silently never fires. The unit
+      # suite asserts one fingerprint across two payloads differing only in
+      # those counters, with a control assertion that a naive hash of the same
+      # pair does differ.
+      #
+      # The e2e suite stubs `claude` on PATH and drives six real dispatcher
+      # ticks over an unresolvable condition. Against origin/main it produces
+      # 24 model invocations; with the caps it produces 12. No docker, no
+      # network.
+      - name: Install zsh
+        run: sudo apt-get update && sudo apt-get install -y zsh
+      - run: zsh chassis/scheduled-tasks/tests/test_state_write_race.sh
+      - run: zsh chassis/scheduled-tasks/tests/test_fire_caps.sh
+      - run: zsh chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh
   colima-ensure:
     runs-on: ubuntu-latest
     steps:
