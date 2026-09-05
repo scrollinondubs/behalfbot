@@ -57,6 +57,9 @@ scheduled-tasks/heartbeat-suppressions.json.*.tmp
 scheduled-tasks/heartbeat-suppressions.json.*.clr
 scheduled-tasks/heartbeat-suppressions.json.lock/
 scheduled-tasks/conservation-mode.json
+# Remote kill switch flag + the control listener's read cursor (behalfbot#550).
+scheduled-tasks/halt.json
+state/control-listener-cursor.json
 scheduled-tasks/quota-last-block-start.txt
 
 # Bootstrap / migration sentinel files (created inside CUSTOMER_HOME).

@@ -47,6 +47,9 @@ on:
       - 'chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh'
       - 'chassis/scheduled-tasks/tests/test_state_write_race.sh'
       - 'chassis/scripts/gather-heartbeat-suppressions.sh'
+      - 'chassis/scripts/_control-flags.sh'
+      - 'chassis/scripts/test-control-flags.sh'
+      - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -87,6 +90,9 @@ on:
       - 'chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh'
       - 'chassis/scheduled-tasks/tests/test_state_write_race.sh'
       - 'chassis/scripts/gather-heartbeat-suppressions.sh'
+      - 'chassis/scripts/_control-flags.sh'
+      - 'chassis/scripts/test-control-flags.sh'
+      - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
@@ -257,3 +263,16 @@ jobs:
       - run: zsh chassis/scheduled-tasks/tests/test_state_write_race.sh
       - run: zsh chassis/scheduled-tasks/tests/test_fire_caps.sh
       - run: zsh chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh
+  control-flags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for the remote kill switch's flag arithmetic
+      # (behalfbot#550). The auto-lift check this library replaces used
+      # `date -j`, which is BSD only: inside the Linux container every
+      # `auto_lift_after` parsed as epoch 0 and lifted on the next tick, while
+      # logging the same line a working auto-lift logs. The suite stubs `date`
+      # on PATH to force each dialect, proves a future expiry stays ON under
+      # GNU, that an unparseable expiry fails CLOSED, and asserts the pre-fix
+      # idiom still gets it wrong so the discrimination cannot rot away.
+      - run: bash chassis/scripts/test-control-flags.sh

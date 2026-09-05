@@ -263,7 +263,15 @@ if [[ -n "$compose_failed" ]]; then
     # The union/overlay is usable but we cannot activate it. Fall back to the
     # single highest-precedence baked root and fail LOUDLY - this is the
     # exact silent-no-op class v0.2.0 shipped, so it must never pass quietly.
-    fallback_root="${BAKED_ROOTS[-1]:-}"
+    # Last element is the highest-precedence baked root (later roots overlay
+    # earlier ones above). Spelled out rather than ${BAKED_ROOTS[-1]} because
+    # negative subscripts need bash 4.3 and the macOS host runs /bin/bash 3.2,
+    # where that expansion errors and silently yields the empty string - which
+    # is exactly the empty-root outcome the exit-5 path exists to prevent.
+    fallback_root=""
+    if [[ "${#BAKED_ROOTS[@]}" -gt 0 ]]; then
+        fallback_root="${BAKED_ROOTS[$(( ${#BAKED_ROOTS[@]} - 1 ))]}"
+    fi
     log "ERROR: composed plugin tree (baked union and/or fetched overlay from $FETCHED_ROOT) is usable but could NOT be activated (compose failed under $CUSTOMER_HOME/state)"
     write_state baked "$fallback_root" "compose failed - overlay present but not active"
     printf '%s\n' "$fallback_root"

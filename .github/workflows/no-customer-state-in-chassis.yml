@@ -64,6 +64,7 @@ jobs:
             'scheduled-tasks/heartbeat-state\.json$'
             'scheduled-tasks/heartbeat-suppressions\.json$'
             'scheduled-tasks/conservation-mode\.json$'
+            'scheduled-tasks/halt\.json$'
           )
 
           violators=()
