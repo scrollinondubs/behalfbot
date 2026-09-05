@@ -21,6 +21,12 @@
 #           must be `launchctl print system/com.behalfbot.<name>` OK. Without
 #           the Daemons loaded, the tmux session that backs Discord routing
 #           is never created.
+#   Gap 6 - the remote kill switch cannot arm. DISCORD_BOT_TOKEN is set (so
+#           this install has a Discord surface) but no principal user id is
+#           configured, so nobody is authorised to halt it from Discord.
+#           behalfbot#550 - the outage where every stop path needed either a
+#           shell or a live Claude session, and both were gone.
+#
 #   Gap 5 - signup interview depth - NOT covered here (lives in the
 #           behalf.bot website signup flow; this audit is install-side).
 #
@@ -283,6 +289,66 @@ audit_gap_4_launchd() {
 }
 
 # ============================================================
+# Gap 6 - remote kill switch armed
+# ============================================================
+
+audit_gap_6_kill_switch() {
+    group "Gap 6: remote kill switch armed"
+
+    local env_file="$CUSTOMER_HOME/.env.baked"
+    [[ -f "$env_file" ]] || env_file="$CUSTOMER_HOME/.env"
+
+    # Read specific keys rather than sourcing. The customer .env carries a
+    # Vaultwarden hydration block that runs on source, which is slow, can
+    # prompt, and has no business firing from an audit.
+    kv() {
+        local key="$1"
+        local from_env="${!key:-}"
+        if [[ -n "$from_env" ]]; then
+            printf '%s' "$from_env"
+            return
+        fi
+        [[ -f "$env_file" ]] || return
+        grep -E "^${key}=" "$env_file" 2>/dev/null \
+            | tail -1 | cut -d= -f2- | tr -d "\"' \t\r"
+    }
+
+    if [[ -z "$(kv DISCORD_BOT_TOKEN)" ]]; then
+        # No Discord surface on this install - the switch does not apply.
+        warn "no DISCORD_BOT_TOKEN - kill switch not applicable on this surface"
+        return
+    fi
+
+    local principal
+    principal="$(kv CHASSIS_PRINCIPAL_USER_ID)"
+    [[ -n "$principal" ]] || principal="$(kv INSTALLER_DISCORD_USER_ID)"
+
+    if [[ -z "$principal" ]]; then
+        fail "no principal user id - this install cannot be halted from Discord"
+        hint "Set CHASSIS_PRINCIPAL_USER_ID (or INSTALLER_DISCORD_USER_ID) in $env_file"
+        hint "to the principal's Discord snowflake, then restart the container."
+        hint "Without it the listener refuses to arm. See docs/remote-kill-switch.md."
+        return
+    fi
+    if ! [[ "$principal" =~ ^[0-9]{17,20}$ ]]; then
+        fail "principal user id does not look like a Discord snowflake"
+        hint "Expected 17-20 digits. Fix in $env_file."
+        return
+    fi
+
+    local channels
+    channels="$(kv CHASSIS_CONTROL_CHANNEL_IDS)"
+    [[ -n "$channels" ]] || channels="$(kv DISCORD_PRIMARY_CHANNEL_ID)"
+    if [[ -z "$channels" ]]; then
+        fail "no control channel - kill switch has nowhere to listen"
+        hint "Set CHASSIS_CONTROL_CHANNEL_IDS or DISCORD_PRIMARY_CHANNEL_ID in $env_file."
+        return
+    fi
+
+    ok "kill switch armed - principal configured, listening on $channels"
+}
+
+# ============================================================
 # Bonus - tmux session for the bot exists
 # ============================================================
 
@@ -313,6 +379,7 @@ main() {
     audit_gap_2_customer_remote
     audit_gap_3_memory_mcp
     audit_gap_4_launchd
+    audit_gap_6_kill_switch
     audit_tmux_session
 
     printf '\n\033[1mSummary:\033[0m %d passed, %d warned, %d failed\n' "$PASS" "$WARN" "$FAIL"

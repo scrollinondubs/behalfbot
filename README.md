@@ -84,8 +84,9 @@ Customer state and chassis code live in two physically separate trees:
   chassis.config.yaml     # per-customer chassis config
   INSTALL_PROFILE.md      # per-customer install profile
   scripts/                # customer-side: restart-${BOT}-discord.sh, watchdog-${BOT}-discord.sh
-  state/                  # heartbeat-state.json, conservation-mode.json
-  scheduled-tasks/        # customer overrides + per-tick state
+  state/                  # control-listener-cursor.json, chassis-root record
+  scheduled-tasks/        # customer overrides + per-tick state:
+                          # heartbeat-state.json, conservation-mode.json, halt.json
   memory/                 # installer-specific memory
   briefings/              # generated artifacts
   logs/                   # all logs
