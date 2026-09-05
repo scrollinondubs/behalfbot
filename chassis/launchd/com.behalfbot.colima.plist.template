@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.behalfbot.colima.plist - chassis-rendered template.
+
+  Generated from chassis/launchd/com.behalfbot.colima.plist.template by
+  chassis/scripts/bootstrap-customer-scripts.sh.
+
+  THE SINGLE OWNER of Colima startup on a macOS install. Nothing else on the
+  box may run `colima start`. If another job needs Docker, it WAITS for the
+  socket - see the wait loop at the top of
+  chassis/scripts/templates/restart-discord.sh.template for the pattern.
+
+  DOMAIN: LaunchDaemon (/Library/LaunchDaemons/, system domain). This is one of
+  the few jobs docs/launchd-domains.md actually clears for the daemon side: it
+  touches no login keychain, runs no `claude`, and shares no tmux server. It is
+  pure container-lifecycle infrastructure, and it must come up on an unattended
+  reboot with nobody logged in - which is exactly what a gui LaunchAgent cannot
+  do. Do NOT convert this one to an agent.
+
+  WHY IT POINTS AT A WRAPPER AND NOT AT `colima start`
+  (scrollinondubs/new-jaxity#550, 2026-09-05)
+
+  The plist this replaces ran `colima start -f` directly. After a hard
+  power-off, Lima leaves stale ha.pid / vz.pid / ha.sock / ssh.sock behind and
+  the profile comes back Broken; `colima start` then dies on every boot with
+
+      errors inspecting instance: [failed to get Info from ".../ha.sock":
+      dial unix .../ha.sock: connect: connection refused]
+
+  A bare `colima start` can never clear that. The wrapper runs
+  `colima stop --force` (which removes the stale files and is non-destructive -
+  it does not touch the VM disk image) and retries once, then verifies
+  `docker ps` actually answers before reporting success.
+
+  WHY RunAtLoad + StartInterval AND NOT KeepAlive
+
+  The old plist carried KeepAlive { SuccessfulExit: true }, which tells launchd
+  to respawn the job when it exits ZERO and to leave it alone when it fails. So
+  the one case that needed a retry - a failed boot start - was the one case
+  launchd never retried, and the job sat parked at exit status 1 while Docker
+  stayed down. Its comment claimed the opposite.
+
+  colima-ensure.sh is one-shot and idempotent instead: it exits 0 immediately
+  when `docker ps` already answers. A 5-minute StartInterval therefore gives
+  both boot recovery and continuous self-heal for a few milliseconds a tick,
+  with none of the hot-loop risk of KeepAlive-on-failure against a VM that
+  genuinely cannot start.
+
+  WHY AbandonProcessGroup
+
+  The plist this replaces ran `colima start -f`, so the colima process stayed
+  resident for as long as the VM did and launchd had something to supervise.
+  This one exits as soon as Docker answers, and launchd SIGKILLs a job's
+  remaining process group on exit. If the Lima hostagent shared this wrapper's
+  process group, the daemon would start a VM and kill it again every tick.
+
+  It does not. Verified on colima 0.10.1 / Lima, reading the pids Lima itself
+  records:
+
+      $ ps -o pid,pgid,ppid,comm -p $(cat ~/.colima/_lima/colima/ha.pid)
+        PID  PGID  PPID  COMM
+       8850  8850     1  /opt/homebrew/bin/limactl
+
+  PGID equals PID and PPID is 1: the hostagent detaches into its own process
+  group and reparents to init, so it was never in our group to begin with. The
+  same holds for the colima daemon and the ssh mux. AbandonProcessGroup is set
+  anyway, as insurance against a future Colima that stops detaching - the cost
+  is that launchd stops tracking children we explicitly want to outlive us,
+  which is precisely the intent here.
+
+  The same fact clears the migration: booting out the old resident `-f` daemon
+  during activation does not take a running VM down with it.
+
+  WHY UserName rather than root
+
+  Colima VM state lives in ${USER}'s home (~/.colima, ~/.lima) and the docker
+  socket is created under it. A root-owned Colima would either refuse those
+  files or stand up a parallel root-owned VM that every existing `docker`
+  invocation would miss. UserName keeps the ownership invariants intact.
+  `HOME` is set explicitly because launchd does not run a login shell.
+
+  WHY THE LABEL IS NOT BOT-SCOPED
+
+  Every other chassis plist is com.behalfbot.<bot>-<name>. This one is
+  not, deliberately: Colima is a per-machine singleton, not a per-bot resource.
+  Two installs on one Mac share one VM and must share one owner, so they share
+  one label. Whichever install activates last owns the plist; because the
+  wrapper is idempotent and locked, that is harmless.
+
+  Template variables (expanded at render time):
+    CUSTOMER_HOME     per-customer state root
+    CHASSIS_HOME      chassis git tree root
+    USER              installer's macOS short name
+    HOMEBREW_PREFIX   /opt/homebrew on Apple Silicon, /usr/local on Intel
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.behalfbot.colima</string>
+
+    <key>UserName</key>
+    <string>${USER}</string>
+    <key>GroupName</key>
+    <string>staff</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${CHASSIS_HOME}/chassis/scripts/colima-ensure.sh</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <!-- The VM must outlive this one-shot wrapper. See the comment above:
+         Lima's hostagent already detaches into its own process group, so this
+         is insurance rather than load-bearing. -->
+    <key>AbandonProcessGroup</key>
+    <true/>
+
+    <!-- Daemon-domain plist: only the System session is meaningful. -->
+    <key>LimitLoadToSessionType</key>
+    <array>
+        <string>System</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/${USER}</string>
+
+    <key>StandardErrorPath</key>
+    <string>${CUSTOMER_HOME}/logs/scheduled/colima-stderr.log</string>
+    <key>StandardOutPath</key>
+    <string>${CUSTOMER_HOME}/logs/scheduled/colima-stdout.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>${HOMEBREW_PREFIX}/bin:${HOMEBREW_PREFIX}/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/${USER}</string>
+        <key>CUSTOMER_HOME</key>
+        <string>${CUSTOMER_HOME}</string>
+        <key>CHASSIS_HOME</key>
+        <string>${CHASSIS_HOME}</string>
+    </dict>
+</dict>
+</plist>

@@ -15,7 +15,56 @@ day and the install is 30-45 minutes. Do it during, and it is an afternoon.
 - A Linux box (Ubuntu 22.04+ recommended) or a Mac. 8GB RAM is the realistic floor.
 - Docker + Docker Compose installed and working as your user, not just as root.
 - Tailscale installed, node joined, shared with whoever is helping you install.
+- **Tailscale key expiry disabled on this node.** See below. Do it the day you
+  join the node, not later.
 - SSH key handoff done, if someone else is driving the install.
+- On a Mac: enable auto-login (System Settings > Users & Groups > Automatically
+  log in as). Without it, no LaunchAgent registers after an unattended reboot and
+  the bot stays down until a human logs in. See `docs/launchd-domains.md`.
+- On a Mac using Colima: let the chassis own starting it. Nothing else on the box
+  should run `colima start`. See `docs/colima-recovery.md`.
+
+> ### Disable Tailscale key expiry on the always-on host
+>
+> **Tailscale node keys expire after 180 days by default, silently, and the
+> expiry takes ssh and VNC with it.**
+>
+> This is the single item on this page most likely to lock you out of your own
+> install. It cost the reference install a four-day total blackout
+> (scrollinondubs/new-jaxity#550): the node key was issued the day the box was
+> provisioned, hit its 180 days while the owner was away, and every remote path
+> to the machine went with it. There is no warning before it happens.
+>
+> An always-on box that nobody is sitting in front of should never have an
+> expiring node key. Do this now:
+>
+> 1. Open the Tailscale admin console, **Machines**.
+> 2. Find the host row.
+> 3. Open the `...` menu at the end of the row.
+> 4. Choose **Disable key expiry**.
+>
+> Verify from the host itself, not from the console:
+>
+> ```sh
+> tailscale status --json | jq '.Self.KeyExpiry'
+> # want: null   (a date string means expiry is still on)
+> ```
+>
+> Without `jq`:
+>
+> ```sh
+> tailscale status --json | \
+>   python3 -c "import json,sys; print(json.load(sys.stdin)['Self'].get('KeyExpiry','absent'))"
+> # want: absent   (the field is dropped entirely once expiry is disabled)
+> ```
+>
+> **The tailnet-wide setting is not a substitute.** Settings > Device management
+> caps key expiry at 180 days; it cannot disable it. Per-node disable is the only
+> real fix for a machine nobody is physically near.
+>
+> Your laptop and phone still expire on the 180-day default, which is fine: you
+> are present to re-authenticate those. The always-on host is the one that has to
+> be exempt.
 
 ## 2. Agent-side accounts
 

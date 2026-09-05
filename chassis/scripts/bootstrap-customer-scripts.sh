@@ -175,6 +175,11 @@ if [[ "$RENDER_PLISTS" == "true" ]]; then
     # the legacy bare-metal V1 install path; do NOT activate it as a daemon.
     render_template "$LAUNCHD_DIR/com.behalfbot.heartbeat-dispatcher.plist.template" \
         "$OUT_PLISTS/com.behalfbot.heartbeat-dispatcher.plist"
+    # Colima startup owner. Label is NOT bot-scoped: Colima is a per-machine
+    # singleton, so two installs on one Mac must share one owner.
+    # See docs/colima-recovery.md.
+    render_template "$LAUNCHD_DIR/com.behalfbot.colima.plist.template" \
+        "$OUT_PLISTS/com.behalfbot.colima.plist"
 fi
 
 # install_plist <rendered-plist-path> <agent|daemon>
@@ -258,6 +263,95 @@ CHASSIS_PLIST_DOMAINS=(
     # heartbeat-dispatcher.plist deliberately NOT listed - deprecated per #14.
 )
 
+# colima is the one chassis-shipped plist that legitimately belongs in the
+# DAEMON domain: it touches no login keychain, runs no claude, shares no tmux
+# server, and has to come up on an unattended reboot with nobody logged in.
+# Registered only where Colima is actually the Docker runtime - a Linux install
+# runs Docker natively and a Mac without Colima has nothing to start, and
+# neither should be made to sudo for a plist that would no-op.
+# See docs/colima-recovery.md and scrollinondubs/new-jaxity#550.
+if [[ "$(uname -s)" == "Darwin" ]] && command -v colima >/dev/null 2>&1; then
+    CHASSIS_PLIST_DOMAINS+=("com.behalfbot.colima.plist daemon")
+fi
+
+# Second-colima-owner check. Colima is a per-machine singleton and the whole
+# point of shipping com.behalfbot.colima is that ONE job owns starting it. Two
+# launchd jobs both racing `colima start` cannot recover from stale lima
+# sockets and will fight each other's recovery attempts - that is exactly what
+# happened on the reference install on 2026-09-05 (new-jaxity#550), where
+# com.behalfbot.colima and a hand-rolled postgres agent both fired at boot and
+# both died.
+#
+# We can detect a foreign owner but we must not silently rewrite someone else's
+# plist, so this warns with the exact remediation and continues.
+
+# Flatten a plist (or a shell script) to one whitespace-squeezed line with XML
+# tags removed, so that a `colima` / `start` pair split across a
+# <array><string> block reads the same as an inline shell one-liner.
+_colima_flatten() {
+    tr '\n' ' ' < "$1" 2>/dev/null | sed -e 's/<[^>]*>/ /g' | tr -s '[:space:]' ' '
+}
+
+# Matches `colima start`, `colima restart`, and `colima --profile x start`.
+# Deliberately does NOT match a bare mention of colima: the plist key
+# `StartInterval` and a prose comment naming colima are not owners, and a
+# warning that fires on its own documentation is noise.
+_colima_starts_it() {
+    printf '%s' "$1" | grep -qE 'colima([[:space:]]+-{1,2}[^[:space:]]+)*[[:space:]]+(re)?start([[:space:]]|$)'
+}
+
+warn_foreign_colima_owners() {
+    local dir f body ref found=()
+    for dir in "/Library/LaunchDaemons" "$HOME/Library/LaunchAgents"; do
+        [[ -d "$dir" ]] || continue
+        for f in "$dir"/*.plist; do
+            [[ -f "$f" ]] || continue
+            [[ "$(basename "$f")" == "com.behalfbot.colima.plist" ]] && continue
+
+            body="$(_colima_flatten "$f")"
+            if _colima_starts_it "$body"; then
+                found+=("$f")
+                continue
+            fi
+            # Follow the scripts the plist invokes - the owner is often one
+            # indirection away, in a watchdog the plist merely schedules.
+            for ref in $(printf '%s' "$body" | tr ' ' '\n' | grep -E '\.sh$' || true); do
+                [[ -f "$ref" ]] || continue
+                if _colima_starts_it "$(_colima_flatten "$ref")"; then
+                    found+=("$f -> $ref")
+                    break
+                fi
+            done
+        done
+    done
+    [[ ${#found[@]} -eq 0 ]] && return 0
+
+    echo "" >&2
+    echo "  WARNING: these launchd jobs also appear to start or restart Colima:" >&2
+    local x
+    for x in "${found[@]}"; do
+        echo "    $x" >&2
+    done
+    echo "" >&2
+    echo "  com.behalfbot.colima is meant to be the only owner. A second owner" >&2
+    echo "  races it at boot, and neither can clear the stale ha.pid / ha.sock a" >&2
+    echo "  hard power-off leaves behind (new-jaxity#550)." >&2
+    echo "" >&2
+    echo "  Change each of those to WAIT for the docker socket instead of starting" >&2
+    echo "  Colima. Replace a 'colima status || colima start ...' prefix with:" >&2
+    echo "" >&2
+    echo "    for _ in \$(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 3; done" >&2
+    echo "" >&2
+    echo "  This is a heuristic - confirm before editing anything. Background and" >&2
+    echo "  a worked example: docs/colima-recovery.md" >&2
+    echo "" >&2
+    return 0
+}
+
+if [[ "$RENDER_PLISTS" == "true" && "$(uname -s)" == "Darwin" ]] && command -v colima >/dev/null 2>&1; then
+    warn_foreign_colima_owners
+fi
+
 # Stale-daemon check. An install from the #14 era has these same labels sitting
 # in /Library/LaunchDaemons/. A leftover daemon keeps firing the restart script
 # from the Background session and re-poisons the shared tmux server, fighting
@@ -268,6 +362,10 @@ if [[ "$ACTIVATE_PLISTS" == "true" && "$(uname -s)" == "Darwin" ]]; then
     for entry in "${CHASSIS_PLIST_DOMAINS[@]}"; do
         # shellcheck disable=SC2086
         set -- $entry
+        # Only AGENT-domain plists are stale when found in /Library/LaunchDaemons/.
+        # com.behalfbot.colima lives there by design; flagging it would make this
+        # check refuse to proceed on every correctly-configured macOS install.
+        [[ "${2:-agent}" == "agent" ]] || continue
         if [[ -f "/Library/LaunchDaemons/$1" ]]; then
             stale_daemons+=("$1")
         fi
@@ -337,7 +435,13 @@ if [[ "$DRY_RUN" != "true" ]]; then
             echo "      they spawn the tmux session that hosts claude, which needs the"
             echo "      login keychain. LaunchDaemons cannot reach it (docs/launchd-domains.md)."
             echo ""
-            echo "      Easiest: re-run this script with --activate-plists (no sudo needed)."
+            if [[ "$(uname -s)" == "Darwin" ]] && command -v colima >/dev/null 2>&1; then
+                echo "      com.behalfbot.colima is a DAEMON (it must start the Docker VM on an"
+                echo "      unattended reboot, before anyone logs in), so activation will prompt"
+                echo "      for sudo once. See docs/colima-recovery.md."
+                echo ""
+            fi
+            echo "      Easiest: re-run this script with --activate-plists."
             echo ""
             echo "      Or manually, for each agent:"
             echo "        ln -sf $OUT_PLISTS/com.behalfbot.${BOT_NAME}-discord-restart.plist  ~/Library/LaunchAgents/"

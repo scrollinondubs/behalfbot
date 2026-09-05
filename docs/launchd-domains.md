@@ -134,7 +134,8 @@ invoked with `--activate-plists` - installs each rendered plist into its domain:
   `launchctl bootstrap gui/$(id -u) <plist>`. No sudo.
 - **Daemon-domain** plists: `sudo cp` to `/Library/LaunchDaemons/`,
   `sudo chown root:wheel`, `sudo chmod 644`, `sudo launchctl bootstrap system
-  <plist>`. (No chassis-shipped plist uses this path today.)
+  <plist>`. (`com.behalfbot.colima` is the one chassis-shipped plist that
+  uses this path. See `docs/colima-recovery.md`.)
 
 The domain for each chassis-shipped plist is encoded in the
 `CHASSIS_PLIST_DOMAINS` array in `bootstrap-customer-scripts.sh`. To add a new
@@ -193,6 +194,7 @@ security find-generic-password -s <some-item> -w >/dev/null && echo keychain OK
 | `com.behalfbot.<bot>-discord-restart` | **Agent** | Spawns a host tmux session running `claude` - needs the login keychain |
 | `com.behalfbot.<bot>-discord-watchdog` | **Agent** | Invokes the restart script; shares the same tmux server |
 | `com.behalfbot.heartbeat-dispatcher` | **Deprecated** | Dispatcher runs inside the chassis container now (see `docker-compose.yml`). Template retained for the legacy bare-metal V1 install path. |
+| `com.behalfbot.colima` | **Daemon** | Starts and recovers the Colima VM on macOS. Touches no keychain, runs no Claude, shares no tmux server, and has to come up on an unattended reboot with nobody logged in. Rendered and registered only where Colima is actually the Docker runtime. Label is not bot-scoped: Colima is a per-machine singleton, so two installs on one Mac share one owner. See `docs/colima-recovery.md`. |
 
 Plugins ship their own plists separately. The dating plugin's
 `plugins/dating/scheduled-tasks/dating-swipe.plist.template` is a LaunchAgent
@@ -205,5 +207,8 @@ session - and, by this doc's rule, because it runs Claude.
   ("this job only docker execs the chassis container") was factually wrong.
 - scrollinondubs/new-jaxity#271 - the customer-side fix, proven on the reference
   install 2026-07-11.
+- scrollinondubs/new-jaxity#550 - the 2026-09-05 outage that put
+  `com.behalfbot.colima` on a wrapper and made it the single owner of Colima
+  startup. See `docs/colima-recovery.md`.
 - `docs/LESSONS_FROM_V1.md` - running ledger of install-time failures.
 - `chassis/scripts/bootstrap-customer-scripts.sh` - the renderer + installer.
