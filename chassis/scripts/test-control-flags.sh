@@ -44,27 +44,55 @@ ORIGINAL_PATH="$PATH"
 # intercept is forwarded to the real binary, so `date +%s` keeps working.
 cat > "$STUB_BIN/date" <<'STUB'
 #!/bin/bash
+# `date` that answers as exactly one dialect. Both parsing dialects are
+# EMULATED with python rather than forwarded to the real binary: the suite has
+# to be able to force the BSD answer on a GNU-only CI runner and the GNU answer
+# on a Mac, which passthrough cannot do. Everything else (notably `date +%s`)
+# forwards to the real binary untouched.
 real="${STUB_REAL_DATE:?}"
 dialect="${STUB_DIALECT:?}"
-case "${1:-}" in
-    -j)
-        [[ "$dialect" == "bsd" ]] || { echo "date: illegal option -- j" >&2; exit 1; }
-        exec "$real" "$@"
-        ;;
-    -u)
-        if [[ "${2:-}" == "-d" ]]; then
-            [[ "$dialect" == "gnu" ]] || { echo "date: illegal option -- d" >&2; exit 1; }
-            # macOS has no GNU date. Emulate `date -u -d <iso> +%s` with python
-            # so this branch is exercisable on both CI (Linux) and a dev Mac.
-            python3 -c '
+
+emulate_parse() {
+    # $1 = strftime format ("" means ISO-ish free parse), $2 = timestamp
+    python3 -c '
 import sys
 from datetime import datetime, timezone
-raw = sys.argv[1].strip().replace("Z", "+00:00")
-dt = datetime.fromisoformat(raw)
+fmt, raw = sys.argv[1], sys.argv[2].strip()
+try:
+    if fmt:
+        dt = datetime.strptime(raw, fmt)
+    else:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+except ValueError:
+    raise SystemExit(1)
 if dt.tzinfo is None:
     dt = dt.replace(tzinfo=timezone.utc)
 print(int(dt.timestamp()))
-' "$3"
+' "$1" "$2"
+}
+
+case "${1:-}" in
+    -j)
+        # BSD: date -j [-u] -f <fmt> <timestamp> +%s
+        [[ "$dialect" == "bsd" ]] || { echo "date: illegal option -- j" >&2; exit 1; }
+        fmt=""; ts=""; want_fmt=0
+        for arg in "$@"; do
+            if [[ "$want_fmt" -eq 1 ]]; then fmt="$arg"; want_fmt=0; continue; fi
+            case "$arg" in
+                -f) want_fmt=1 ;;
+                -j|-u) ;;
+                +*) ;;
+                *) ts="$arg" ;;
+            esac
+        done
+        emulate_parse "$fmt" "$ts"
+        exit $?
+        ;;
+    -u)
+        if [[ "${2:-}" == "-d" ]]; then
+            # GNU: date -u -d <timestamp> +%s
+            [[ "$dialect" == "gnu" ]] || { echo "date: illegal option -- d" >&2; exit 1; }
+            emulate_parse "" "$3"
             exit $?
         fi
         exec "$real" "$@"
