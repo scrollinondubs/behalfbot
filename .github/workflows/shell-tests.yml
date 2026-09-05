@@ -42,6 +42,8 @@ on:
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
       - 'chassis/scripts/test-discord-reply-param-fix.sh'
+      - 'chassis/scripts/colima-ensure.sh'
+      - 'chassis/scripts/test-colima-ensure.sh'
       - 'chassis/scripts/_control-flags.sh'
       - 'chassis/scripts/test-control-flags.sh'
       - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
@@ -80,6 +82,8 @@ on:
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
       - 'chassis/scripts/test-discord-reply-param-fix.sh'
+      - 'chassis/scripts/colima-ensure.sh'
+      - 'chassis/scripts/test-colima-ensure.sh'
       - 'chassis/scripts/_control-flags.sh'
       - 'chassis/scripts/test-control-flags.sh'
       - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
@@ -227,6 +231,25 @@ jobs:
       # defeats its own purpose. No docker, no network.
       - run: bash chassis/scripts/test-discord-reply-param-fix.sh
 
+  colima-ensure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for new-jaxity#550: an unclean shutdown leaves
+      # stale lima pid/socket files, the profile comes back Broken, and a bare
+      # `colima start` dies on the stale ha.sock on every boot forever. The
+      # suite stubs colima and docker, overrides the OS probe (so it runs on a
+      # Linux runner with no VM), and proves the wrapper escalates to
+      # stop --force, retries once, and verifies `docker ps` rather than
+      # trusting a start that exited 0 onto a dead socket.
+      #
+      # Two assertions are the load-bearing ones: no code path ever issues
+      # `colima delete` or `colima start --reset`. Both destroy the VM disk
+      # image and every docker volume on it.
+      #
+      # Proven to discriminate: 14 assertions fail against a naive
+      # `colima start` implementation.
+      - run: bash chassis/scripts/test-colima-ensure.sh
   control-flags:
     runs-on: ubuntu-latest
     steps:
