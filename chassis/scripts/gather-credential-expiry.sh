@@ -182,9 +182,9 @@ add_check() {
     local exp_json="null"
     [[ -n "$3" ]] && exp_json="$3"
     CHECKS+=("$(jq -nc \
-        --arg id "$1" --arg label "$2" --argjson exp "$exp_json" \
+        --arg id "$1" --arg lbl "$2" --argjson exp "$exp_json" \
         --arg st "$4" --arg detail "$5" \
-        '{id: $id, label: $label, expires_at: $exp,
+        '{id: $id, label: $lbl, expires_at: $exp,
           state: (if $st == "" then null else $st end), detail: $detail}')")
 }
 
