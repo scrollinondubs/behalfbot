@@ -406,42 +406,52 @@ jobs:
       # Same suites the ubuntu jobs run, no more and no less. Deliberate
       # parity: adding suites the Linux lane does not run is a different
       # change, and a divergence between the two lists is how one lane
-      # quietly stops covering something.
+      # quietly stops covering something. If you add a job above, add its
+      # suite here.
       #
       # Excluded, same as the ubuntu lane: test-daily-log-gather.sh,
       # test-compose-verify.sh, test-merge-plugin-triggers.sh and
       # test-validate-heartbeats.sh are not wired into CI on either platform.
       #
-      # One loop rather than thirteen jobs: thirteen macOS runners would each
-      # pay the ~30s image spin-up to run a suite that takes under 3 seconds.
-      # Every suite runs even when an earlier one fails, so one red suite
-      # cannot hide the other twelve.
+      # One loop rather than one job per suite: each extra macOS runner would
+      # pay the image spin-up again to run a suite that mostly takes under 3
+      # seconds. Every suite runs even when an earlier one fails, so one red
+      # suite cannot hide the rest.
       - name: Run the shell suites under bash 3.2 + BSD userland
         run: |
           set -u
+          # <interpreter>:<path>. The heartbeat-fire-caps suites are zsh, not
+          # bash - macOS ships zsh 5.9 at /bin/zsh, so unlike the ubuntu job
+          # this needs no install step. They drive the real dispatcher, which
+          # is the file with the largest untested surface on this platform.
           SUITES="
-          chassis/scripts/test-chassis-update-health.sh
-          chassis/scripts/test-plugin-root-resolution.sh
-          chassis/scripts/test-chassis-root-health.sh
-          chassis/scripts/test-container-liveness.sh
-          chassis/scripts/test-chassis-root-resolution.sh
-          chassis/scripts/test-bootstrap-audit-memory.sh
-          chassis/scripts/test-memory-canary.sh
-          chassis/scripts/test-chassis-update-check.sh
-          chassis/scripts/test-chassis-update-mode.sh
-          chassis/scripts/test-discord-reply-param-fix.sh
-          chassis/scripts/test-colima-ensure.sh
-          chassis/scripts/test-control-flags.sh
-          plugins/dating/tests/test-emulator-state.sh
+          bash:chassis/scripts/test-chassis-update-health.sh
+          bash:chassis/scripts/test-plugin-root-resolution.sh
+          bash:chassis/scripts/test-chassis-root-health.sh
+          bash:chassis/scripts/test-container-liveness.sh
+          bash:chassis/scripts/test-chassis-root-resolution.sh
+          bash:chassis/scripts/test-bootstrap-audit-memory.sh
+          bash:chassis/scripts/test-memory-canary.sh
+          bash:chassis/scripts/test-chassis-update-check.sh
+          bash:chassis/scripts/test-chassis-update-mode.sh
+          bash:chassis/scripts/test-discord-reply-param-fix.sh
+          bash:chassis/scripts/test-colima-ensure.sh
+          bash:chassis/scripts/test-control-flags.sh
+          bash:plugins/dating/tests/test-emulator-state.sh
+          zsh:chassis/scheduled-tasks/tests/test_state_write_race.sh
+          zsh:chassis/scheduled-tasks/tests/test_fire_caps.sh
+          zsh:chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh
           "
           FAILED=""
           EMPTY=""
           TOTAL=0
           RAN=0
-          for suite in $SUITES; do
+          for entry in $SUITES; do
+            SHELL_BIN="${entry%%:*}"
+            suite="${entry#*:}"
             echo "::group::$suite"
             LOG="${RUNNER_TEMP}/$(basename "$suite").log"
-            if bash "$suite" > "$LOG" 2>&1; then
+            if "$SHELL_BIN" "$suite" > "$LOG" 2>&1; then
               RC=0
             else
               RC=$?
@@ -453,7 +463,12 @@ jobs:
             # prints ("N passed" or "PASS: N"). A suite that exits 0 having
             # asserted nothing is the failure this whole lane exists to catch,
             # so zero is a failure even when the exit code is clean.
-            N=$(grep -oE '([0-9]+ passed|PASS: +[0-9]+)' "$LOG" | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}')
+            N=$(grep -oE '([0-9]+ passed|[0-9]+ assertions|PASS: +[0-9]+ +FAIL)' "$LOG" | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}')
+            # A suite that reports PASS lines but no numeric summary (the
+            # dispatcher state-write race) counts its PASS lines instead.
+            if [ "$N" -eq 0 ]; then
+              N=$(grep -c 'PASS:' "$LOG" | tr -d ' ')
+            fi
             TOTAL=$(( TOTAL + N ))
             if [ "$RC" -ne 0 ]; then
               echo "::error file=$suite::suite FAILED under bash 3.2 / BSD userland (exit $RC, $N assertions)"
@@ -462,7 +477,7 @@ jobs:
               echo "::error file=$suite::suite exited 0 but reported ZERO assertions"
               EMPTY="$EMPTY $suite"
             else
-              echo "ok  $suite ($N assertions)"
+              echo "ok  $suite ($SHELL_BIN, $N assertions)"
             fi
           done
 
@@ -471,10 +486,10 @@ jobs:
 
           # Floor against a silent collapse - a broken checkout, a renamed
           # summary line, a loop that iterates over nothing. The suites totalled
-          # 365 assertions when this lane was added. Raise it as they grow;
+          # 454 assertions when this lane was added. Raise it as they grow;
           # never lower it to make a red build green.
-          if [ "$TOTAL" -lt 340 ]; then
-            echo "::error::only $TOTAL assertions across $RAN suites, expected at least 340 - the lane is not exercising what it claims to"
+          if [ "$TOTAL" -lt 420 ]; then
+            echo "::error::only $TOTAL assertions across $RAN suites, expected at least 420 - the lane is not exercising what it claims to"
             exit 1
           fi
           if [ -n "$FAILED" ] || [ -n "$EMPTY" ]; then
@@ -482,4 +497,4 @@ jobs:
             [ -n "$EMPTY" ] && echo "NO ASSERTIONS:$EMPTY"
             exit 1
           fi
-          echo "all $RAN suites pass on bash 3.2 + BSD userland"
+          echo "all $RAN suites pass on macOS: bash 3.2.57, zsh 5.9, BSD userland"

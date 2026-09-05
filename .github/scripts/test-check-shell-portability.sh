@@ -153,6 +153,15 @@ newest = items[-1]["message_id"]
 PY
 EOF
 
+cat > "$TMP/good/prose.sh" <<'EOF'
+#!/usr/bin/env bash
+# The words `date -j` and `stat -f` inside a quoted string are prose, not a
+# command. Real instance: chassis/scheduled-tasks/tests/test_fire_caps.sh
+# fails with a message explaining why the ledger stores an epoch.
+fail "the ledger must carry an epoch, since date -j -f is macOS-only"
+echo "we use stat -f on the host and stat -c in the container"
+EOF
+
 cat > "$TMP/good/escaped.sh" <<'EOF'
 #!/usr/bin/env bash
 mtime=$(stat -f %m "$f")  # portable-ok: macOS-only colima wrapper, never runs in the container
@@ -169,6 +178,8 @@ assert_silent date-gnu-only            "a one-line BSD-then-GNU date chain does 
 assert_silent associative-array        "declare -a does not fire"
 assert_silent gnu-only-tool            "a command -v guarded sha256sum does not fire"
 assert_silent sed-i                    "sed -i.bak does not fire"
+assert_silent date-bsd-only            "the words 'date -j' inside a quoted message do not fire"
+assert_silent stat-bsd-only            "the words 'stat -f' inside a quoted message do not fire"
 
 if printf '%s\n' "$OUT" | grep -q '^::warning'; then
     no "the fixed-idiom fixtures produce ZERO findings"
@@ -197,7 +208,7 @@ assert_rc 0 "--strict exits 0 on a clean tree"            bash "$CHECK" --strict
 # list and reports zero findings is the failure class this whole lane exists
 # for, so assert it actually visited the fixtures.
 OUT="$(bash "$CHECK" "$TMP/good" 2>&1)"
-if printf '%s\n' "$OUT" | grep -qE 'across 3 shell file'; then
+if printf '%s\n' "$OUT" | grep -qE 'across 4 shell file'; then
     ok "reports the number of files it actually scanned"
 else
     no "reports the number of files it actually scanned"

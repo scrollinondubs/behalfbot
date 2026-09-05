@@ -111,17 +111,22 @@ function window(i,   lo, hi, j, w) {
     lo = i - 3; if (lo < 1) lo = 1
     hi = i + 3; if (hi > n) hi = n
     w = ""
-    for (j = lo; j <= hi; j++) w = w L[j] "\n"
-    return w
+    for (j = lo; j <= hi; j++) w = w "\n" L[j]
+    return w "\n"
 }
 function pos(s, re) { return match(s, re) ? RSTART : 0 }
 
 BEGIN {
     hits = 0
-    BSD_DATE = "(^|[^A-Za-z0-9_-])date[ \t]+(-[A-Za-z][^ \t]*[ \t]+)*-[jvr]"
-    GNU_DATE = "(^|[^A-Za-z0-9_-])date[ \t]+(-[A-Za-z][^ \t]*[ \t]+)*-d([ \t]|$)"
-    BSD_STAT = "stat[ \t]+(-[A-Za-z][^ \t]*[ \t]+)*-[A-Za-z]*f"
-    GNU_STAT = "stat[ \t]+(-[A-Za-z][^ \t]*[ \t]+)*-[A-Za-z]*c"
+    # Anchored to a COMMAND position - start of line, or straight after one
+    # of ( | ; & { - so the word `date` inside a quoted message does not
+    # match. Every candidate line and window below is prefixed with a newline
+    # so the same class works for both.
+    CMD = "[\n(|;&{][ \t]*"
+    BSD_DATE = CMD "date[ \t]+(-[A-Za-z][^ \t]*[ \t]+)*-[jvr]"
+    GNU_DATE = CMD "date[ \t]+(-[A-Za-z][^ \t]*[ \t]+)*-d([ \t]|$)"
+    BSD_STAT = CMD "stat[ \t]+(-[A-Za-z][^ \t]*[ \t]+)*-[A-Za-z]*f"
+    GNU_STAT = CMD "stat[ \t]+(-[A-Za-z][^ \t]*[ \t]+)*-[A-Za-z]*c"
 }
 
 { L[NR] = $0 }
@@ -164,8 +169,9 @@ END {
 
         # ---------- BSD vs GNU. Fatal on whichever platform the author is not on.
         w = window(i)
+        cl = "\n" line
 
-        if (line ~ BSD_STAT) {
+        if (cl ~ BSD_STAT) {
             pf = pos(w, BSD_STAT)
             pc = pos(w, GNU_STAT)
             if (pc == 0)
@@ -174,8 +180,8 @@ END {
                 warn(FILENAME, i, "dialect", "stat-wrong-order", "BSD `stat -f` runs BEFORE the GNU `stat -c` fallback. On Linux `stat -f` still writes a filesystem block to stdout, so the two outputs concatenate (bug 2, behalfbot#193). Put `stat -c` first", line)
         }
 
-        has_bsd_date = (line ~ BSD_DATE)
-        has_gnu_date = (line ~ GNU_DATE)
+        has_bsd_date = (cl ~ BSD_DATE)
+        has_gnu_date = (cl ~ GNU_DATE)
         if (has_bsd_date && !has_gnu_date && !(w ~ GNU_DATE))
             warn(FILENAME, i, "dialect", "date-bsd-only", "BSD `date -j`/`-v`/`-r` with no GNU `date -d` fallback nearby; inside the Debian container this takes the error branch and every timestamp becomes epoch 0 (bug 3, behalfbot#195)", line)
         if (has_gnu_date && !has_bsd_date && !(w ~ BSD_DATE))
