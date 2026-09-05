@@ -72,6 +72,11 @@ TIMEOUT_CMD="$(command -v gtimeout 2>/dev/null || command -v timeout 2>/dev/null
 HEARTBEATS_FILE="$CUSTOMER_HOME/HEARTBEATS.md"
 STATE_FILE="$CUSTOMER_HOME/scheduled-tasks/heartbeat-state.json"
 CONSERVATION_FILE="$CUSTOMER_HOME/scheduled-tasks/conservation-mode.json"
+# Remote kill switch (behalfbot#550). Written by
+# chassis/scripts/discord-control-listener.py without going through Claude
+# or a shell, so it still works when the OAuth session is dead and
+# Tailscale is down. Same five-key schema as conservation-mode.json.
+HALT_FILE="$CUSTOMER_HOME/scheduled-tasks/halt.json"
 LOCK_FILE="$CUSTOMER_HOME/logs/scheduled/dispatcher.lock"
 LOG_DIR="$CUSTOMER_HOME/logs/scheduled"
 DATE=$(date +%Y-%m-%d)
@@ -141,42 +146,47 @@ log() {
     echo "[$(date +%H:%M:%S)] $1" >> "$LOG_FILE"
 }
 
-# --- Conservation Mode ---
+# --- Control flags: halt + conservation ---
+
+# The flag arithmetic lives in chassis/scripts/_control-flags.sh so it can be
+# tested (this dispatcher cannot be, easily) and so the halt flag and the
+# conservation flag can never disagree about what "expired" means. The inline
+# version this replaces used `date -j`, which is BSD only: inside the container
+# every auto-lift timestamp parsed as epoch 0 and lifted on the next tick.
+CONTROL_FLAGS_LIB="${0:A:h}/../scripts/_control-flags.sh"
+if [[ -f "$CONTROL_FLAGS_LIB" ]]; then
+    source "$CONTROL_FLAGS_LIB"
+else
+    # Degraded fallback. A partial update must not take the kill switch away,
+    # so keep reading `.enabled` even with no library present - only the
+    # auto-lift arithmetic is lost.
+    chassis_control_flag_state() {
+        [[ -f "$1" ]] || { print -r -- "off"; return 0; }
+        local enabled
+        enabled=$(jq -r '.enabled // false' "$1" 2>/dev/null) || { print -r -- "on"; return 0; }
+        [[ "$enabled" == "true" ]] && print -r -- "on" || print -r -- "off"
+    }
+fi
+
+# The library lifts an expired flag silently. Both wrappers compare before and
+# after so the transition still reaches the log - an auto-lift that nobody can
+# see in the log is how the BSD-only parse stayed invisible for months.
+flag_state_logged() {
+    local file="$1" label="$2" before after
+    before=$(jq -r '.enabled // false' "$file" 2>/dev/null || echo "false")
+    after=$(chassis_control_flag_state "$file")
+    if [[ "$before" == "true" && "$after" == "off" ]]; then
+        log "$label - auto-lift triggered, flag cleared"
+    fi
+    print -r -- "$after"
+}
+
+is_halted() {
+    [[ "$(flag_state_logged "$HALT_FILE" "HALT")" == "on" ]]
+}
 
 is_conservation_mode() {
-    if [[ ! -f "$CONSERVATION_FILE" ]]; then
-        return 1
-    fi
-    local enabled
-    enabled=$(jq -r '.enabled // false' "$CONSERVATION_FILE")
-    if [[ "$enabled" != "true" ]]; then
-        return 1
-    fi
-
-    # Check auto-lift: if auto_lift_after is set and we're past it, disable
-    local auto_lift
-    auto_lift=$(jq -r '.auto_lift_after // ""' "$CONSERVATION_FILE")
-    if [[ -n "$auto_lift" && "$auto_lift" != "null" ]]; then
-        local lift_epoch
-        lift_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$auto_lift" +%s 2>/dev/null || echo 0)
-        local now_epoch=$(date +%s)
-        if [[ $now_epoch -ge $lift_epoch ]]; then
-            log "CONSERVATION — auto-lift triggered (past $auto_lift), disabling"
-            # Disable conservation mode
-            cat > "$CONSERVATION_FILE" << EOJSON
-{
-  "enabled": false,
-  "enabled_at": null,
-  "enabled_by": null,
-  "auto_lift_after": null,
-  "reason": null
-}
-EOJSON
-            return 1
-        fi
-    fi
-
-    return 0
+    [[ "$(flag_state_logged "$CONSERVATION_FILE" "CONSERVATION")" == "on" ]]
 }
 
 # --- Locking ---
@@ -911,6 +921,21 @@ main() {
     # or two of wake, causing silent hydration failures. `caffeinate` is
     # macOS-only; the `|| true` lets this no-op cleanly on Linux installers.
     caffeinate -u -t 5 >/dev/null 2>&1 || true
+
+    # Remote kill switch, checked before anything else in the tick - ahead of
+    # the recovery hooks, ahead of conservation mode, ahead of any gather.
+    # Unlike conservation mode this ignores `criticality` entirely: the
+    # operator asking for silence outranks a heartbeat's own opinion of how
+    # important it is. behalfbot#550 - the runaway was not stoppable by any
+    # path that needed a shell or a working Claude session.
+    if is_halted; then
+        local halt_reason halt_lift
+        halt_reason=$(jq -r '.reason // "no reason given"' "$HALT_FILE" 2>/dev/null || echo "unreadable")
+        halt_lift=$(jq -r '.auto_lift_after // "none"' "$HALT_FILE" 2>/dev/null || echo "unknown")
+        log "HALTED - every heartbeat skipped (reason: $halt_reason, auto-lift: $halt_lift)"
+        log "HALTED - say 'resume' in the control channel, or clear $HALT_FILE"
+        return
+    fi
 
     # Pre-loop checks. Plugins source recovery hooks via the loop above
     # (see "Plugin Recovery Hooks" section). Each hook is responsible for

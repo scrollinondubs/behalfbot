@@ -17,6 +17,8 @@ launchd / systemd
     │
     └── dispatcher.sh  (every 15m)
         │
+        ├── halt.json enabled?  ── yes ──→ log HALTED, end tick (nothing runs)
+        │
         ├── for each heartbeat in HEARTBEATS.md:
         │       │
         │       ├── schedule_matches()?  ── no ──→ skip
@@ -117,6 +119,16 @@ When token budget is running low, conservation mode suspends `normal` and `backg
 The dispatcher checks `auto_lift_after` on every tick — once that timestamp passes, conservation mode self-disables. (`LESSONS_FROM_V1.md` #12 — auto-lift was a bug fix; the V1 dispatcher initially had a too-narrow auto-disable window that left conservation mode permanently on.)
 
 Conservation mode is opt-in: if no JSON file exists, the dispatcher behaves as if it's off. Installers without quota concerns can skip the file entirely.
+
+---
+
+## Halt (the remote kill switch)
+
+`scheduled-tasks/halt.json` carries the same five keys as conservation mode and is checked first, before the recovery hooks and before conservation. When it is on, the tick ends immediately: **every** heartbeat is skipped, `criticality: critical` included. Conservation mode throttles; halt stops.
+
+It exists so the flag can be flipped from Discord by the install's principal with no shell, no ssh and no working Claude session - `chassis/scripts/discord-control-listener.py` writes the file directly. Full behaviour, lexicon and the list of things halt does NOT stop: `docs/remote-kill-switch.md`. Origin: `scrollinondubs/new-jaxity#550`.
+
+Both flags share `chassis/scripts/_control-flags.sh`, which is also where the auto-lift arithmetic lives. That arithmetic used to be inline and BSD-only (`date -j`), so inside the Linux container every `auto_lift_after` parsed as epoch 0 and lifted on the next tick while logging exactly what a working auto-lift logs.
 
 ---
 

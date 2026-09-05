@@ -259,7 +259,7 @@ manifest "$IMAGE_BAKED/bfl" "bfl" "1.0.0"
 CHASSIS_HOME_PLUGINS="$CUSTOMER/plugins"
 manifest "$CHASSIS_HOME_PLUGINS/bfl" "bfl" "2.0.0"
 RESOLVED_ROOT="$(env -u CHASSIS_PLUGINS_ROOT -u CHASSIS_BAKED_PLUGINS_ROOT     CUSTOMER_HOME="$CUSTOMER" CHASSIS_HOME="$CUSTOMER"     CHASSIS_IMAGE_PLUGINS_ROOT="$IMAGE_BAKED"     bash "$RESOLVER" 2>>"$TMP/resolver.log")"
-check "s12 $CHASSIS_HOME/plugins wins over /app/plugins on collision" "2.0.0"     "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RESOLVED_ROOT/bfl/openclaw.plugin.json")"
+check "s12 \$CHASSIS_HOME/plugins wins over /app/plugins on collision" "2.0.0"     "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "$RESOLVED_ROOT/bfl/openclaw.plugin.json")"
 
 # ---------------------------------------------------------------------------
 echo

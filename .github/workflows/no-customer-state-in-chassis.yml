@@ -63,6 +63,7 @@ jobs:
             'memory/MEMORY\.md$'
             'scheduled-tasks/heartbeat-state\.json$'
             'scheduled-tasks/conservation-mode\.json$'
+            'scheduled-tasks/halt\.json$'
           )
 
           violators=()

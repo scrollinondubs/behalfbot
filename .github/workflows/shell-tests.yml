@@ -42,6 +42,9 @@ on:
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
       - 'chassis/scripts/test-discord-reply-param-fix.sh'
+      - 'chassis/scripts/_control-flags.sh'
+      - 'chassis/scripts/test-control-flags.sh'
+      - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
       - 'chassis/scripts/gather-credential-expiry.sh'
       - 'chassis/scripts/test-credential-expiry.sh'
       - 'chassis/scripts/credential-expiry-alert.sh'
@@ -83,6 +86,9 @@ on:
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
       - 'chassis/scripts/test-discord-reply-param-fix.sh'
+      - 'chassis/scripts/_control-flags.sh'
+      - 'chassis/scripts/test-control-flags.sh'
+      - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
       - 'chassis/scripts/gather-credential-expiry.sh'
       - 'chassis/scripts/test-credential-expiry.sh'
       - 'chassis/scripts/credential-expiry-alert.sh'
@@ -233,6 +239,19 @@ jobs:
       # defeats its own purpose. No docker, no network.
       - run: bash chassis/scripts/test-discord-reply-param-fix.sh
 
+  control-flags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for the remote kill switch's flag arithmetic
+      # (behalfbot#550). The auto-lift check this library replaces used
+      # `date -j`, which is BSD only: inside the Linux container every
+      # `auto_lift_after` parsed as epoch 0 and lifted on the next tick, while
+      # logging the same line a working auto-lift logs. The suite stubs `date`
+      # on PATH to force each dialect, proves a future expiry stays ON under
+      # GNU, that an unparseable expiry fails CLOSED, and asserts the pre-fix
+      # idiom still gets it wrong so the discrimination cannot rot away.
+      - run: bash chassis/scripts/test-control-flags.sh
   credential-expiry:
     runs-on: ubuntu-latest
     steps:
@@ -261,6 +280,7 @@ jobs:
       # the first tick, that five more ticks in the same fault post nothing
       # further, that recovery posts exactly once and re-arms the edge, that
       # the two fault conditions stay distinct because they need different
-      # fixes, and that a failed delivery never breaks the sync. 19 of its 27
-      # cases fail against the pre-fix bridge.
+      # fixes, and that a failed delivery never breaks the sync. 19 of its 36
+      # cases fail against the pre-fix bridge, and 6 more against a build with
+      # the helper source unguarded and the bot-token delivery path removed.
       - run: bash chassis/scripts/test-claude-oauth-bridge-alert.sh
