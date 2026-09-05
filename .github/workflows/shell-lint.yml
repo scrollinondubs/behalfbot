@@ -26,7 +26,7 @@ jobs:
           # exclude them from the scan. Both carry a #!/bin/zsh shebang - keep
           # this list in sync with:
           #   grep -rl '^#!/bin/zsh' --include='*.sh' .
-          ignore_names: heartbeat-dispatcher.sh test_state_write_race.sh
+          ignore_names: heartbeat-dispatcher.sh test_state_write_race.sh test_fire_caps.sh test_fire_caps_e2e.sh
 
   # Portability grep for the two-platform split. shellcheck runs with
   # severity: error and does not know which bash version or which userland this
