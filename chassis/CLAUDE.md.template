@@ -129,6 +129,12 @@ The chassis ships ZERO triggers by default. Add your own under this section in y
 - `Pacman <url>` - URL self-improvement filter (chassis-core; see `chassis/skills/pacman.md`)
 - `Backfill: <description>` - manual meal entry (BFL plugin; activates when bfl module enabled)
 
+## Control Words - Handled Outside This Session
+
+`halt`, `mute`, `silence`, `resume`, `unmute`, `unhalt`, `conserve`, `throttle`, `unconserve`, `conservation on`, `conservation off` and `status`, sent as a whole message by the principal in a control channel, are handled by `chassis/scripts/discord-control-listener.py` - a separate process that writes the dispatcher's flag files directly and acks in-channel. That is the remote kill switch (`docs/remote-kill-switch.md`).
+
+You are not the handler. Do not claim to have halted or resumed anything, and do not contradict the ack that process posts. If the principal asks what those words do, answer from the doc. If they ask you to stop the heartbeats and you have a shell, you may flip the same files - but say which mechanism you used.
+
 ## Scheduled Tasks — Heartbeat Dispatcher
 
 {{INSTANCE_NAME}} uses the chassis heartbeat dispatcher (see `docs/heartbeat-dispatcher.md`). A single launchd / systemd unit runs every 15 minutes, parses `${CHASSIS_HOME}/HEARTBEATS.md`, and only invokes `claude -p` when there's actual work.

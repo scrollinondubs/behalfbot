@@ -2,7 +2,12 @@
 # Behalf.bot chassis container entrypoint
 # =======================================
 # Modes (passed as CMD or `docker compose run`):
-#   dispatcher       - long-running gather-first heartbeat loop (default CMD)
+#   dispatcher       - long-running gather-first heartbeat loop (default CMD).
+#                      Also supervises the Discord control listener (the
+#                      remote kill switch), so no compose change is needed
+#                      on an existing install to gain it.
+#   control-listener - the kill switch on its own, for installs that would
+#                      rather run it as a separate service
 #   bootstrap        - one-shot: hydrate .mcp.json/CLAUDE.md/HEARTBEATS.md, seed memory
 #   install-plugin <name>
 #                    - one-shot: run plugins/<name>/install.sh
@@ -169,6 +174,46 @@ run_dispatcher_once() {
     touch /tmp/dispatcher.alive
 }
 
+supervise_control_listener() {
+    # The remote kill switch (behalfbot#550). Runs as a child of the dispatcher
+    # loop rather than a separate compose service on purpose: every existing
+    # install gains it by pulling a new image, with no customer-side compose
+    # edit. Installs that want the stronger isolation of a separate container
+    # can run this image with the `control-listener` mode instead.
+    local script="$CHASSIS_ROOT/scripts/discord-control-listener.py"
+    local logfile="$CUSTOMER_HOME/logs/scheduled/control-listener.log"
+
+    if [[ ! -f "$script" ]]; then
+        log "WARN: control listener not found at $script - remote kill switch UNARMED"
+        return
+    fi
+
+    # Config probe first, so the reason lands in the CONTAINER log where an
+    # operator looks, not only in a file nobody reads. #550's other lesson was
+    # a monitor that reported into a log for four days.
+    local rc=0
+    python3 "$script" --check >/dev/null 2>&1 || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        log "WARN: remote kill switch UNARMED - set CHASSIS_PRINCIPAL_USER_ID (or"
+        log "WARN: INSTALLER_DISCORD_USER_ID), DISCORD_BOT_TOKEN and a control channel."
+        log "WARN: details: python3 $script (see docs/remote-kill-switch.md)"
+        python3 "$script" >> "$logfile" 2>&1 || true
+        return
+    fi
+
+    log "control listener starting - kill switch armed, log: $logfile"
+    while true; do
+        rc=0
+        python3 "$script" >> "$logfile" 2>&1 || rc=$?
+        if [[ "$rc" -eq 78 ]]; then
+            log "control listener exited 78 (config) - not restarting. See $logfile"
+            return
+        fi
+        log "control listener exited rc=$rc - restarting in 30s"
+        sleep 30
+    done
+}
+
 run_plugin_fetch() {
     # behalfbot#82. Pull the vendored plugin tree from scrollinondubs/behalfbot-plugins
     # at the tag+SHA recorded in PLUGINS_PIN, into $CUSTOMER_HOME/vendored-plugins.
@@ -229,10 +274,27 @@ cmd_dispatcher() {
     # No-ops on subsequent boots once the sentinel exists.
     bash "$CHASSIS_ROOT/scripts/first-boot-announce.sh" || \
         log "WARN: first-boot-announce.sh exited non-zero (non-fatal)"
+    # Background, and deliberately NOT waited on. A wedged or crashed dispatcher
+    # tick must not take the kill switch down with it - being able to say "halt"
+    # matters most exactly when the rest of the loop is misbehaving.
+    supervise_control_listener &
     while true; do
         run_dispatcher_once
         sleep "$DISPATCHER_INTERVAL_SECONDS"
     done
+}
+
+cmd_control_listener() {
+    ensure_customer_layout
+    source_env
+    resolve_chassis_root
+    local script="$CHASSIS_ROOT/scripts/discord-control-listener.py"
+    if [[ ! -f "$script" ]]; then
+        log "FATAL: control listener not found at $script"
+        exit 2
+    fi
+    log "running control listener from $script"
+    exec python3 "$script"
 }
 
 cmd_bootstrap() {
@@ -312,6 +374,7 @@ cmd_shell() {
 
 case "$MODE" in
     dispatcher)       cmd_dispatcher       "$@" ;;
+    control-listener) cmd_control_listener "$@" ;;
     bootstrap)        cmd_bootstrap        "$@" ;;
     install-plugin)   cmd_install_plugin   "$@" ;;
     hydrate-env)      cmd_hydrate_env      "$@" ;;
@@ -321,7 +384,7 @@ case "$MODE" in
     shell)            cmd_shell            "$@" ;;
     *)
         echo "unknown mode: $MODE" >&2
-        echo "valid modes: dispatcher | bootstrap | install-plugin <name> | hydrate-env | migrate | smoke-test | claude | shell" >&2
+        echo "valid modes: dispatcher | control-listener | bootstrap | install-plugin <name> | hydrate-env | migrate | smoke-test | claude | shell" >&2
         exit 2
         ;;
 esac
