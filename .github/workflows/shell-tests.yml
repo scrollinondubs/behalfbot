@@ -52,6 +52,12 @@ on:
       - 'chassis/scripts/_control-flags.sh'
       - 'chassis/scripts/test-control-flags.sh'
       - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
+      - 'chassis/scripts/gather-credential-expiry.sh'
+      - 'chassis/scripts/test-credential-expiry.sh'
+      - 'chassis/scripts/credential-expiry-alert.sh'
+      - 'chassis/scripts/sync-claude-oauth-bridge.sh'
+      - 'chassis/scripts/test-claude-oauth-bridge-alert.sh'
+      - 'chassis/scripts/_alert.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -97,6 +103,12 @@ on:
       - 'chassis/scripts/_control-flags.sh'
       - 'chassis/scripts/test-control-flags.sh'
       - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
+      - 'chassis/scripts/gather-credential-expiry.sh'
+      - 'chassis/scripts/test-credential-expiry.sh'
+      - 'chassis/scripts/credential-expiry-alert.sh'
+      - 'chassis/scripts/sync-claude-oauth-bridge.sh'
+      - 'chassis/scripts/test-claude-oauth-bridge-alert.sh'
+      - 'chassis/scripts/_alert.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
@@ -299,6 +311,38 @@ jobs:
       # GNU, that an unparseable expiry fails CLOSED, and asserts the pre-fix
       # idiom still gets it wrong so the discrimination cannot rot away.
       - run: bash chassis/scripts/test-control-flags.sh
+  credential-expiry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for the four-day blackout of 2026-09-01
+      # (new-jaxity#550). The suite stubs `tailscale` and `security` on PATH
+      # and forces every failure that outage produced: an expired node key, a
+      # NeedsLogin backend, a keychain entry that has lost its accessToken, a
+      # keychain read refused by the launchd domain, a dead token-refresh
+      # loop. It also pins the suppression contract, which is the half a
+      # monitor usually dies of: T-7 fires once and then goes quiet, T-1 fires
+      # on the transition, `expired` re-nags on a cooldown and `t7` never
+      # does. Nine of its cases fail against a build that puts the volatile
+      # day count back into the fingerprint, so the suite is proven to catch
+      # that defect rather than merely to pass. No network, no docker, no real
+      # keychain.
+      - run: bash chassis/scripts/test-credential-expiry.sh
+
+  claude-oauth-bridge-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The other half of new-jaxity#550: the oauth bridge DETECTED the
+      # keychain losing its Claude token and told nobody, logging the same
+      # WARN 288 times over four days. The suite proves the fault now posts on
+      # the first tick, that five more ticks in the same fault post nothing
+      # further, that recovery posts exactly once and re-arms the edge, that
+      # the two fault conditions stay distinct because they need different
+      # fixes, and that a failed delivery never breaks the sync. 19 of its 36
+      # cases fail against the pre-fix bridge, and 6 more against a build with
+      # the helper source unguarded and the bot-token delivery path removed.
+      - run: bash chassis/scripts/test-claude-oauth-bridge-alert.sh
 
   # ---------------------------------------------------------------------------
   # Everything above runs on ubuntu-latest: bash 5.x, GNU coreutils. That is
@@ -440,6 +484,8 @@ jobs:
           bash:chassis/scripts/test-discord-reply-param-fix.sh
           bash:chassis/scripts/test-colima-ensure.sh
           bash:chassis/scripts/test-control-flags.sh
+          bash:chassis/scripts/test-credential-expiry.sh
+          bash:chassis/scripts/test-claude-oauth-bridge-alert.sh
           bash:plugins/dating/tests/test-emulator-state.sh
           zsh:chassis/scheduled-tasks/tests/test_state_write_race.sh
           zsh:chassis/scheduled-tasks/tests/test_fire_caps.sh
