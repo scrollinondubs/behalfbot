@@ -68,6 +68,140 @@ Each heartbeat is one `##` heading + a fenced ` ```yaml ` block. The dispatcher 
 | `output_validator` | no | `true` to run the Five Failure Modes haiku check on the output |
 | `condition_prompt` | no | Required when condition=ask_model. Question to send to Ollama |
 | `jitter` | no | Random offset added to schedule (e.g. `30m`, `1h`). Deterministic per day+name |
+| `max_fires_per_day` | no | Hard ceiling on model invocations per calendar day. Unset = no ceiling. See "Runaway control" below |
+| `max_usd_per_day` | no | Hard ceiling on this heartbeat's spend per calendar day, read from telemetry. Unset = no ceiling |
+| `realert_after` | no | Suppress a re-fire while the condition is unchanged and the last alert is inside this window (e.g. `24h`). Unset = fire every time the condition is true, which is the pre-#550 behaviour |
+| `dedupe_key` | no | jq expression giving the condition's identity for `realert_after`. MUST NOT select any age, timestamp or counter. See "Runaway control" below |
+
+---
+
+## Runaway control: daily caps and alert dedup
+
+`budget:` is a **per-invocation** ceiling. It cannot stop a heartbeat whose condition never clears.
+
+The reference install learned this between 2026-09-01 and 09-05, while its operator was off-grid. `repo-drift` fires when a watched repo's working tree is dirty, and its auto-heal correctly refuses to touch a dirty tree. Five files sat uncommitted for a week, so the gather returned `count > 0` on every tick, forever, and only a human could clear it. It fired **514 times in five days for $45.79** - 66% of all scheduled spend - and posted 50+ near-identical alerts nobody could act on. `budget: 0.10` was configured and was never once exceeded: 514 runs at about $0.089 each.
+
+Four optional fields fix that class. All are opt-in: a heartbeat carrying none of them behaves exactly as it did before.
+
+| Field | Example | What it does |
+|---|---|---|
+| `max_fires_per_day` | `3` | Hard ceiling on `claude -p` invocations for this heartbeat per calendar day |
+| `max_usd_per_day` | `0.50` | Hard ceiling on this heartbeat's spend per calendar day, read from the dispatcher's own telemetry |
+| `realert_after` | `24h` | Do not re-fire while the condition is unchanged and the last alert is inside this window. `24h` is the recommended value |
+| `dedupe_key` | `.needs_sean \| map({repo, reason})` | jq expression giving the condition's identity. Optional; see below |
+
+### Caps are absolute
+
+Once a cap trips, that heartbeat invokes no model again until the date rolls. A change in the condition does not lift it - a cap with an escape hatch is not a cap. The gather keeps running (it is free), every suppressed tick is logged, and the dispatcher posts **one** notice per heartbeat per day saying it capped and why. To lift a cap early, clear `fires_today` for that heartbeat in `scheduled-tasks/heartbeat-state.json`.
+
+Two things worth knowing:
+
+- A **failed** fire still counts against `max_fires_per_day`. It cost tokens.
+- `max_usd_per_day` is checked before a fire, not during one, so a day can overshoot it by up to one run's `budget`.
+
+### The dedup fingerprint must not include anything that ticks
+
+This is the part that is easy to get wrong, and getting it wrong produces a feature that looks installed and does nothing.
+
+`repo-drift`'s alerts read "unresolved for 4 days", then "5 days", then "131h", then "180 hours". Its gather emits `condition_age_hours`, `dirty_oldest_age_hours` and `ahead_newest_age_hours` next to the actual finding. Hash the gather output, or the rendered alert text, and the fingerprint never matches itself: the cooldown silently never fires and nothing says so.
+
+So the identity is never guessed from the payload:
+
+1. **`dedupe_key`**, a jq expression, when set. Project out the fields that describe *what is wrong*, and leave out every age, timestamp, elapsed count and monotonic counter. `dedupe_key: .needs_sean | map({repo, reason})` is the shape to copy.
+2. **Otherwise, for a `threshold` condition**, the tested value itself - the number the dispatcher made its own fire/no-fire decision on. Coarse by design: the same count for a different underlying problem reads as the same condition, which is exactly when you want `dedupe_key`.
+3. **Otherwise, nothing.** `always` and `ask_model` have no machine-readable identity. Setting `realert_after` on one without a `dedupe_key` logs a warning and fires. There is deliberately no strip-the-volatile-looking-field-names heuristic; guessing which keys move from their names is the same bug in a different coat.
+
+If a fingerprint changes on three consecutive fires, the dispatcher logs a warning naming the heartbeat: that means `realert_after` has suppressed nothing, and the `dedupe_key` is reading something that moves.
+
+The dedup window is cleared when the condition goes false, so the same problem recurring next month is news again rather than being swallowed by the previous episode's cooldown.
+
+### Quiet, but never invisible: the suppression ledger
+
+A suppressed alert that exists only as a log line is the failure this whole feature is a response to. The same outage had an OAuth bridge that logged the same warning 288 times over four days into a file nobody reads.
+
+So every suppression is also written to `${CUSTOMER_HOME}/scheduled-tasks/heartbeat-suppressions.json`, one record per heartbeat, updated in place:
+
+```json
+{
+  "repo-drift": {
+    "reason": "fire_cap",
+    "detail": "max_fires_per_day reached: 3 of 3 model invocations already spent today",
+    "fingerprint": "9f2c8e...",
+    "first_suppressed_at": "2026-09-01T00:14:11",
+    "first_suppressed_epoch": "1788221651",
+    "last_suppressed_at": "2026-09-05T13:44:02",
+    "last_suppressed_epoch": "1788615842",
+    "suppressed_ticks": 471,
+    "last_decision": "YES - count=1 (> 0)"
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `reason` | `fire_cap`, `usd_cap` or `dedup` |
+| `detail` | One line of human-readable arithmetic or window |
+| `fingerprint` | Condition identity, empty when dedup is not in play |
+| `first_suppressed_at` / `_epoch` | Start of this unbroken quiet period |
+| `last_suppressed_at` / `_epoch` | Most recent suppressed tick |
+| `suppressed_ticks` | How many checks have been swallowed since `first_suppressed_at` |
+| `last_decision` | The condition verdict at the last suppressed tick |
+
+Both an ISO string and an epoch are stored for each timestamp: `date -j -f` is macOS-only, so a consumer that has to parse the ISO form to do arithmetic is not portable.
+
+**A record is deleted the moment the condition clears** (the gather goes false, or a fire actually goes out). That is what makes "quiet because it was fixed" distinguishable from "quiet because it was muted".
+
+Read it with `chassis/scripts/gather-heartbeat-suppressions.sh`, which costs a file read and a jq pass:
+
+```
+$ scripts/gather-heartbeat-suppressions.sh
+{"count":1,"generated_at":"2026-09-05T14:02:11","ledger_path":"...","suppressed":[
+  {"heartbeat":"repo-drift","reason":"fire_cap","detail":"...","fingerprint":"9f2c8e...",
+   "first_suppressed_at":"2026-09-01T00:14:11","last_suppressed_at":"2026-09-05T13:44:02",
+   "suppressed_ticks":471,"quiet_hours":133}]}
+```
+
+`--min-hours N` filters to entries that have been quiet at least that long. `quiet_hours` is derived at read time and is deliberately not part of any stored record or fingerprint - a duration that grows every tick is precisely the value that must never reach a content hash.
+
+It emits `count` and always exits 0, so it works unchanged as a heartbeat gather:
+
+```yaml
+# Weekly nudge: what has been failing silently all week?
+# Container-shape paths, per "Containerized installs" above: the gather goes
+# through the boot-time chassis-root symlink, and the prompt is a plain
+# $CUSTOMER_HOME-relative path because prompt values are never
+# variable-expanded. On a host-side install use
+# ${CHASSIS_HOME}/chassis/scripts/... for the gather instead.
+schedule: weekly monday 09:00
+gather: state/chassis-root/scripts/gather-heartbeat-suppressions.sh --min-hours 24
+condition: threshold count > 0
+prompt: scheduled-tasks/prompts/weekly-rollup.md
+model: sonnet
+budget: 1
+criticality: normal
+```
+
+A weekly rollup prompt can also just read the ledger directly. The path and the schema above are the stable contract.
+
+### Worked example
+
+`repo-drift` with the fields it should have had:
+
+```yaml
+schedule: every 30m
+gather: ${CUSTOMER_HOME}/scheduled-tasks/gather-repo-drift.sh
+condition: threshold count > 0
+prompt: scheduled-tasks/repo-drift-prompt.md
+model: haiku
+budget: 0.10
+criticality: normal
+max_fires_per_day: 3
+max_usd_per_day: 0.50
+realert_after: 24h
+dedupe_key: .needs_sean | map({repo, reason})
+```
+
+Over 2026-09-01 to 09-05 that turns 514 runs and 50+ messages into one run and one message per day, until someone commits the five files.
 
 ---
 

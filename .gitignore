@@ -49,6 +49,13 @@ scheduled-tasks/heartbeat-state.json
 # Per-writer staging files set_state/increment_fire_count create before the
 # atomic mv (new-jaxity#412/#409) - "${STATE_FILE}.$$.<key>.tmp".
 scheduled-tasks/heartbeat-state.json.*.tmp
+# Suppression ledger (new-jaxity#550) and its staging / mutex paths. Untracked
+# and unignored, this lands under scheduled-tasks/ - a repo-drift watched path -
+# so the first suppression would page about the file the suppression wrote.
+scheduled-tasks/heartbeat-suppressions.json
+scheduled-tasks/heartbeat-suppressions.json.*.tmp
+scheduled-tasks/heartbeat-suppressions.json.*.clr
+scheduled-tasks/heartbeat-suppressions.json.lock/
 scheduled-tasks/conservation-mode.json
 # Remote kill switch flag + the control listener's read cursor (behalfbot#550).
 scheduled-tasks/halt.json
