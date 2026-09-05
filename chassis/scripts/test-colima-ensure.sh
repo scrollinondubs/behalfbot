@@ -119,6 +119,32 @@ exit 0
 STUB
 chmod +x "$STUB_BIN/docker"
 
+# --- minimal PATH -----------------------------------------------------------
+# Scenarios 8 and 8b assert what happens when colima or docker is NOT installed,
+# which means PATH must genuinely not contain them.
+#
+# `PATH=/usr/bin:/bin` does not achieve that. A GitHub Actions runner ships a
+# real /usr/bin/docker with a live daemon behind it, so scenario 8b resolved the
+# runner's own docker, `docker ps` answered, and the wrapper took its "already
+# healthy" exit instead of the branch under test. It passed on macOS and in a
+# bare ubuntu container, and failed only on CI.
+#
+# So: an explicit directory holding symlinks to exactly the externals
+# colima-ensure.sh uses before it finishes resolving binaries, and nothing else.
+MIN_BIN="$TMP/minbin"
+mkdir -p "$MIN_BIN"
+# `bash` is in the list because a `PATH=... bash "$ENSURE"` prefix assignment
+# also governs the lookup of `bash` itself; without it the run exits 127 and
+# the scenario proves nothing.
+for tool in bash date mkdir dirname; do
+    src="$(command -v "$tool" 2>/dev/null)" || { echo "test-colima-ensure: $tool not found" >&2; exit 2; }
+    ln -sf "$src" "$MIN_BIN/$tool"
+done
+if [[ -e "$MIN_BIN/docker" || -e "$MIN_BIN/colima" ]]; then
+    echo "test-colima-ensure: MIN_BIN must not contain docker or colima" >&2
+    exit 2
+fi
+
 # --- harness ----------------------------------------------------------------
 SCENARIO=0
 STATE=""
@@ -245,7 +271,7 @@ new_scenario
 mkdir -p "$TMP/noprefix"
 RC=0
 STUB_STATE="$STATE" \
-PATH="/usr/bin:/bin" \
+PATH="$MIN_BIN" \
 DOCKER_BIN="$STUB_BIN/docker" \
 COLIMA_ENSURE_PREFIX_ROOT="$TMP/noprefix" \
 COLIMA_ENSURE_OS=Darwin \
@@ -270,7 +296,7 @@ mkdir -p "$TMP/noprefix"
 echo Stopped > "$STATE/status"
 RC=0
 STUB_STATE="$STATE" \
-PATH="/usr/bin:/bin" \
+PATH="$MIN_BIN" \
 COLIMA_BIN="$STUB_BIN/colima" \
 COLIMA_ENSURE_PREFIX_ROOT="$TMP/noprefix" \
 COLIMA_ENSURE_OS=Darwin \
