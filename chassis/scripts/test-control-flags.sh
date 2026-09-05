@@ -171,7 +171,7 @@ done
 # no longer proving anything about the bug it was written for.
 export STUB_DIALECT="gnu"
 PATH="$STUB_BIN:$ORIGINAL_PATH"
-old_lift_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$future" +%s 2>/dev/null || echo 0)
+old_lift_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$future" +%s 2>/dev/null || echo 0)  # portable-ok: the pre-fix BSD-only idiom on purpose, asserted below to misparse under GNU date
 old_now=$(date +%s)
 PATH="$ORIGINAL_PATH"
 if [[ "$old_now" -ge "$old_lift_epoch" ]]; then

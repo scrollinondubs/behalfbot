@@ -263,3 +263,187 @@ jobs:
       # GNU, that an unparseable expiry fails CLOSED, and asserts the pre-fix
       # idiom still gets it wrong so the discrimination cannot rot away.
       - run: bash chassis/scripts/test-control-flags.sh
+
+  # ---------------------------------------------------------------------------
+  # Everything above runs on ubuntu-latest: bash 5.x, GNU coreutils. That is
+  # ONE of the two platforms this code runs on. The other is the operator's
+  # macOS host, where /bin/bash is 3.2.57 (Apple has shipped 3.2 since 2007 for
+  # licensing reasons) with a BSD userland. The repo's own comments already say
+  # "host is macOS/BSD, container is Linux" - CI just never checked.
+  #
+  # Three bugs shipped GREEN through the ubuntu-only lane on 2026-09-05
+  # (new-jaxity#550) and broke only once they reached a real machine:
+  #
+  #   1. ${BAKED_ROOTS[-1]:-} in chassis/scripts/resolve-plugin-root.sh.
+  #      Negative array subscripts need bash 4.3. On 3.2 it is a `bad array
+  #      subscript` error that expands to empty, so the resolver handed callers
+  #      an EMPTY plugin root on the compose-failure path - the exact silent
+  #      no-op its own comment forbids. Fixed in #197.
+  #   2. `stat -f %m` in the colima work. A filesystem query on GNU coreutils,
+  #      an mtime query on BSD. Chained with `||` the outputs concatenated and
+  #      silently disabled a recycled-pid lock breaker. Fixed in #193.
+  #   3. `date -j -f` in is_conservation_mode(). BSD only, so inside the Debian
+  #      container lift_epoch became 0, `now >= 0` was always true, and any
+  #      conservation flag with an auto_lift_after was silently lifted on the
+  #      very next tick while logging the same line a working auto-lift logs.
+  #      Fixed in #195.
+  #
+  # Note the direction of 3: that one broke on LINUX because the code was
+  # BSD-only. So this is not "add macOS coverage", it is "both target platforms
+  # must be exercised". Bug 1 is the only one of the three that needs bash 3.2;
+  # 2 and 3 are dialect splits that either lane can catch. Together the two
+  # lanes cover both directions. Do not delete this job as redundant with the
+  # ubuntu ones - they are the same suites against a deliberately different
+  # interpreter and userland, which is the whole point.
+  #
+  # Runs in parallel with every ubuntu job and adds no serial time to a PR.
+  # A macOS runner is billed at 10x, but this repo is public, so Actions
+  # minutes are free and the multiplier costs nothing.
+  #
+  # Blocking, not advisory. A red macOS run that cannot stop a merge is
+  # decoration, and decoration is what the postmortem is about.
+  macos-bash32:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The suites invoke the scripts under test as `bash "$SCRIPT"`, and half
+      # the scripts carry `#!/usr/bin/env bash`. Both resolve bash through
+      # PATH. GitHub's macOS image ships Homebrew, so PATH may well hand out
+      # bash 5.x - and then this entire lane would be a second ubuntu lane
+      # wearing a macOS hat: green for the wrong reason, which is precisely the
+      # failure class being fixed. Pin it.
+      - name: Pin bash to the stock macOS /bin/bash
+        run: |
+          SHIM="${RUNNER_TEMP}/bash32"
+          mkdir -p "$SHIM"
+          ln -sf /bin/bash "$SHIM/bash"
+          echo "$SHIM" >> "$GITHUB_PATH"
+
+      # GITHUB_PATH only takes effect in LATER steps, so the assertion has to
+      # be its own step. It fails the job rather than warning: a lane that
+      # quietly downgrades to bash 5 proves nothing.
+      - name: Prove the environment is bash 3.2 and BSD, or fail
+        run: |
+          set -u
+          echo "which -a bash:"
+          which -a bash || true
+          BASH_VER="$(bash -c 'echo "$BASH_VERSION"')"
+          ENV_VER="$(/usr/bin/env bash -c 'echo "$BASH_VERSION"')"
+          echo "bash          -> $BASH_VER"
+          echo "env bash      -> $ENV_VER"
+          echo "/bin/bash     -> $(/bin/bash -c 'echo "$BASH_VERSION"')"
+          FAILED=0
+          case "$BASH_VER" in
+            3.2.*) ;;
+            *) echo "::error::PATH bash is $BASH_VER, expected 3.2.x - the shim did not take"; FAILED=1 ;;
+          esac
+          case "$ENV_VER" in
+            3.2.*) ;;
+            *) echo "::error::env bash is $ENV_VER, expected 3.2.x - shebang resolution is not pinned"; FAILED=1 ;;
+          esac
+          # Bug 1's construct must actually be broken here. If a future runner
+          # image makes this work, the lane has stopped testing bash 3.2 and
+          # should fail loudly rather than pass quietly.
+          # Note the assignment: `echo "${a[-1]}"` still exits 0 on 3.2
+          # because echo succeeds after the expansion errors to empty, which
+          # is exactly why bug 1 was silent. Compare the VALUE.
+          if bash -c 'a=(one two); v="${a[-1]}"; [ "$v" = two ]' 2>/dev/null; then
+            echo "::error::negative array subscripts WORK in this bash - this is not 3.2"
+            FAILED=1
+          fi
+          # BSD userland, both directions.
+          if ! stat -f %m /etc/hosts >/dev/null 2>&1; then
+            echo "::error::stat does not accept BSD -f - userland is not BSD"; FAILED=1
+          fi
+          if stat -c %Y /etc/hosts >/dev/null 2>&1; then
+            echo "::error::stat accepts GNU -c - GNU coreutils are shadowing BSD on PATH"; FAILED=1
+          fi
+          if ! date -j -f "%Y-%m-%dT%H:%M:%SZ" "1970-01-01T00:00:00Z" +%s >/dev/null 2>&1; then
+            echo "::error::date does not accept BSD -j - userland is not BSD"; FAILED=1
+          fi
+          if date -d "1970-01-01" +%s >/dev/null 2>&1; then
+            echo "::error::date accepts GNU -d - GNU coreutils are shadowing BSD on PATH"; FAILED=1
+          fi
+          exit "$FAILED"
+
+      # Same suites the ubuntu jobs run, no more and no less. Deliberate
+      # parity: adding suites the Linux lane does not run is a different
+      # change, and a divergence between the two lists is how one lane
+      # quietly stops covering something.
+      #
+      # Excluded, same as the ubuntu lane: test-daily-log-gather.sh,
+      # test-compose-verify.sh, test-merge-plugin-triggers.sh and
+      # test-validate-heartbeats.sh are not wired into CI on either platform.
+      #
+      # One loop rather than thirteen jobs: thirteen macOS runners would each
+      # pay the ~30s image spin-up to run a suite that takes under 3 seconds.
+      # Every suite runs even when an earlier one fails, so one red suite
+      # cannot hide the other twelve.
+      - name: Run the shell suites under bash 3.2 + BSD userland
+        run: |
+          set -u
+          SUITES="
+          chassis/scripts/test-chassis-update-health.sh
+          chassis/scripts/test-plugin-root-resolution.sh
+          chassis/scripts/test-chassis-root-health.sh
+          chassis/scripts/test-container-liveness.sh
+          chassis/scripts/test-chassis-root-resolution.sh
+          chassis/scripts/test-bootstrap-audit-memory.sh
+          chassis/scripts/test-memory-canary.sh
+          chassis/scripts/test-chassis-update-check.sh
+          chassis/scripts/test-chassis-update-mode.sh
+          chassis/scripts/test-discord-reply-param-fix.sh
+          chassis/scripts/test-colima-ensure.sh
+          chassis/scripts/test-control-flags.sh
+          plugins/dating/tests/test-emulator-state.sh
+          "
+          FAILED=""
+          EMPTY=""
+          TOTAL=0
+          RAN=0
+          for suite in $SUITES; do
+            echo "::group::$suite"
+            LOG="${RUNNER_TEMP}/$(basename "$suite").log"
+            if bash "$suite" > "$LOG" 2>&1; then
+              RC=0
+            else
+              RC=$?
+            fi
+            cat "$LOG"
+            echo "::endgroup::"
+            RAN=$(( RAN + 1 ))
+            # Assertion count, read out of whichever summary line the suite
+            # prints ("N passed" or "PASS: N"). A suite that exits 0 having
+            # asserted nothing is the failure this whole lane exists to catch,
+            # so zero is a failure even when the exit code is clean.
+            N=$(grep -oE '([0-9]+ passed|PASS: +[0-9]+)' "$LOG" | grep -oE '[0-9]+' | awk '{s+=$1} END{print s+0}')
+            TOTAL=$(( TOTAL + N ))
+            if [ "$RC" -ne 0 ]; then
+              echo "::error file=$suite::suite FAILED under bash 3.2 / BSD userland (exit $RC, $N assertions)"
+              FAILED="$FAILED $suite"
+            elif [ "$N" -eq 0 ]; then
+              echo "::error file=$suite::suite exited 0 but reported ZERO assertions"
+              EMPTY="$EMPTY $suite"
+            else
+              echo "ok  $suite ($N assertions)"
+            fi
+          done
+
+          echo
+          echo "suites run: $RAN   assertions: $TOTAL"
+
+          # Floor against a silent collapse - a broken checkout, a renamed
+          # summary line, a loop that iterates over nothing. The suites totalled
+          # 365 assertions when this lane was added. Raise it as they grow;
+          # never lower it to make a red build green.
+          if [ "$TOTAL" -lt 340 ]; then
+            echo "::error::only $TOTAL assertions across $RAN suites, expected at least 340 - the lane is not exercising what it claims to"
+            exit 1
+          fi
+          if [ -n "$FAILED" ] || [ -n "$EMPTY" ]; then
+            [ -n "$FAILED" ] && echo "FAILED:$FAILED"
+            [ -n "$EMPTY" ] && echo "NO ASSERTIONS:$EMPTY"
+            exit 1
+          fi
+          echo "all $RAN suites pass on bash 3.2 + BSD userland"

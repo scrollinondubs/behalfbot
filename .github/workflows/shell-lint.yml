@@ -27,3 +27,36 @@ jobs:
           # this list in sync with:
           #   grep -rl '^#!/bin/zsh' --include='*.sh' .
           ignore_names: heartbeat-dispatcher.sh test_state_write_race.sh
+
+  # Portability grep for the two-platform split. shellcheck runs with
+  # severity: error and does not know which bash version or which userland this
+  # code has to survive, so it had nothing to say about any of the three bugs
+  # that shipped green on 2026-09-05 (new-jaxity#550): ${BAKED_ROOTS[-1]}
+  # (bash 4.3, #197), `stat -f %m` (BSD, #193) and `date -j -f` (BSD, #195).
+  #
+  # shell-tests.yml's macos-bash32 job is the real coverage - it runs the
+  # suites against bash 3.2.57 and a BSD userland. This check is for the code
+  # those suites do not reach: hooks, gather scripts, one-shot migration
+  # helpers, the zsh dispatcher. Nobody is going to write a behavioural suite
+  # for a migration script that runs once per install, and the failure mode
+  # there is silence, not a crash.
+  #
+  # ADVISORY on purpose. It is a heuristic over a 7-line window, and blocking a
+  # PR on a heuristic is how a check gets deleted. It emits `::warning`
+  # annotations onto the PR's Files tab, and the self-test below - which IS
+  # blocking - is what stops it rotting into something that flags nothing or
+  # flags everything.
+  portability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Blocking. Positive fixtures are the three bugs verbatim; negative
+      # fixtures are the FIXED spellings already in the tree. A lint that has
+      # stopped firing on the bug it was written for is worse than none.
+      - name: Prove the portability check can still fail
+        run: bash .github/scripts/test-check-shell-portability.sh
+
+      - name: Scan for single-platform shell constructs
+        continue-on-error: true
+        run: bash .github/scripts/check-shell-portability.sh .
