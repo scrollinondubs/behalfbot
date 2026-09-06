@@ -149,10 +149,51 @@ if ! KC_JSON=$(security find-generic-password -s "Claude Code-credentials" -a "$
 fi
 
 # Validate Keychain JSON has claudeAiOauth.accessToken (else useless).
+#
+# Rescue path (new-jaxity#559): an empty keychain is exactly the state the
+# reverse-sync below was written to repair, and until now the script exited
+# before ever reaching it. Two Claude Code installs share one login - the host
+# keychain and the container's bind-mounted `.credentials.json` - and Anthropic
+# rotates the refresh token on every use. When the container refreshes, the
+# host's refresh token dies with it; the next host refresh 401s and Claude Code
+# clears `claudeAiOauth.accessToken` from the keychain. The container's copy is
+# still perfectly good at that moment. Copying it back up is a one-line repair
+# that the script was already capable of and never attempted, so the operator
+# had to run `/login` by hand roughly twice a day.
+#
+# Two things this must NOT do:
+#   - Fall through to the forward-sync. If both sides are token-less then
+#     KC_EXPIRES and FILE_EXPIRES are both 0, `0 -lt 0` is false, and the
+#     forward-sync would write the broken keychain JSON over the container's
+#     credential - taking down the one side that still worked.
+#   - Rescue with an already-expired file token. Writing a dead token into the
+#     keychain would clear the fault state and silence the alert while leaving
+#     the host just as unauthenticated. The reverse-sync block further down has
+#     no freshness check either, because until this change it could only be
+#     reached from a healthy keychain.
 KC_ACCESS=$(jq -r '.claudeAiOauth.accessToken // empty' <<<"$KC_JSON" 2>/dev/null || true)
 if [[ -z "$KC_ACCESS" ]]; then
+    RESCUE_JSON=""
+    if [[ -f "$CRED_FILE" ]]; then
+        RESCUE_JSON=$(jq -c '.' "$CRED_FILE" 2>/dev/null || true)
+    fi
+    RESCUE_ACCESS=""
+    RESCUE_EXPIRES=0
+    if [[ -n "$RESCUE_JSON" ]]; then
+        RESCUE_ACCESS=$(jq -r '.claudeAiOauth.accessToken // empty' <<<"$RESCUE_JSON" 2>/dev/null || true)
+        RESCUE_EXPIRES=$(jq -r '.claudeAiOauth.expiresAt // 0' <<<"$RESCUE_JSON" 2>/dev/null || echo 0)
+    fi
+    NOW_MS=$(( $(date -u +%s) * 1000 ))
+    if [[ -n "$RESCUE_ACCESS" && "$RESCUE_EXPIRES" -gt "$NOW_MS" ]]; then
+        if security add-generic-password -U -s "Claude Code-credentials" -a "$KEYCHAIN_ACCOUNT" -w "$RESCUE_JSON" 2>/dev/null; then
+            log "rescued: keychain had no accessToken, restored from file expiresAt=$RESCUE_EXPIRES"
+            clear_fault
+            exit 0
+        fi
+        log "WARN: keychain has no accessToken and the rescue write failed (security add-generic-password -U exit non-zero)"
+    fi
     log "WARN: keychain JSON missing claudeAiOauth.accessToken - leaving file untouched"
-    alert_fault "keychain_missing_token" "**Claude oauth bridge: the macOS keychain lost its Claude access token.** The entry \`Claude Code-credentials\` is present but carries no \`claudeAiOauth.accessToken\`, so host interactive \`claude\` cannot authenticate until someone runs \`/login\`. The chassis container is unaffected while its own refresh token holds. This is the exact state that went unreported for four days in new-jaxity#550. You will hear from this again only when it recovers."
+    alert_fault "keychain_missing_token" "**Claude oauth bridge: the macOS keychain lost its Claude access token.** The entry \`Claude Code-credentials\` is present but carries no \`claudeAiOauth.accessToken\`, and the container's credential file has no usable token to restore from either, so host interactive \`claude\` cannot authenticate until someone runs \`/login\`. This is the exact state that went unreported for four days in new-jaxity#550. You will hear from this again only when it recovers."
     exit 0
 fi
 
