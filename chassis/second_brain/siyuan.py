@@ -346,6 +346,20 @@ class SiYuanNotes(NotesAdapter):
         missing. That fallback is harmless where it is used (create_doc lands
         the doc at the notebook root) and actively wrong here, where it would
         turn "no such container" into "here is the whole notebook".
+
+        The two parent forms are scoped differently on purpose, and the
+        asymmetry is worth knowing about:
+
+          - An HPATH is only unique within a notebook, so it is resolved
+            against the adapter's configured `notebook_id`. A `/1 Projects`
+            that exists only in some OTHER notebook raises "no doc at hpath"
+            rather than silently listing a container the adapter never writes
+            to.
+          - A BLOCK ID is globally unique, so it is resolved without a
+            notebook filter, and its children come from whichever notebook it
+            turns out to live in. A caller holding an id already knows exactly
+            which doc it means; second-guessing that against config would only
+            reject a question that had one correct answer.
         """
         raw = (parent or "").strip()
         if raw in ("", "/"):
