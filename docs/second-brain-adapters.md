@@ -165,6 +165,10 @@ hits = sb.notes.search("morning briefing", limit=5)
 for h in hits:
     print(h.title, h.deeplink)
 
+# Direct children of a container - first level only, title order
+for child in sb.notes.list_children(parent="1 Projects", limit=200):
+    print(child.title, child.id)
+
 # Recent activity - docs created/modified in a time window, newest first
 from datetime import datetime, timedelta
 hits = sb.notes.list_recent(
@@ -222,6 +226,18 @@ Related, and the reason the above was silent for so long. SiYuan answers a SQL s
 ```
 
 A genuinely empty result set comes back as `[]`. The adapter's `_query_sql()` therefore raises `SiYuanError` (naming the offending statement) on a null payload rather than coercing it to an empty list. Treating null as "no rows" is what turned a rejected query into a plausible-looking "nothing found". Only the `/api/query/sql` path is hardened this way - other endpoints (`appendBlock`) return null legitimately.
+
+## `list_children` per-backend divergences
+
+`list_children(parent, limit=200)` returns the docs sitting DIRECTLY under `parent`, never the recursive subtree, ordered ascending by title (code-point order, case-sensitive, so `Zebra` sorts before `apple`) with `limit` applied after ordering. It exists because `list_recent` is time-filtered and cannot answer "what is in this container", which is what a drift check between an agent-maintained `_MAP` doc and the real shape of the second brain needs - see [#208](https://github.com/scrollinondubs/behalfbot/issues/208).
+
+Empty and missing are kept distinct on every backend: a parent that exists and holds no child docs returns `[]`, a parent that does not exist raises. Returning `[]` for a typo would tell a drift check "the container is empty" when the truth is "the container is not there".
+
+| | Enumeration source | Parent forms | Caveats |
+|---|---|---|---|
+| SiYuan | one SQL query over `blocks` where `type='d'`, `hpath LIKE '<parent>/%'` and `NOT LIKE '<parent>/%/%'` | hpath (`/1 Projects`), doc block id, or `""`/`"/"` for the notebook root | Scoped to ONE notebook (`box`), unlike `search`/`list_recent`, which are whole-brain - hpath is only unique within a notebook, and the notebook chosen is the one the parent itself lives in. The prefix is re-checked in Python because sqlite's LIKE is ASCII case-insensitive and `_`/`%` in the parent path are live wildcards that SiYuan will not let us escape (a doc named `_MAP` is the motivating case). SQL scan capped at 2000 rows. Subject to the same eventually-consistent index lag documented above |
+| Obsidian | `iterdir()` on one directory, `*.md` only | vault-relative directory (`1 Projects`, `1 Projects/`), `""` for the vault root | Subdirectories are NOT returned - a folder has no id that `read_doc` or `get_deeplink` would accept, so a recursive walk drives itself from its own directory listing on this backend. Non-note files (PDFs, `.canvas`) are skipped. A `read_only: true` vault lists normally; this is a read |
+| Notion | paginated `GET /blocks/{id}/children`, keeping `child_page` blocks | page id, or `""` for the configured `notes_root` | `child_database` children are skipped - a database belongs to the `DatabaseAdapter` surface and `read_doc` cannot render one. Notion's document order is DISCARDED in favour of title order; the source block is preserved under `raw`. A 404 is ambiguous: Notion returns it both for "no such page" and for "page not shared with the integration". Pagination capped at 1000 blocks, and all children are fetched before sorting |
 
 ## `second_brain.mode` and the `secondbrain` MCP server
 
