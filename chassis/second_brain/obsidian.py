@@ -167,6 +167,47 @@ class ObsidianNotes(NotesAdapter):
     def _rel_id(self, path: Path) -> str:
         return path.relative_to(self._vault).as_posix()
 
+    def _resolve_dir(self, parent: str) -> Path:
+        """Map a `list_children` parent to an absolute directory inside the vault.
+
+        A sibling of `_resolve` rather than a caller of it, because `_resolve`
+        answers a different question: it force-appends `.md` and rejects the
+        vault root, both correct for a note id and both wrong for a container.
+        The path-safety rules are the same ones, deliberately - absolute paths
+        and `../` traversal are refused here too, so a parent can never point
+        outside the vault.
+
+        `parent` is normalized exactly as `create_doc` normalizes its own
+        `parent` argument (`strip()` then `strip('/')`), so the two agree on
+        what `"1 Projects/"`, `"1 Projects"` and `""` mean. `""` is the vault
+        root, matching `create_doc`'s empty-parent default.
+        """
+        raw = (parent or "").strip().strip("/")
+        if not raw:
+            return self._vault
+        if Path(raw).is_absolute():
+            raise ObsidianError(
+                f"parent {parent!r} is an absolute path - parents are vault-relative."
+            )
+        candidate = (self._vault / raw).resolve()
+        if candidate != self._vault and self._vault not in candidate.parents:
+            raise ObsidianError(
+                f"parent {parent!r} resolves outside the vault root - refusing."
+            )
+        if candidate.is_file():
+            raise ObsidianError(
+                f"list_children: parent {parent!r} is a note, not a directory. "
+                f"Obsidian notes cannot contain other notes - a doc's children "
+                f"live in a sibling directory of the same name, if the vault "
+                f"uses that convention at all."
+            )
+        if not candidate.is_dir():
+            raise ObsidianError(
+                f"list_children: parent {parent!r} not found in vault "
+                f"{str(self._vault)!r}."
+            )
+        return candidate
+
     # -- write safety --------------------------------------------------------
 
     def _ensure_writable(self, op: str, directory: Path) -> None:
@@ -360,6 +401,56 @@ class ObsidianNotes(NotesAdapter):
                 )
             )
         hits.sort(key=lambda hit: hit.score, reverse=True)
+        return hits[: int(limit)]
+
+    def list_children(self, parent: str, limit: int = 200) -> list[SearchHit]:
+        """Notes sitting directly in the `parent` directory, ascending by filename.
+
+        Only `*.md` files, and only at that one level - `rglob` is deliberately
+        not used here. A missing directory raises `ObsidianError`, matching
+        `read_doc`; a directory holding no notes returns `[]`.
+
+        Subdirectories are NOT returned, and this is the one place where the
+        three backends genuinely differ rather than merely diverge in cost. On
+        SiYuan and Notion a container is itself a document with an id. On
+        Obsidian a folder is a folder: it has no id, `read_doc` would reject
+        it, and `get_deeplink` has nothing to point at. Returning folders would
+        hand callers `SearchHit`s whose `id` no other adapter method accepts.
+        A caller doing a recursive walk therefore drives it from its own
+        directory listing on this backend, not from `list_children`.
+
+        Non-note files (PDFs, images, `.canvas`) are skipped for the same
+        reason, and `_SKIP_DIRS` housekeeping directories never appear because
+        they are directories.
+
+        This is a read, so `read_only: true` is irrelevant and `_ensure_writable`
+        is deliberately not called - a pull-only vault clone lists normally.
+
+        Sorting is on the vault-relative id, which within one directory is
+        filename order, code-point order, case-sensitive.
+        """
+        directory = self._resolve_dir(parent)
+        hits: list[SearchHit] = []
+        for path in sorted(directory.iterdir(), key=lambda item: item.name):
+            if not path.is_file() or path.suffix != ".md":
+                continue
+            try:
+                snippet = _strip_frontmatter(path.read_text(encoding="utf-8"))[
+                    :_SNIPPET_LEN
+                ].strip()
+            except (OSError, UnicodeDecodeError):
+                snippet = ""
+            rel = self._rel_id(path)
+            hits.append(
+                SearchHit(
+                    id=rel,
+                    title=path.stem,
+                    snippet=snippet,
+                    deeplink=self.get_deeplink(rel),
+                    raw={"path": str(path)},
+                )
+            )
+        hits.sort(key=lambda hit: hit.id)
         return hits[: int(limit)]
 
     def list_recent(

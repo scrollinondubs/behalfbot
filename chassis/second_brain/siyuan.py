@@ -51,6 +51,14 @@ class SiYuanError(RuntimeError):
     """Raised when SiYuan API returns a non-zero `code`, or refuses a SQL query."""
 
 
+# list_children asks SQL for a SUPERSET (SiYuan's LIKE is case-insensitive and
+# cannot escape `_`/`%`), then re-checks the prefix in Python. So the SQL row
+# cap has to be generous enough that the exact matches are never crowded out by
+# near-misses. 2000 first-level docs under one container is already far past
+# anything a human maintains by hand.
+_CHILD_SCAN_CAP = 2000
+
+
 def _siyuan_stamp(value: datetime) -> str:
     """Format a datetime as SiYuan's `YYYYMMDDHHMMSS` block-timestamp string.
 
@@ -60,6 +68,19 @@ def _siyuan_stamp(value: datetime) -> str:
     if value.tzinfo is not None:
         value = value.astimezone()
     return value.strftime("%Y%m%d%H%M%S")
+
+
+def _is_direct_child(hpath: str, prefix: str) -> bool:
+    """True when `hpath` sits exactly one level below `prefix`.
+
+    The exactness SQL cannot give us: a case-sensitive prefix test, and no
+    further `/` in what remains. See `SiYuanNotes.list_children` for why LIKE
+    alone is not enough.
+    """
+    if not hpath.startswith(prefix):
+        return False
+    remainder = hpath[len(prefix) :]
+    return bool(remainder) and "/" not in remainder
 
 
 class SiYuanNotes(NotesAdapter):
@@ -198,6 +219,71 @@ class SiYuanNotes(NotesAdapter):
             for row in rows
         ]
 
+    def list_children(self, parent: str, limit: int = 200) -> list[SearchHit]:
+        """Docs directly under `parent`, ascending by hpath, code-point order.
+
+        `parent` is an hpath (`/1 Projects`), a doc block id, or `""`/`"/"` for
+        the notebook root - the same forms `create_doc` accepts. It is resolved
+        first, and a parent that does not exist raises rather than returning an
+        empty list, so a typo cannot masquerade as an empty container.
+
+        Scoped to ONE notebook, unlike `search` and `list_recent`. hpath is only
+        unique within a notebook (`/1 Projects` can exist in several), so a
+        container-relative query has to choose, and the only defensible choice
+        is the notebook the parent itself lives in. For the root the notebook is
+        the adapter's configured `notebook_id`; without one, every notebook has
+        a root and merging them would silently return a union nobody asked for,
+        so that raises too.
+
+        The `hpath LIKE` prefix is re-checked in Python, and this is load-
+        bearing rather than belt-and-braces:
+
+          - SiYuan's LIKE is sqlite's, which is ASCII case-insensitive, so
+            `/3 resources/%` matches `/3 Resources/Foo`.
+          - `_` and `%` inside the parent path are live wildcards. A container
+            named `_MAP` would otherwise match `XMAP` as well, and `_MAP` is a
+            real doc name in the drift-detection use case this method exists
+            for. ESCAPE is not available - SiYuan answers any statement
+            carrying an ESCAPE clause with `data: null`, verified against a
+            live kernel; see `search` for the same constraint.
+
+        Grandchildren are excluded twice over for the same reason: `NOT LIKE
+        '<prefix>%/%'` narrows the scan, and the Python check on the remaining
+        segment is what actually guarantees it.
+        """
+        hpath, box = self._parent_container(parent)
+        prefix = hpath.rstrip("/") + "/"
+        escaped = self._escape(prefix)
+        sql = (
+            "SELECT id, hpath, content, updated, created FROM blocks "
+            "WHERE type = 'd' "
+            f"AND box = '{self._escape(box)}' "
+            f"AND hpath LIKE '{escaped}%' "
+            f"AND hpath NOT LIKE '{escaped}%/%' "
+            "ORDER BY hpath ASC, id ASC "
+            f"LIMIT {_CHILD_SCAN_CAP}"
+        )
+        rows = [
+            row
+            for row in self._query_sql(sql)
+            if _is_direct_child(row.get("hpath") or "", prefix)
+        ]
+        # Re-sorted in Python rather than trusting the ORDER BY: the documented
+        # contract is code-point order, and a column collation is a property of
+        # SiYuan's schema, not something this adapter controls.
+        rows.sort(key=lambda row: ((row.get("hpath") or ""), row.get("id") or ""))
+        return [
+            SearchHit(
+                id=row.get("id", ""),
+                title=(row.get("hpath") or "").rsplit("/", 1)[-1]
+                or (row.get("content") or "(untitled)"),
+                snippet=(row.get("content") or "")[:200],
+                deeplink=self.get_deeplink(row.get("id", "")),
+                raw=row,
+            )
+            for row in rows[: int(limit)]
+        ]
+
     def list_recent(
         self,
         since: datetime,
@@ -252,6 +338,73 @@ class SiYuanNotes(NotesAdapter):
         sql = f"SELECT hpath FROM blocks WHERE id = '{self._escape(block_id)}' LIMIT 1"
         rows = self._query_sql(sql)
         return rows[0].get("hpath", "/") if rows else "/"
+
+    def _parent_container(self, parent: str) -> tuple[str, str]:
+        """Resolve a `list_children` parent to its `(hpath, notebook_id)` pair.
+
+        Separate from `_block_to_hpath`, which answers `/` when the block is
+        missing. That fallback is harmless where it is used (create_doc lands
+        the doc at the notebook root) and actively wrong here, where it would
+        turn "no such container" into "here is the whole notebook".
+
+        The two parent forms are scoped differently on purpose, and the
+        asymmetry is worth knowing about:
+
+          - An HPATH is only unique within a notebook, so it is resolved
+            against the adapter's configured `notebook_id`. A `/1 Projects`
+            that exists only in some OTHER notebook raises "no doc at hpath"
+            rather than silently listing a container the adapter never writes
+            to.
+          - A BLOCK ID is globally unique, so it is resolved without a
+            notebook filter, and its children come from whichever notebook it
+            turns out to live in. A caller holding an id already knows exactly
+            which doc it means; second-guessing that against config would only
+            reject a question that had one correct answer.
+        """
+        raw = (parent or "").strip()
+        if raw in ("", "/"):
+            if not self._notebook_id:
+                raise SiYuanError(
+                    "list_children('/') needs a notebook to scope to, and this "
+                    "adapter has no notebook_id. Every notebook has a root, so "
+                    "there is no single correct answer - set "
+                    "second_brain.databases.notes_root (or "
+                    "second_brain.siyuan.notebook_id) in chassis.config.yaml."
+                )
+            return "/", self._notebook_id
+        if raw.startswith("/"):
+            hpath = raw.rstrip("/") or "/"
+            box_clause = (
+                f" AND box = '{self._escape(self._notebook_id)}'" if self._notebook_id else ""
+            )
+            sql = (
+                "SELECT id, hpath, box FROM blocks "
+                f"WHERE type = 'd' AND hpath = '{self._escape(hpath)}'{box_clause} "
+                "LIMIT 1"
+            )
+            rows = self._query_sql(sql)
+            if not rows:
+                raise SiYuanError(
+                    f"list_children: no doc at hpath {hpath!r}"
+                    + (f" in notebook {self._notebook_id!r}" if self._notebook_id else "")
+                    + ". Note the SQL index is eventually consistent, so a doc "
+                    "created seconds ago may not be queryable yet - see "
+                    "docs/second-brain-adapters.md."
+                )
+            return rows[0].get("hpath") or hpath, rows[0].get("box") or self._notebook_id
+        sql = (
+            "SELECT id, hpath, box FROM blocks "
+            f"WHERE type = 'd' AND id = '{self._escape(raw)}' LIMIT 1"
+        )
+        rows = self._query_sql(sql)
+        if not rows:
+            raise SiYuanError(
+                f"list_children: no doc block with id {raw!r}. A parent that is "
+                "not an hpath is read as a block id; ids that exist but are not "
+                "type='d' (a paragraph, say) do not have children in the "
+                "document sense and are rejected here too."
+            )
+        return rows[0].get("hpath") or "/", rows[0].get("box") or self._notebook_id
 
     def _block_title(self, block_id: str) -> str:
         sql = f"SELECT content FROM blocks WHERE id = '{self._escape(block_id)}' LIMIT 1"

@@ -54,6 +54,13 @@ NOTION_API_ROOT = "https://api.notion.com/v1"
 # unbounded crawl - 500 pages (5 API calls) covers any sane daily window.
 _LIST_RECENT_SCAN_CAP = 500
 
+# list_children must fetch EVERY child block before it can sort by title and
+# truncate, so the pagination bound lives here rather than in the caller's
+# `limit`. 1000 blocks (10 API calls) is well past any hand-maintained
+# container; beyond it the listing is truncated in Notion's document order,
+# which is the one case where the title-order guarantee cannot hold.
+_LIST_CHILDREN_SCAN_CAP = 1000
+
 # Notion API hard ceilings (https://developers.notion.com/reference/request-limits):
 # at most 100 block children per create/append request, and at most 2000
 # characters per rich_text content field. Exceeding either is an opaque 400.
@@ -367,6 +374,70 @@ class NotionNotes(NotesAdapter):
                 )
             )
         return hits
+
+    def list_children(self, parent: str, limit: int = 200) -> list[SearchHit]:
+        """Child pages of `parent`, ascending by title, code-point order.
+
+        `parent` is a page id, or `""` for the configured `notes_root` - the
+        same convention `create_doc` uses. Children come from the block tree
+        (`GET /blocks/{id}/children`), because in Notion a sub-page IS a block
+        of type `child_page` sitting among the parent's prose. Paragraphs,
+        headings and every other block type are skipped; only `child_page`
+        survives.
+
+        A `child_page` block's id IS the page id, so `read_doc(hit.id)` and
+        `get_deeplink(hit.id)` both work on what comes back. The title is read
+        from `child_page.title` rather than from the page's properties, which
+        saves one API call per child.
+
+        `child_database` children are deliberately NOT returned. A database is
+        the `DatabaseAdapter` surface's concern, `read_doc` cannot render one,
+        and quietly mixing rows-containers into a prose listing would make a
+        drift check report a mismatch it has no way to fix.
+
+        Not-found: Notion answers 404 and `_request` raises `NotionError`, the
+        same path `read_doc` takes. Be aware the 404 is AMBIGUOUS - Notion
+        returns it both for a page that does not exist and for one that exists
+        but was never shared with the integration, and the response body does
+        not distinguish them. An empty-but-existing page returns `[]`.
+
+        Ordering is applied client-side, which discards Notion's document
+        order - the sequence the page actually reads in. That is a real loss
+        and it is accepted on purpose: a cross-backend contract needs one
+        ordering rule, and document order has no equivalent on the other two
+        backends. The source block is preserved verbatim under `raw` for
+        callers that need more.
+        """
+        page_id = parent or self._notes_root
+        blocks: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while len(blocks) < _LIST_CHILDREN_SCAN_CAP:
+            path = f"/blocks/{page_id}/children?page_size=100"
+            if cursor:
+                path += f"&start_cursor={cursor}"
+            result = _request(self._token, "GET", path)
+            blocks.extend(result.get("results", []))
+            if not result.get("has_more"):
+                break
+            cursor = result.get("next_cursor")
+            if not cursor:
+                break
+        hits: list[SearchHit] = []
+        for block in blocks[:_LIST_CHILDREN_SCAN_CAP]:
+            if block.get("type") != "child_page":
+                continue
+            child_id = block.get("id", "")
+            hits.append(
+                SearchHit(
+                    id=child_id,
+                    title=block.get("child_page", {}).get("title", "") or "(untitled)",
+                    snippet="",
+                    deeplink=f"https://www.notion.so/{child_id.replace('-', '')}",
+                    raw=block,
+                )
+            )
+        hits.sort(key=lambda hit: (hit.title, hit.id))
+        return hits[: int(limit)]
 
     def list_recent(
         self,

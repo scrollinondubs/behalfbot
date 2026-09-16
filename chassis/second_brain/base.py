@@ -81,6 +81,63 @@ class NotesAdapter(Protocol):
         """Full-text search prose. Returns hits ordered by relevance."""
         ...
 
+    def list_children(self, parent: str, limit: int = 200) -> list[SearchHit]:
+        """Docs directly under `parent`, in ascending title/path order.
+
+        DIRECT children only, never the recursive subtree. A doc nested two
+        levels down under `parent` is deliberately absent - callers that want
+        the subtree walk it themselves, one `list_children` call per level.
+        This is what makes the method usable for drift detection against an
+        agent-maintained table-of-contents doc, where only the first level is
+        ever listed.
+
+        `parent` takes the same backend-specific identifier forms `create_doc`
+        documents, and an empty string means the configured default root:
+          - SiYuan: hpath like `/1 Projects`, or a doc block id
+          - Notion: parent page id
+          - Obsidian: vault-relative directory like `1 Projects/`
+
+        Not-found vs empty is a real distinction and both are honoured:
+          - A parent that EXISTS and holds no child docs returns `[]`.
+          - A parent that does NOT exist raises, matching how that backend
+            already fails `read_doc` (`SiYuanError`, `ObsidianError`,
+            `NotionError`). Returning `[]` for a typo would report "the
+            container is empty" for "the container is not there", which is
+            precisely the wrong answer a drift check would act on.
+
+        ORDERING is ascending by title (SiYuan/Notion) or by filename
+        (Obsidian), code-point order, case-sensitive, with the doc id as
+        tiebreak. Code-point order is chosen because it is the one rule all
+        three can produce identically - it is what SQLite's default BINARY
+        collation and Python's `sorted` both give, with no locale collation
+        anywhere in the path. So `Zebra` sorts before `apple`. `limit` is
+        applied AFTER ordering, so a truncated result is always the first N
+        children in that order rather than an arbitrary N.
+
+        Per-backend conventions and caveats:
+          - SiYuan: one SQL query over `blocks` scoped to the parent doc's
+            OWN notebook (`box`), unlike `search`/`list_recent`, which are
+            whole-brain. hpath is only unique within a notebook, so a
+            container-relative call has to pick one. The prefix match is
+            re-checked in Python because SiYuan's LIKE is ASCII
+            case-insensitive and treats `_` and `%` in the parent path as
+            live wildcards, which it will not let us escape - a doc literally
+            named `_MAP` is the motivating case.
+          - Notion: paginated `GET /blocks/{id}/children`, keeping
+            `child_page` blocks only. Notion's document order is discarded in
+            favour of title order; the source block is preserved under `raw`.
+            A 404 from Notion means either "no such page" or "page not shared
+            with the integration" and the two are indistinguishable.
+          - Obsidian: `*.md` files sitting directly in the directory.
+            Subdirectories are not returned - a folder is not a document on
+            this backend and has no id `read_doc` would accept. Non-note
+            files and vault housekeeping directories are skipped. This is a
+            read, so a `read_only: true` vault serves it normally.
+
+        See docs/second-brain-adapters.md for the full divergence table.
+        """
+        ...
+
     def list_recent(
         self,
         since: datetime,
