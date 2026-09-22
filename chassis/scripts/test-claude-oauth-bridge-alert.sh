@@ -102,6 +102,27 @@ plant_keychain() {
 JSON
 }
 
+# The container's side of the bridge: $HOME/.claude/.credentials.json.
+#
+# This matters more than it looks. Since the #559 rescue path landed, an empty
+# keychain is NOT automatically a fault - if this file holds an unexpired
+# token, the bridge copies it back up and self-heals rather than alerting. So
+# "keychain is empty" and "the operator needs to hear about it" are now two
+# different states, and a test that wants the fault has to arrange both sides.
+plant_container_credential() {
+    # $1 accessToken, $2 seconds from now until expiry (negative for expired).
+    local offset="${2:-3600}"
+    mkdir -p "$TMP/.claude"
+    cat > "$TMP/.claude/.credentials.json" <<JSON
+{"claudeAiOauth": {"accessToken": "$1", "refreshToken": "sk-refresh-REDACTED",
+                   "expiresAt": $(( (NOW + offset) * 1000 )), "scopes": ["user:inference"]}}
+JSON
+}
+
+clear_container_credential() {
+    rm -f "$TMP/.claude/.credentials.json"
+}
+
 run_bridge() {
     env -i \
         PATH="$SAFE_PATH" \
@@ -162,6 +183,8 @@ assert_alerts "a healthy bridge posts nothing" 0
 assert_contains "a healthy bridge still syncs" "$(log_text)" "synced: keychain"
 
 # --- 2. the fault posts once, on the FIRST tick ----------------------------
+# `reset` clears the container credential, so this is the genuine both-sides-
+# dead state: the keychain has no token and there is nothing to rescue from.
 reset
 plant_keychain ""
 run_bridge
@@ -169,7 +192,14 @@ assert_alerts "the missing-token fault alerts on the first tick" 1
 assert_state "the fault condition is recorded" "keychain_missing_token"
 assert_contains "the alert names the credential" "$(alert_text)" "claudeAiOauth.accessToken"
 assert_contains "the alert names the fix" "$(alert_text)" "/login"
-assert_contains "the alert says the container is unaffected" "$(alert_text)" "container is unaffected"
+# This assertion used to look for "container is unaffected", which was true
+# before the #559 rescue path existed: back then an empty keychain said
+# nothing about the container, so the alert reassured the operator that the
+# scheduled side kept running. It is now the opposite. Reaching alert_fault at
+# all means the rescue was tried and found nothing usable, so the container
+# has no good token either. Asserting the old wording would be asserting a
+# claim the bridge can no longer make.
+assert_contains "the alert says the container could not rescue it" "$(alert_text)" "no usable token to restore from"
 
 # --- 3. THE 288 regression: it does not keep posting ------------------------
 run_bridge; run_bridge; run_bridge; run_bridge; run_bridge
@@ -194,9 +224,62 @@ assert_alerts "a recovered bridge goes quiet again" 2
 # --- 6. a re-fault after a recovery alerts again ---------------------------
 # The edge has to be re-armed. A latch that only ever fires once per install
 # would be silent for the second outage.
+#
+# The container credential has to be cleared explicitly. Step 5's recovery ran
+# a healthy forward-sync, which wrote the good keychain token down into
+# .credentials.json. Emptying the keychain alone would now hit the #559 rescue
+# path, restore from that file and correctly NOT alert - so without this line
+# the test asserts a fault it never actually created. That is exactly how this
+# assertion started failing.
+clear_container_credential
 plant_keychain ""
 run_bridge
 assert_alerts "a second fault alerts again" 3
+
+# --- 6b. the #559 rescue path repairs instead of alerting ------------------
+# An empty keychain plus a still-valid container token is not an outage, it is
+# the routine aftermath of the container refreshing and rotating the host's
+# refresh token out from under it. The bridge copies the container's copy back
+# up and nobody needs to be told. Alerting here would be the 288-warning bug
+# in a new costume: a message every 30 minutes about something already fixed.
+#
+# This path had no coverage. It is what quietly replaced the old
+# "container is unaffected" behaviour, and its absence is why the change
+# looked like a test regression rather than a deliberate one.
+reset
+plant_container_credential "sk-ant-oat-FROM-CONTAINER" 3600
+plant_keychain ""
+run_bridge
+assert_alerts "a rescuable keychain posts nothing" 0
+assert_contains "the rescue is logged" "$(log_text)" "rescued: keychain had no accessToken"
+run_bridge
+run_bridge
+assert_alerts "repeated rescuable ticks stay quiet" 0
+
+# A rescue is a recovery when a fault was already latched, and must clear it.
+# Otherwise the next genuine outage would be swallowed by a stale latch.
+reset
+plant_keychain ""
+run_bridge
+assert_alerts "both sides dead alerts" 1
+assert_state "the fault is latched" "keychain_missing_token"
+plant_container_credential "sk-ant-oat-FROM-CONTAINER" 3600
+run_bridge
+assert_alerts "the rescue posts the recovery notice" 2
+assert_state "the rescue clears the latched fault" "ok"
+assert_contains "the recovery names it as such" "$(alert_text)" "recovered"
+
+# --- 6c. an EXPIRED container token is not a rescue ------------------------
+# Writing a dead token back into the keychain would clear the fault state and
+# silence the alert while leaving the host just as unauthenticated. Worse than
+# the outage, because it hides it.
+reset
+plant_container_credential "sk-ant-oat-STALE" -3600
+plant_keychain ""
+run_bridge
+assert_alerts "an expired container token still alerts" 1
+assert_state "the expired-rescue case records the missing-token fault" "keychain_missing_token"
+assert_not_contains "no rescue is claimed in the log" "$(log_text)" "rescued: keychain had no accessToken"
 
 # --- 7. an unreadable keychain is its own condition ------------------------
 reset
