@@ -16,6 +16,11 @@
 #   smoke-test       - one-shot: run chassis + plugin smoke checks
 #   claude           - interactive Claude CLI (needs -it)
 #   shell            - interactive zsh (needs -it)
+#   update-cli [ver] - one-shot: update the Claude Code CLI in place
+#                      (default `latest`). The image bakes whatever was
+#                      current at build time, so a long-lived container
+#                      falls behind and eventually gets 400s from the API
+#                      for newer models.
 #
 # The dispatcher loop reads HEARTBEATS.md from /app/customer (bind-mounted)
 # and invokes /app/chassis/scheduled-tasks/heartbeat-dispatcher.sh on a fixed
@@ -48,6 +53,46 @@ shift || true
 
 log() {
     printf '[entrypoint %(%H:%M:%S)T] %s\n' -1 "$*"
+}
+
+# Give npm a cache directory owned by whichever UID is actually running.
+#
+# Why: two different UIDs share /home/chassis in a running container. The
+# baked `chassis` user is UID 1000; an install that pulls the published image
+# without rebuilding runs as the host UID instead (501 on macOS). The
+# Dockerfile already chmods .npm to 0777 at build time, but that only covers
+# the directories that exist at build. Every file npm CREATES at runtime is
+# owned by the UID that created it at the default umask, so the first UID to
+# run npm leaves _logs/ and _cacache/ entries the other UID cannot write.
+#
+# Concrete failure 2026-09-22 on the v1 reference install: `claude update`
+# inside the container died with `Insufficient permissions to install update`
+# as UID 501, then with `sudo chown -R 1000:1000 "/home/chassis/.npm"` as
+# UID 1000, because /home/chassis/.npm/_logs was full of files owned by the
+# other UID. Net effect: the container could not update its own CLI. It sat
+# on Claude Code 2.1.261 while the host ran 2.1.280, old enough that the API
+# refused newer models outright with a 400.
+#
+# A per-UID cache path removes the sharing, so no UID can poison another's
+# cache. /tmp is container-local and disposable, the right lifetime for a
+# cache. NPM_CONFIG_CACHE still wins if an operator sets it explicitly, via
+# compose `environment:` or `docker -e`. Note this runs before source_env, so
+# a value set only in the customer .env is not picked up here - that is
+# deliberate, since npm may be invoked by modes that never source .env.
+# The same UID split breaks /home/chassis/.npmrc, which npm writes at 0600
+# owned by the build-time user. A runtime UID of 501 can neither read it (so
+# it silently loses the baked `prefix=/home/chassis/.local`) nor write it
+# (`EACCES ... path: '/home/chassis/.npmrc'` on any `npm config set`). Point
+# npm at a per-UID user config as well, and carry the prefix forward in the
+# environment so it survives not being able to read the baked file.
+configure_npm_cache() {
+    local uid
+    uid="$(id -u)"
+    export npm_config_cache="${NPM_CONFIG_CACHE:-/tmp/npm-cache-$uid}"
+    export npm_config_userconfig="${NPM_CONFIG_USERCONFIG:-/tmp/npmrc-$uid}"
+    export npm_config_prefix="${CLAUDE_NPM_PREFIX:-/home/chassis/.local}"
+    mkdir -p "$npm_config_cache" 2>/dev/null || true
+    touch "$npm_config_userconfig" 2>/dev/null || true
 }
 
 ensure_customer_layout() {
@@ -372,6 +417,65 @@ cmd_shell() {
     exec /usr/bin/zsh
 }
 
+# Update the Claude Code CLI in place, so a long-lived container is not stuck
+# on whatever version its image was built with.
+#
+# The image installs @anthropic-ai/claude-code@latest at build time, which
+# means "latest as of the build" and nothing more. A container that has been
+# up for weeks is weeks behind, and the API rejects models outright once the
+# CLI is old enough, so this is a hard failure rather than a slow drift.
+#
+# `claude update` is deliberately NOT used here. It shells out to a global npm
+# install that assumes the invoking UID owns the install tree, which is the
+# assumption that breaks in this image (see configure_npm_cache above). Going
+# through npm directly with an explicit prefix keeps it working at any UID.
+#
+# umask 0000 matters: it makes the files npm writes group- and other-writable,
+# so the NEXT update still works even if it runs as a different UID. Without
+# it, one successful update re-creates node_modules at 0755 owned by the
+# updating user and locks the other UID out again, which is exactly the state
+# the v1 reference install was found in.
+cmd_update_cli() {
+    local target="${1:-latest}"
+    local prefix="${CLAUDE_NPM_PREFIX:-/home/chassis/.local}"
+
+    log "updating claude CLI to '$target' (prefix $prefix, uid $(id -u))"
+    log "before: $(claude --version 2>/dev/null || echo 'not installed')"
+
+    # Make the existing install replaceable before touching it. npm swaps a
+    # package in by renaming the old directory aside, which needs write access
+    # to the tree it is renaming. If the previous install was done by the other
+    # UID at a default umask, that access is missing and npm fails with
+    # `ENOTEMPTY: directory not empty, rename ... -> .claude-code-XXXXXXXX`,
+    # which reads like a stale-file problem but is really a permission one.
+    local scope="$prefix/lib/node_modules/@anthropic-ai"
+    if [ -d "$scope" ]; then
+        chmod -R a+rwX "$scope" 2>/dev/null || true
+        # Clear debris from any earlier failed swap. These are npm's rename
+        # targets; left behind they make the next run fail the same way.
+        rm -rf "$scope"/.claude-code-* 2>/dev/null || true
+    fi
+
+    # npm_config_prefix is exported by configure_npm_cache, so no `npm config
+    # set` is needed. That matters: `npm config set` writes the user npmrc,
+    # which is exactly the file a non-owning UID cannot open.
+    (
+        umask 0000
+        npm_config_prefix="$prefix" npm install -g "@anthropic-ai/claude-code@${target}"
+    )
+
+    # npm honours umask for files it writes, but directories it creates via
+    # mkdir can still come back restrictive on some npm versions. Re-assert
+    # any-UID access rather than trusting that.
+    chmod -R a+rwX "$prefix/lib/node_modules/@anthropic-ai" 2>/dev/null || true
+
+    log "after: $(claude --version 2>/dev/null || echo 'MISSING - update failed')"
+}
+
+# Every mode below may shell out to npm or npx, directly or through a gather
+# script, so the cache fix is applied once here rather than per-mode.
+configure_npm_cache
+
 case "$MODE" in
     dispatcher)       cmd_dispatcher       "$@" ;;
     control-listener) cmd_control_listener "$@" ;;
@@ -382,9 +486,10 @@ case "$MODE" in
     smoke-test)       cmd_smoke_test       "$@" ;;
     claude)           cmd_claude           "$@" ;;
     shell)            cmd_shell            "$@" ;;
+    update-cli)       cmd_update_cli       "$@" ;;
     *)
         echo "unknown mode: $MODE" >&2
-        echo "valid modes: dispatcher | control-listener | bootstrap | install-plugin <name> | hydrate-env | migrate | smoke-test | claude | shell" >&2
+        echo "valid modes: dispatcher | control-listener | bootstrap | install-plugin <name> | hydrate-env | migrate | smoke-test | claude | shell | update-cli [version]" >&2
         exit 2
         ;;
 esac

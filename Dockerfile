@@ -412,6 +412,21 @@ RUN for d in .npm .bun .local .config .cache; do \
         chmod -R 0777 "/home/chassis/$d" 2>/dev/null || true; \
     done
 
+# Same story for the dotfiles npm writes next to those dirs, which the loop
+# above does not reach because they are files in $HOME root rather than
+# subdirs. `npm config set prefix` during the CLI install leaves
+# /home/chassis/.npmrc at 0600 chassis:chassis. A runtime UID that is not
+# chassis then cannot READ it, so it silently loses
+# `prefix=/home/chassis/.local` and installs to the wrong place, and cannot
+# WRITE it, so any `npm config set` dies with
+# `EACCES ... path: '/home/chassis/.npmrc'`. Found 2026-09-22 while working
+# out why the container could not update its own Claude CLI.
+#
+# The entrypoint also points npm at a per-UID userconfig as a belt-and-braces
+# measure, but a readable baked npmrc is what keeps the prefix correct for
+# anything that invokes npm WITHOUT going through the entrypoint.
+RUN [ -e /home/chassis/.npmrc ] && chmod 0666 /home/chassis/.npmrc || true
+
 USER chassis
 WORKDIR /app/customer
 VOLUME ["/app/customer", "/home/chassis/.claude"]
