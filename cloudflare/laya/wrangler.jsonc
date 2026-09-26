@@ -1,0 +1,60 @@
+// Laya on Cloudflare Containers (behalfbot#214, FounderOS epic
+// behalfbot-plugins#22).
+//
+// DO NOT `wrangler deploy` without Sean's explicit approval. Auth: wrangler
+// reads CLOUDFLARE_API_TOKEN from the environment (account-owned token
+// "behalfbot-fable-cf-containers", stored in Vaultwarden). The token is
+// never written to this repo or baked into any file. Confirm
+// `wrangler whoami` shows account 8a119b24123c444dddea567ffde1a405 before
+// deploying; the account_id pin below forces the correct account anyway.
+//
+// Separate Worker from behalfbot-executor and behalfbot-support-agent on
+// purpose: its only secret is its own API token, so nothing here can reach
+// Turso, GitHub or an Anthropic key.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "behalfbot-laya",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  // sean@grid7.com's account (NOT the AllBets account).
+  "account_id": "8a119b24123c444dddea567ffde1a405",
+  "containers": [
+    {
+      "class_name": "LayaContainer",
+      "image": "./Dockerfile",
+      // One instance per checkpoint: the Worker routes to a DO named
+      // "english" or "multilingual", each running this image pinned to that
+      // checkpoint (LAYA_MODEL). Both resident in one 4 GiB instance OOMs
+      // (README.md). laya-serve runs one forward pass at a time, and the cap
+      // makes two always-on instances the worst case on the bill
+      // (docs/laya-cloudflare-cost.md). Scaling out means sharding DO names,
+      // not just raising this.
+      "max_instances": 2,
+      // 1/2 vCPU, 4 GiB memory, 8 GB disk. One pinned checkpoint peaks at
+      // 2.8 GiB (english) / 3.7 GiB (multilingual, 16 questions); the image
+      // is 2.7 GB unpacked. Measurements in README.md.
+      "instance_type": "standard-1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "LAYA_CONTAINER",
+        "class_name": "LayaContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["LayaContainer"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+  // Secrets (set via `wrangler secret put <NAME>`, never in this file):
+  //   LAYA_API_TOKEN   - bearer token for every route except /healthz.
+  //                      Mint fresh (32+ random bytes), store in Vaultwarden,
+  //                      give it to the VCL backend only.
+}
