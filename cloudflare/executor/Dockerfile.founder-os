@@ -1,0 +1,41 @@
+# FounderOS session container (behalfbot#215).
+#
+# A separate image from the Asks executor on purpose. This one contains:
+#   - node 22 and the claude CLI
+#   - the founder-os plugin at the tag+SHA in FOUNDER_OS_PIN, staged by
+#     build-founder-os.sh into founder-os-context/plugin/
+#   - the session shim (founder-os/*.mjs)
+# It does not contain the vibecodelisboa executor slice, git, or any
+# credential. Its runtime env is BEHALFBOT_ANTHROPIC_API_KEY and the ledger
+# API base URL (src/index.ts FounderOSContainer). Ledger access is only
+# through the per-session, per-founder token in each request.
+#
+# Build: ./build-founder-os.sh first, then deploy.sh (gated on Sean).
+
+FROM node:22-bookworm-slim
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g @anthropic-ai/claude-code
+
+RUN useradd --create-home --shell /usr/sbin/nologin executor
+
+# Plugin content stays root-owned, so it is read-only to the runtime user.
+COPY founder-os-context/plugin/ /app/founder-os-plugin/
+
+# Whole directory, same reason as the Asks Dockerfile: the next module
+# server.mjs imports must ship with it. Tests and the fixture plugin ride
+# along harmlessly; FOUNDER_OS_PLUGIN_DIR never points at the fixture.
+COPY --chown=executor:executor founder-os/ /app/shim/
+
+USER executor
+WORKDIR /app
+
+ENV FOUNDER_OS_PLUGIN_DIR=/app/founder-os-plugin
+ENV FOUNDER_OS_WORK_ROOT=/tmp/founder-os-work
+
+EXPOSE 8080
+
+CMD ["node", "/app/shim/server.mjs"]

@@ -18,6 +18,7 @@
 #
 # Usage:
 #   GITHUB_PAT=... ./build.sh          # stages build-context/, writes build-info.json
+#   ./build-founder-os.sh               # stages founder-os-context/ (#215)
 #   CLOUDFLARE_API_TOKEN=... ./deploy.sh
 #
 # The API token is the account-owned "behalfbot-fable-cf-containers" item in
@@ -50,7 +51,18 @@ if [[ -z "$APP_COMMIT" || -z "$BUILT_AT" ]]; then
   exit 1
 fi
 
+# The FounderOS image (behalfbot#215) copies founder-os-context/plugin/ in,
+# and wrangler builds every container image on deploy, so a missing context
+# would fail the Asks deploy too, halfway through. Check up front.
+FOUNDER_OS_PIN_JSON="${SCRIPT_DIR}/founder-os-context/plugin/.pin.json"
+if [[ ! -f "$FOUNDER_OS_PIN_JSON" ]]; then
+  echo "deploy: ${FOUNDER_OS_PIN_JSON} is missing. Run build-founder-os.sh first." >&2
+  exit 1
+fi
+FOUNDER_OS_PIN_DESC="$(python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); print("%s %s" % (p["tag"], p["sha"]) if p.get("pinned") else "unpinned (sessions answer 503)")' "$FOUNDER_OS_PIN_JSON")"
+
 echo "[deploy] app commit ${APP_COMMIT}, built ${BUILT_AT}"
+echo "[deploy] founder-os plugin: ${FOUNDER_OS_PIN_DESC}"
 
 cd "$SCRIPT_DIR"
 exec npx wrangler deploy \

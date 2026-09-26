@@ -13,6 +13,17 @@ import { Container, getContainer } from '@cloudflare/containers'
 
 interface Env {
   EXECUTOR_CONTAINER: DurableObjectNamespace<ExecutorContainer>
+  // FounderOS sessions (behalfbot#215). A separate Container class and image
+  // so the tenant-facing path never shares a process, env or filesystem with
+  // the Asks executor's Turso and GitHub credentials.
+  FOUNDER_OS_CONTAINER: DurableObjectNamespace<FounderOSContainer>
+  // Bearer VCL's server side uses to start sessions. Distinct from
+  // EXECUTOR_TRIGGER_TOKEN so the Mac mini poke cannot start one, and a VCL
+  // leak cannot trigger Asks ticks.
+  FOUNDER_OS_TRIGGER_TOKEN?: string
+  // Plain var: base URL of the tenant-scoped ledger API
+  // (docs/founder-os-ledger-api.md). Not a secret.
+  FOUNDER_OS_VCL_API_BASE?: string
   // Shared secret the Mac mini poke authenticates with. Minted fresh for
   // this Worker; not reused from any other system.
   EXECUTOR_TRIGGER_TOKEN: string
@@ -60,6 +71,73 @@ export class ExecutorContainer extends Container<Env> {
   }
 }
 
+// FounderOS session container. Holds the dedicated Anthropic key and the
+// ledger API base URL, and nothing else: no DATABASE_*, no GITHUB_PAT, no
+// ENCRYPTION_SECRET. Ledger access is only through the per-session token VCL
+// sends with each request, which is scoped to one founder_id.
+export class FounderOSContainer extends Container<Env> {
+  defaultPort = 8080
+  // Above the shim's 10-min session cap so the reaper never sleeps an
+  // instance mid-session.
+  sleepAfter = '20m'
+
+  constructor(ctx: DurableObjectState<{}>, env: Env) {
+    super(ctx, env)
+    this.envVars = {
+      BEHALFBOT_ANTHROPIC_API_KEY: env.BEHALFBOT_ANTHROPIC_API_KEY,
+      FOUNDER_OS_VCL_API_BASE: env.FOUNDER_OS_VCL_API_BASE ?? '',
+    }
+  }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const MAX_SESSION_BODY_BYTES = 256 * 1024
+
+// Each founder gets their own container instance, named by founder_id, so
+// one instance's filesystem and process only ever see one tenant.
+async function handleFounderOs(request: Request, env: Env, url: URL): Promise<Response> {
+  const auth = request.headers.get('authorization') ?? ''
+  if (!env.FOUNDER_OS_TRIGGER_TOKEN || auth !== `Bearer ${env.FOUNDER_OS_TRIGGER_TOKEN}`) {
+    return unauthorized()
+  }
+
+  if (request.method === 'POST' && url.pathname === '/founder-os/sessions') {
+    const text = await request.text()
+    if (text.length > MAX_SESSION_BODY_BYTES) {
+      return Response.json({ error: 'body_too_large' }, { status: 413 })
+    }
+    let founderId: unknown
+    try {
+      founderId = (JSON.parse(text) as { founder_id?: unknown }).founder_id
+    } catch {
+      return Response.json({ error: 'bad_request' }, { status: 400 })
+    }
+    if (typeof founderId !== 'string' || !UUID_RE.test(founderId)) {
+      return Response.json({ error: 'bad_request', message: 'founder_id must be a UUID' }, { status: 400 })
+    }
+    const container = getContainer(env.FOUNDER_OS_CONTAINER, founderId.toLowerCase())
+    return container.fetch(
+      new Request('http://container/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: text,
+      }),
+    )
+  }
+
+  if (request.method === 'GET' && url.pathname === '/founder-os/status') {
+    const founderId = url.searchParams.get('founder_id') ?? ''
+    if (!UUID_RE.test(founderId)) {
+      return Response.json({ error: 'bad_request', message: 'founder_id must be a UUID' }, { status: 400 })
+    }
+    return getContainer(env.FOUNDER_OS_CONTAINER, founderId.toLowerCase()).fetch(
+      new Request('http://container/status'),
+    )
+  }
+
+  return Response.json({ error: 'not_found' }, { status: 404 })
+}
+
 function unauthorized(): Response {
   return Response.json({ error: 'unauthorized' }, { status: 401 })
 }
@@ -84,6 +162,12 @@ export default {
         appCommit: env.APP_COMMIT ?? null,
         builtAt: env.BUILT_AT ?? null,
       })
+    }
+
+    // FounderOS routes carry their own bearer and never reach the Asks
+    // singleton below.
+    if (url.pathname.startsWith('/founder-os/')) {
+      return handleFounderOs(request, env, url)
     }
 
     const auth = request.headers.get('authorization') ?? ''

@@ -3,3 +3,6 @@
 build-context/
 node_modules/
 .wrangler/
+# Staged by build-founder-os.sh from the pinned behalfbot-plugins release.
+founder-os-context/
+.founder-os-staging.*/

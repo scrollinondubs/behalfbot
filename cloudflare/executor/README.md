@@ -91,6 +91,7 @@ interactively, never committed):
 | `GITHUB_PAT` | jacketyjax PAT - member-repo clone, push, PR | `/Users/jax/.behalfbot/.env.baked` |
 | `BEHALFBOT_ANTHROPIC_API_KEY` | dedicated Anthropic key, $60/mo Console cap | Anthropic Console / Vaultwarden |
 | `RESEND_API_KEY` | member notify emails after job completion (#73) | Vaultwarden `resend-api-key-vcl` |
+| `FOUNDER_OS_TRIGGER_TOKEN` | authenticates VCL's server when it starts FounderOS sessions (#215) | mint fresh, store in Vaultwarden |
 
 That is the complete set. Anything not in this table (Vaultwarden master,
 Postgres DSN, SiYuan token, Discord token, OAuth refresh tokens) must
@@ -149,6 +150,52 @@ fails closed instead of deploying to the wrong account.
 7. **Decommission** (behalfbot#41 step 5): remove the local executor code
    path and archive logs. Logs on the CF side: `observability.enabled`
    streams to Workers Logs; longer retention (R2 sink) is a follow-up.
+
+## FounderOS sessions (behalfbot#215)
+
+The same Worker also runs FounderOS coach and auditor sessions for VCL
+students. They run in a second Container class, `FounderOSContainer`, built
+from `Dockerfile.founder-os`. It never shares a process, env or filesystem
+with the Asks executor above, and nothing in the Asks path changed.
+
+```
+VCL server  -> POST /founder-os/sessions   (Bearer FOUNDER_OS_TRIGGER_TOKEN)
+               { founder_id, stage, skill, message?, artifact_refs?, session_token }
+  Worker    -> FounderOSContainer instance named by founder_id
+    shim    -> VCL GET /me with the session token; refuses unless it is this founder
+            -> prefetch the founder's context, answer 202
+            -> claude -p --bare, Read/Glob/Grep only, no network tools
+            -> validate the reply envelope, apply its writes, POST /session/result
+```
+
+- **No database credential.** The container env is
+  `BEHALFBOT_ANTHROPIC_API_KEY` and `FOUNDER_OS_VCL_API_BASE`. Ledger access
+  goes only through VCL's tenant-scoped API, using the short-lived token VCL
+  mints for one `founder_id`. Contract:
+  [docs/founder-os-ledger-api.md](docs/founder-os-ledger-api.md).
+- **The model never holds the token.** Claude's child env is an allowlist
+  (`PATH`, `HOME`, `LANG`, `TZ`, `ANTHROPIC_API_KEY`). It returns
+  `{reply, ledger_writes}`, and the shim applies the writes. A write naming a
+  `founder_id`, another stage, or a method the skill type may not call
+  rejects the whole envelope.
+- **One founder per instance, one session per instance.** `max_instances: 5`
+  caps concurrent founders. Sessions are capped at 10 minutes.
+- **Plugin pin.** `FOUNDER_OS_PIN` follows the `chassis/PLUGINS_PIN` rules
+  (`<tag> <40-hex-sha>`, tag must still resolve to the SHA).
+  `build-founder-os.sh` stages the pinned `founder-os/` into
+  `founder-os-context/` (gitignored). No behalfbot-plugins tag contains
+  founder-os yet, so the pin is empty and every session answers
+  `503 plugin_unpinned`. The image still builds, so Asks deploys are not
+  blocked.
+- **Tests:** `npm test` (node:test, no network). `founder-os/test/isolation.test.mjs`
+  runs founders A and B against `founder-os/test/mock-vcl.mjs`, which
+  implements the contract.
+
+Deploy additions (gated like everything else here): run
+`./build-founder-os.sh` before `./deploy.sh`, and
+`wrangler secret put FOUNDER_OS_TRIGGER_TOKEN` (mint fresh, store in
+Vaultwarden, give the same value to VCL's server env). Do not put any other
+secret into the FounderOS container.
 
 ## Follow-ups (out of scope for this PR)
 

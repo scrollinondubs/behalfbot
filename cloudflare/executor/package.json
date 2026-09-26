@@ -4,7 +4,9 @@
   "description": "Worker + Container scaffold for the Behalf.bot executor (behalfbot#41, behalfbot#66). Deploy is gated on Sean's approval.",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "test": "node --test container/*.test.mjs founder-os/test/*.test.mjs",
     "build-context": "bash build.sh",
+    "build-founder-os": "bash build-founder-os.sh",
     "deploy": "bash deploy.sh"
   },
   "dependencies": {
