@@ -5,11 +5,6 @@
 # build-founder-os.sh resolves the tag remotely and refuses (exit 3) if it no
 # longer points at the pinned SHA. A bare tag or a branch is not a pin.
 #
-# Deliberately unpinned today: no behalfbot-plugins tag contains founder-os/
-# yet (v0.4.0 is the latest, and founder-os landed after it). With no pin
-# line the image still builds, so Asks deploys are never blocked by this,
-# and every FounderOS session answers 503 plugin_unpinned.
-#
-# To enable: cut the first founder-os tag on behalfbot-plugins, then add the
-# line in a reviewed PR, in the form
-#   v0.5.0 <sha that v0.5.0 resolves to>
+# v0.5.0 is the first behalfbot-plugins release containing founder-os/
+# (cards, gates, stage/auditor/coach skills, ledger, bundle, evals).
+v0.5.0 cc013ba225a66d6905a2af90a18995ad1e105055
