@@ -31,6 +31,15 @@
       // per docs/cloudflare-containers-eval.md section 3. Bump to
       // "standard-2" if a member repo ever blows the working set.
       "instance_type": "standard-1"
+    },
+    {
+      // FounderOS sessions (behalfbot#215). Own image with no Turso or
+      // GitHub credential in it. One instance per founder_id; the cap is
+      // the number of founders who can be mid-session at once.
+      "class_name": "FounderOSContainer",
+      "image": "./Dockerfile.founder-os",
+      "max_instances": 5,
+      "instance_type": "standard-1"
     }
   ],
   "durable_objects": {
@@ -38,6 +47,10 @@
       {
         "name": "EXECUTOR_CONTAINER",
         "class_name": "ExecutorContainer"
+      },
+      {
+        "name": "FOUNDER_OS_CONTAINER",
+        "class_name": "FounderOSContainer"
       }
     ]
   },
@@ -45,8 +58,17 @@
     {
       "tag": "v1",
       "new_sqlite_classes": ["ExecutorContainer"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["FounderOSContainer"]
     }
   ],
+  "vars": {
+    // Tenant-scoped ledger API, docs/founder-os-ledger-api.md. Built in
+    // vibecodelisboa#508.
+    "FOUNDER_OS_VCL_API_BASE": "https://vibecodelisboa.com/api/founder-os/v1/ledger"
+  },
   "observability": {
     "enabled": true
   }
@@ -59,4 +81,8 @@
   //   BEHALFBOT_ANTHROPIC_API_KEY   - dedicated key, $60/mo capped; NEVER
   //                                   Sean's Max subscription
   //   RESEND_API_KEY                - member notify emails (#73)
+  //   FOUNDER_OS_TRIGGER_TOKEN      - bearer VCL's server uses to start
+  //                                   FounderOS sessions (#215). Only
+  //                                   BEHALFBOT_ANTHROPIC_API_KEY reaches
+  //                                   the FounderOS container.
 }

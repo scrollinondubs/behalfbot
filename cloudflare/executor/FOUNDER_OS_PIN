@@ -1,0 +1,15 @@
+# FounderOS plugin pin for the executor's FounderOS image (behalfbot#215).
+#
+# Same format and rules as chassis/PLUGINS_PIN: one non-comment line
+# "<tag> <40-hex-sha>" naming a scrollinondubs/behalfbot-plugins release.
+# build-founder-os.sh resolves the tag remotely and refuses (exit 3) if it no
+# longer points at the pinned SHA. A bare tag or a branch is not a pin.
+#
+# Deliberately unpinned today: no behalfbot-plugins tag contains founder-os/
+# yet (v0.4.0 is the latest, and founder-os landed after it). With no pin
+# line the image still builds, so Asks deploys are never blocked by this,
+# and every FounderOS session answers 503 plugin_unpinned.
+#
+# To enable: cut the first founder-os tag on behalfbot-plugins, then add the
+# line in a reviewed PR, in the form
+#   v0.5.0 <sha that v0.5.0 resolves to>
