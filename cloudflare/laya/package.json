@@ -1,0 +1,17 @@
+{
+  "name": "behalfbot-laya-worker",
+  "private": true,
+  "description": "Worker + Container for Laya (System One decisions) on the FounderOS SaaS path (behalfbot#214). Deploy is gated on Sean's approval.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.3.7"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "wrangler": "^4.111.0",
+    "@cloudflare/workers-types": "^5.20260716.1"
+  }
+}
