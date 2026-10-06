@@ -1,13 +1,36 @@
 // Reads the founder-os plugin tree baked into the image at a pinned tag+SHA
-// (build-founder-os.sh, FOUNDER_OS_PIN). Only skills/, core/ and gates/ are
-// ever read. contrib/ is opt-in per the plugin README and stays out.
+// (build-founder-os.sh, FOUNDER_OS_PIN). Only skills/, core/, gates/ and
+// basic/ are ever read. contrib/ is opt-in per the plugin README and stays out.
 
 import { existsSync, readFileSync, readdirSync, lstatSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 export const SKILL_NAME_RE = /^founder-os-[a-z0-9]+(?:-[a-z0-9]+)*$/
 const GATE_ID_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
-export const SKILL_TYPES = new Set(['stage-skill', 'coach', 'auditor'])
+
+// Plugin frontmatter type -> the executor's skill type, which keys the write
+// allowlist (envelope.mjs). The plugin names its types stage-skill,
+// auditor-skill, coach-skill and basic-skill (behalfbot-plugins
+// scripts/lint_content.py SKILL_KINDS). The bare coach and auditor names are
+// the executor's own and stay accepted. A basic-skill also needs a role.
+const TYPE_BY_FRONTMATTER = {
+  'stage-skill': 'stage-skill',
+  'coach-skill': 'coach',
+  coach: 'coach',
+  'auditor-skill': 'auditor',
+  auditor: 'auditor',
+}
+const BASIC_TYPE_BY_ROLE = { coach: 'basic-coach', review: 'basic-review' }
+export const SKILL_TYPES = new Set([...Object.keys(TYPE_BY_FRONTMATTER), 'basic-skill'])
+
+function skillType(meta) {
+  if (meta.type === 'basic-skill') return Object.hasOwn(BASIC_TYPE_BY_ROLE, meta.role) ? BASIC_TYPE_BY_ROLE[meta.role] : null
+  return Object.hasOwn(TYPE_BY_FRONTMATTER, meta.type) ? TYPE_BY_FRONTMATTER[meta.type] : null
+}
+
+export function isBasicSkill(skill) {
+  return skill.track === 'basic'
+}
 
 export function readPin(pluginDir) {
   try {
@@ -39,11 +62,14 @@ export function loadSkill(pluginDir, name) {
   const path = join(pluginDir, 'skills', name, 'SKILL.md')
   if (!existsSync(path) || !lstatSync(path).isFile()) return null
   const parsed = parseFrontmatter(readFileSync(path, 'utf8'))
-  if (!parsed || parsed.meta.name !== name || !SKILL_TYPES.has(parsed.meta.type)) return null
+  if (!parsed || parsed.meta.name !== name) return null
+  const type = skillType(parsed.meta)
+  if (!type) return null
   const stage = parsed.meta.stage === undefined ? null : Number(parsed.meta.stage)
   if (stage !== null && !(Number.isInteger(stage) && stage >= 0 && stage <= 9)) return null
   const gate = parsed.meta.gate && GATE_ID_RE.test(parsed.meta.gate) ? parsed.meta.gate : null
-  return { name, type: parsed.meta.type, stage, gate, text: readFileSync(path, 'utf8') }
+  const track = type.startsWith('basic-') ? 'basic' : 'advanced'
+  return { name, type, track, stage, gate, text: readFileSync(path, 'utf8') }
 }
 
 // Regular markdown files only: a symlink in the plugin tree must never become
@@ -56,9 +82,25 @@ function markdownFiles(dir) {
     .filter(p => lstatSync(p).isFile())
 }
 
-export function stageMaterials(pluginDir, stage, gate) {
+// Advanced skills get core/stage-N cards and their own gate. Basic skills
+// name no gate: they get basic/stage-N cards (Coach checks included) and the
+// stage's panel, basic/gates/stage-N-<slug>.md. Each path comes back with the
+// path relative to the session workdir it is copied to.
+export function stageMaterials(pluginDir, stage, skill) {
+  if (isBasicSkill(skill)) {
+    const cards = markdownFiles(join(pluginDir, 'basic', `stage-${stage}`))
+      .map(p => ({ from: p, to: join('basic', `stage-${stage}`, basename(p)) }))
+    const gates = markdownFiles(join(pluginDir, 'basic', 'gates'))
+      .filter(p => basename(p).startsWith(`stage-${stage}-`))
+      .map(p => ({ from: p, to: join('basic', 'gates', basename(p)) }))
+    return { cards, gates }
+  }
+  const gate = skill.gate
   const cards = markdownFiles(join(pluginDir, 'core', `stage-${stage}`))
+    .map(p => ({ from: p, to: join('cards', basename(p)) }))
   const gatePath = gate ? join(pluginDir, 'gates', `${gate}.md`) : null
-  const gates = gatePath && existsSync(gatePath) && lstatSync(gatePath).isFile() ? [gatePath] : []
+  const gates = gatePath && existsSync(gatePath) && lstatSync(gatePath).isFile()
+    ? [{ from: gatePath, to: `gate-${basename(gatePath)}` }]
+    : []
   return { cards, gates }
 }

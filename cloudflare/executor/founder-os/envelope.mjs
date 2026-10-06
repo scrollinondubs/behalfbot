@@ -8,10 +8,16 @@ import { containsFounderIdKey } from './ledger-client.mjs'
 
 export const MAX_WRITES = 25
 
+const COACH_WRITES = ['add_artifact', 'add_pain', 'add_interview', 'add_prfaq_version', 'mark_gate_pending']
+
+// Keyed by the executor's skill type (plugin.mjs loadSkill). A Basic review
+// only answers: VCL reads its verdict block and records the card status.
 export const WRITES_BY_SKILL_TYPE = {
-  'stage-skill': ['add_artifact', 'add_pain', 'add_interview', 'add_prfaq_version', 'mark_gate_pending'],
-  coach: ['add_artifact', 'add_pain', 'add_interview', 'add_prfaq_version', 'mark_gate_pending'],
+  'stage-skill': COACH_WRITES,
+  coach: COACH_WRITES,
   auditor: ['add_audit', 'record_gate_decision'],
+  'basic-coach': COACH_WRITES,
+  'basic-review': [],
 }
 
 const STAGE_BOUND = new Set(['add_artifact', 'add_prfaq_version', 'mark_gate_pending', 'record_gate_decision'])
