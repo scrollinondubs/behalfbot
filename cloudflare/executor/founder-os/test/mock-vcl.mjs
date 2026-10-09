@@ -25,6 +25,9 @@ export async function startMockVcl() {
   const tokens = new Map()
   const requests = []
   const sessionResults = []
+  // GET /content/stage answers 404, as a VCL without the route does, until a
+  // test sets a body or a handler (req, url, send) => void.
+  let stageContent = null
 
   const state = {
     founders,
@@ -56,6 +59,9 @@ export async function startMockVcl() {
       return token
     },
     tokenInfo: token => tokens.get(token),
+    serveStageContent(value) {
+      stageContent = value
+    },
     rowsFor: (table, founder_id) => rows[table].filter(r => r.founder_id === founder_id),
   }
 
@@ -99,6 +105,11 @@ export async function startMockVcl() {
 
       if (m === 'GET' && p === '/me') return send(200, info)
       if (m === 'GET' && p === '/founder') return send(200, founders.get(fid))
+      if (m === 'GET' && p === '/content/stage') {
+        if (stageContent === null) return fail(404, 'not_found')
+        if (typeof stageContent === 'function') return stageContent(req, url, send)
+        return send(200, stageContent)
+      }
       if (m === 'GET' && p === '/stage-progress') return send(200, { rows: mine('stage_progress') })
       const gp = /^\/stage-progress\/(\d+)\/gate-pending$/.exec(p)
       if (m === 'POST' && gp) {
