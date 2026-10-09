@@ -166,6 +166,26 @@ request.
 | `GET /gate-decisions` | `list_gate_decisions` | `?stage=` (optional) | `{ rows: [...] }` |
 | `POST /gate-decisions` | `record_gate_decision` | `{ stage, gate_id, decision, decided_by, evidence, rationale, sean_signoff?, routes_to_stage? }` | 201, decision row. 404 if any evidence ref is not this founder's row. |
 
+### Stage content
+
+| Method and path | Body / query | Response |
+|---|---|---|
+| `GET /content/stage` | `?stage=` (required) | `{ base_sha, files: [{ path, text }] }` |
+
+Not a ledger row. The card files and gate file of one stage on the session
+venture's track, whole files (frontmatter and Coach checks included) with the
+admin's edits from VCL applied, at their plugin paths: `basic/stage-N/<card>.md`
+and `basic/gates/stage-N-<slug>.md`. `base_sha` is the behalfbot-plugins commit
+VCL vendored. An Advanced venture gets `files: []`. A missing or out-of-track
+stage is `400 bad_request`.
+
+The executor asks only for Basic skills and writes the files into the session
+workdir in place of its pinned copies. It uses them only if every file is
+safe: a path in that stage's card dir or its gate file, `.md`, at most 64 KB,
+at most 32 files, at least one card. Otherwise, or on any error or a 5 second
+timeout, it copies the pinned files exactly as before and the session goes on.
+Each session logs one `founder_os_materials` line saying which it used.
+
 ### Session result
 
 | Method and path | Body | Response |

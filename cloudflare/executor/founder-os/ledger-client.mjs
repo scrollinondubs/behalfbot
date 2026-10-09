@@ -78,7 +78,7 @@ export function createLedgerClient({ baseUrl, token, fetchImpl = globalThis.fetc
     }
   }
 
-  async function call(method, path, body) {
+  async function call(method, path, body, { signal } = {}) {
     if (body !== undefined && containsFounderIdKey(body)) {
       throw new LedgerApiError(0, 'founder_id_not_accepted', 'requests never carry a founder_id')
     }
@@ -89,6 +89,7 @@ export function createLedgerClient({ baseUrl, token, fetchImpl = globalThis.fetc
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(signal ? { signal } : {}),
     })
     if (res.status === 204) return null
     const text = await res.text()
@@ -145,5 +146,10 @@ export function createLedgerClient({ baseUrl, token, fetchImpl = globalThis.fetc
     recordGateDecision: args => call('POST', '/gate-decisions', args),
 
     postSessionResult: args => call('POST', '/session/result', args),
+
+    // The stage's card and gate files as VCL serves them, admin edits applied.
+    // Not a ledger row: { base_sha, files: [{ path, text }] }.
+    contentStage: (stage, { signal } = {}) =>
+      call('GET', `/content/stage${query({ stage: Number.isInteger(stage) ? stage : 'x' })}`, undefined, { signal }),
   }
 }

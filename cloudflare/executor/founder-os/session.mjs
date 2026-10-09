@@ -14,7 +14,7 @@
 
 import { spawn } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { createLedgerClient, isUuid } from './ledger-client.mjs'
 import { isBasicSkill, loadSkill, readPin, stageMaterials } from './plugin.mjs'
 import { stageImageAttachments } from './attachments.mjs'
@@ -23,6 +23,11 @@ import { EnvelopeError, WRITES_BY_SKILL_TYPE, applyWrites, parseEnvelope, valida
 export const SESSION_TIMEOUT_MS = 10 * 60 * 1000
 export const MAX_MESSAGE_CHARS = 20000
 export const MAX_ARTIFACT_REFS = 20
+
+// VCL's /content/stage: Basic card files run about 3 KB, a stage has a few.
+export const MAX_STAGE_FILE_BYTES = 64 * 1024
+export const MAX_STAGE_FILES = 32
+export const CONTENT_FETCH_TIMEOUT_MS = 5000
 
 export const ALLOWED_TOOLS = 'Read,Glob,Grep'
 export const DISALLOWED_TOOLS = [
@@ -205,19 +210,88 @@ export function buildClaudeArgs({ workdir, systemPrompt, userPrompt, model }) {
   ]
 }
 
-function stageWorkdir(session, deps) {
-  mkdirSync(deps.workRoot, { recursive: true })
-  const workdir = mkdtempSync(join(deps.workRoot, 'session-'))
+// The files VCL serves for a Basic stage, if every one of them is safe to
+// write: a path in this stage's card dir or its gate file, markdown, under the
+// size cap, no repeats, at least one card. Anything else returns a reason and
+// the session uses the pinned copies; one bad file rejects the whole set, so a
+// workdir never mixes VCL and pinned text.
+export function validStageFiles(payload, stage) {
+  const files = payload?.files
+  if (!Array.isArray(files) || files.length === 0) return { reason: 'no_files' }
+  if (files.length > MAX_STAGE_FILES) return { reason: 'too_many_files' }
+  const card = new RegExp(`^basic/stage-${stage}/[a-z0-9]+(?:-[a-z0-9]+)*\\.md$`)
+  const gate = new RegExp(`^basic/gates/stage-${stage}-[a-z0-9]+(?:-[a-z0-9]+)*\\.md$`)
+  const seen = new Set()
+  for (const file of files) {
+    const path = file?.path
+    if (typeof path !== 'string' || !(card.test(path) || gate.test(path))) return { reason: 'bad_path' }
+    if (seen.has(path)) return { reason: 'duplicate_path' }
+    seen.add(path)
+    if (typeof file.text !== 'string') return { reason: 'bad_text' }
+    if (Buffer.byteLength(file.text, 'utf8') > MAX_STAGE_FILE_BYTES) return { reason: 'file_too_large' }
+  }
+  if (!files.some(f => card.test(f.path))) return { reason: 'no_cards' }
+  const baseSha = typeof payload.base_sha === 'string' && /^[0-9a-f]{7,40}$/.test(payload.base_sha) ? payload.base_sha : null
+  return { files: files.map(f => ({ path: f.path, text: f.text })), baseSha }
+}
+
+// Never throws: a VCL error, a bad answer or a timeout means the pinned files.
+async function fetchStageFiles(session, deps) {
+  const timeoutMs = deps.contentFetchTimeoutMs ?? CONTENT_FETCH_TIMEOUT_MS
+  const abort = new AbortController()
+  let timer
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      abort.abort()
+      reject(Object.assign(new Error('timeout'), { code: 'timeout' }))
+    }, timeoutMs)
+  })
+  try {
+    const payload = await Promise.race([session.client.contentStage(session.req.stage, { signal: abort.signal }), timeout])
+    return validStageFiles(payload, session.req.stage)
+  } catch (err) {
+    return { reason: err?.code || 'fetch_failed' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function writeStageFiles(workdir, files) {
+  for (const { path, text } of files) {
+    const target = resolve(workdir, path)
+    if (!target.startsWith(workdir + sep)) throw new SessionError(500, 'bad_material_path')
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(target, text)
+  }
+}
+
+function copyPinnedFiles(workdir, session, deps) {
   const { cards, gates } = stageMaterials(deps.pluginDir, session.req.stage, session.skill)
   for (const { from, to } of [...cards, ...gates]) {
     mkdirSync(dirname(join(workdir, to)), { recursive: true })
     copyFileSync(from, join(workdir, to))
   }
+}
+
+// Basic sessions read the stage's cards from VCL, so an admin's edit reaches
+// the coach without a plugins release. Advanced and every skill stay pinned.
+async function stageWorkdir(workdir, session, deps) {
+  let materials = { source: 'pin', reason: 'advanced' }
+  if (isBasicSkill(session.skill)) {
+    const fetched = await fetchStageFiles(session, deps)
+    if (fetched.files) {
+      writeStageFiles(workdir, fetched.files)
+      materials = { source: 'vcl', base_sha: fetched.baseSha, files: fetched.files.length }
+    } else {
+      materials = { source: 'pin', reason: fetched.reason }
+    }
+  }
+  if (materials.source === 'pin') copyPinnedFiles(workdir, session, deps)
   mkdirSync(join(workdir, 'skill'))
   // Written from the text already loaded, so the model reads what the
   // prompt quoted rather than following a path back into the plugin tree.
   writeFileSync(join(workdir, 'skill', 'SKILL.md'), session.skill.text)
-  return workdir
+  return materials
 }
 
 function runClaude({ args, env, cwd, timeoutMs, spawnImpl, claudeBin }) {
@@ -265,7 +339,10 @@ export async function executeSession(session, deps) {
   let workdir = null
   let outcome
   try {
-    workdir = stageWorkdir(session, deps)
+    mkdirSync(deps.workRoot, { recursive: true })
+    workdir = mkdtempSync(join(deps.workRoot, 'session-'))
+    const materials = await stageWorkdir(workdir, session, deps)
+    ;(deps.log ?? console.log)(JSON.stringify({ event: 'founder_os_materials', session_id: sessionId, ...materials }))
     const referenced = await stageImageAttachments(session.referenced, workdir, {
       fetchImpl: deps.fetchImpl ?? fetch,
       ...(deps.imageFetchTimeoutMs ? { timeoutMs: deps.imageFetchTimeoutMs } : {}),

@@ -10,7 +10,7 @@ import { join, dirname, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startMockVcl } from './mock-vcl.mjs'
 import { loadSkill } from '../plugin.mjs'
-import { prepareSession, executeSession, SessionError } from '../session.mjs'
+import { prepareSession, executeSession, SessionError, MAX_STAGE_FILE_BYTES, validStageFiles } from '../session.mjs'
 import { fetchImage, MAX_IMAGE_BYTES } from '../attachments.mjs'
 
 const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'plugin')
@@ -180,6 +180,123 @@ test('the card text VCL appends to the message still reaches the model unchanged
   const { spawnImpl, calls } = fakeClaude({ reply: 'ok', ledger_writes: [] })
   await executeSession(await prepareSession(body({ message }), deps()), deps({ spawnImpl }))
   assert.ok(calls[0].args.at(-1).endsWith(message))
+})
+
+// --- stage files from VCL ----------------------------------------------------
+
+const SHA = 'eab31eda71defb38ff195eaf223ae0d2f3ac7280'
+const EDITED = '---\nid: basic-find-the-themes\nstage: 1\n---\n## What this is\nEDITED IN VCL\n\n## Coach checks\n- edited check\n'
+const vclFiles = (extra = []) => ({
+  base_sha: SHA,
+  files: [
+    { path: 'basic/stage-1/find-the-themes.md', text: EDITED },
+    { path: 'basic/stage-1/mine-safari-gold.md', text: '---\nid: basic-mine-safari-gold\n---\nVCL gold\n' },
+    { path: 'basic/gates/stage-1-sales-safari.md', text: '---\nid: basic-stage-1-sales-safari\n---\nVCL gate\n' },
+    ...extra,
+  ],
+})
+const PINNED = [
+  'basic/gates/stage-1-sales-safari.md',
+  'basic/stage-1/find-the-themes.md',
+  'basic/stage-1/mine-safari-gold.md',
+  'basic/stage-1/painstorm-one-thread.md',
+  'skill/SKILL.md',
+]
+
+async function runBasic(extraDeps = {}) {
+  const logs = []
+  const log = line => logs.push(JSON.parse(line))
+  const { spawnImpl, calls } = fakeClaude({ reply: 'ok', ledger_writes: [] })
+  // The ledger client, and so its fetchImpl, is made at prepare time.
+  const session = await prepareSession(body({ skill: 'founder-os-basic-coach' }), deps(extraDeps))
+  const outcome = await executeSession(session, deps({ spawnImpl, log, ...extraDeps }))
+  return { outcome, call: calls[0], materials: logs.find(l => l.event === 'founder_os_materials') }
+}
+
+test('a Basic session writes the stage files VCL serves, edits included, and not the pinned ones', async () => {
+  vcl.serveStageContent(vclFiles())
+  const { outcome, call, materials } = await runBasic()
+  assert.equal(outcome.status, 'completed')
+  assert.deepEqual(call.files, [
+    'basic/gates/stage-1-sales-safari.md',
+    'basic/stage-1/find-the-themes.md',
+    'basic/stage-1/mine-safari-gold.md',
+    'skill/SKILL.md',
+  ])
+  assert.equal(call.contents['basic/stage-1/find-the-themes.md'].toString(), EDITED)
+  assert.deepEqual(materials, { event: 'founder_os_materials', session_id: materials.session_id, source: 'vcl', base_sha: SHA, files: 3 })
+  const fetches = vcl.requests.filter(r => r.url.startsWith('/content/stage'))
+  assert.deepEqual(fetches.map(r => [r.method, r.url, r.auth, r.body]), [['GET', '/content/stage?stage=1', `Bearer ${tokenA}`, '']])
+  assert.equal(vcl.sessionResults.length, 1)
+  assert.deepEqual(readdirSync(workRoot), [])
+})
+
+test('the SKILL.md stays the pinned one whatever VCL serves', async () => {
+  vcl.serveStageContent(vclFiles())
+  const { call } = await runBasic()
+  assert.equal(call.contents['skill/SKILL.md'].toString(), readFileSync(join(PLUGIN_DIR, 'skills', 'founder-os-basic-coach', 'SKILL.md'), 'utf8'))
+})
+
+test('a VCL without the route, or one that errors, falls back to the pinned files and the session completes', async () => {
+  for (const [serve, reason] of [
+    [null, 'not_found'],
+    [(req, url, send) => send(500, { error: 'internal_error' }), 'internal_error'],
+    [(req, url, send) => send(200, null), 'no_files'],
+  ]) {
+    vcl.serveStageContent(serve)
+    tokenA = vcl.mintToken(A)
+    const { outcome, call, materials } = await runBasic()
+    assert.equal(outcome.status, 'completed', reason)
+    assert.deepEqual(call.files, PINNED, reason)
+    assert.deepEqual([materials.source, materials.reason], ['pin', reason])
+  }
+})
+
+test('a VCL that hangs falls back after the timeout, even if the fetch ignores the abort', async () => {
+  const hang = (url, init) =>
+    String(url).includes('/content/stage') ? new Promise(() => {}) : fetch(url, init)
+  vcl.serveStageContent(vclFiles())
+  const { outcome, call, materials } = await runBasic({ fetchImpl: hang, contentFetchTimeoutMs: 30 })
+  assert.equal(outcome.status, 'completed')
+  assert.deepEqual(call.files, PINNED)
+  assert.deepEqual([materials.source, materials.reason], ['pin', 'timeout'])
+})
+
+test('one unsafe file rejects the whole set and the pinned files are used', async () => {
+  const bad = {
+    traversal: { path: 'basic/stage-1/../../../etc/passwd.md', text: 'x' },
+    absolute: { path: '/basic/stage-1/x.md', text: 'x' },
+    otherStage: { path: 'basic/stage-2/x.md', text: 'x' },
+    otherGate: { path: 'basic/gates/stage-2-ebombs.md', text: 'x' },
+    skillDir: { path: 'skill/SKILL.md', text: 'x' },
+    coreDir: { path: 'core/stage-1/x.md', text: 'x' },
+    notMarkdown: { path: 'basic/stage-1/x.txt', text: 'x' },
+    nested: { path: 'basic/stage-1/sub/x.md', text: 'x' },
+    backslash: { path: 'basic\\stage-1\\x.md', text: 'x' },
+    duplicate: { path: 'basic/stage-1/find-the-themes.md', text: 'again' },
+    notText: { path: 'basic/stage-1/x.md', text: 42 },
+    oversize: { path: 'basic/stage-1/x.md', text: 'a'.repeat(MAX_STAGE_FILE_BYTES + 1) },
+  }
+  for (const [name, file] of Object.entries(bad)) {
+    assert.ok(validStageFiles(vclFiles([file]), 1).reason, name)
+  }
+  assert.equal(validStageFiles(vclFiles([{ path: 'basic/stage-1/x.md', text: 'a'.repeat(MAX_STAGE_FILE_BYTES) }]), 1).files.length, 4)
+  assert.equal(validStageFiles({ files: [{ path: 'basic/gates/stage-1-sales-safari.md', text: 'gate only' }] }, 1).reason, 'no_cards')
+  assert.equal(validStageFiles({ files: Array.from({ length: 33 }, (_, i) => ({ path: `basic/stage-1/c${i}.md`, text: 'x' })) }, 1).reason, 'too_many_files')
+
+  vcl.serveStageContent(vclFiles([bad.traversal]))
+  const { outcome, call, materials } = await runBasic()
+  assert.equal(outcome.status, 'completed')
+  assert.deepEqual(call.files, PINNED)
+  assert.deepEqual([materials.source, materials.reason], ['pin', 'bad_path'])
+})
+
+test('an Advanced session never asks VCL for stage files', async () => {
+  vcl.serveStageContent(vclFiles())
+  const { spawnImpl, calls } = fakeClaude({ reply: 'ok', ledger_writes: [] })
+  await executeSession(await prepareSession(body({ skill: 'founder-os-coach-fixture' }), deps()), deps({ spawnImpl, log: () => {} }))
+  assert.equal(vcl.requests.filter(r => r.url.startsWith('/content/stage')).length, 0)
+  assert.ok(calls[0].files.includes('cards/map-the-watering-holes.md'))
 })
 
 // --- images -------------------------------------------------------------------
