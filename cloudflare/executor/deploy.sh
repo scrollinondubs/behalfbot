@@ -29,7 +29,10 @@
 # wrangler.jsonc forces the right account regardless, but check
 # `npx wrangler whoami` if a deploy looks odd.
 #
-# DO NOT run without Sean's explicit approval.
+# Redeploying to track vibecodelisboa main is pre-approved (Sean,
+# 2026-10-09) and runs automatically from the Jax install's host LaunchAgent
+# com.jax.executor-auto-deploy. Other changes to this Worker or account
+# still need Sean's explicit approval.
 
 set -euo pipefail
 
