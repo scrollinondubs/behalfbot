@@ -7,8 +7,12 @@ foundation for behalfbot#66 (VCL support agent).
 execution path since. The line that used to
 sit here said "nothing here is deployed", which stayed on the page for six
 weeks after the cutover and is part of why a month-old build ran unnoticed
-(see the post-mortem linked below). Each deploy still needs Sean's explicit
-approval - that gate is real, it is just not the same claim as "unshipped".
+(see the post-mortem linked below). Redeploying to track vibecodelisboa
+`main` is pre-approved (Sean, 2026-10-09: "just keep executor up to date,
+just deploy it, similar to how Vercel deploys the website") and runs
+automatically, hourly, from the Jax install's host LaunchAgent
+`com.jax.executor-auto-deploy` (new-jaxity `scripts/executor-auto-deploy.sh`).
+Other changes to this Worker or the account still need Sean's approval.
 
 Ask what is running rather than reading this file for it:
 

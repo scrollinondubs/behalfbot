@@ -1,6 +1,11 @@
 // Behalf.bot executor on Cloudflare Containers (issues #41 / #66).
 //
-// DO NOT `wrangler deploy` without Sean's explicit approval. Auth: wrangler
+// Deploy with ./deploy.sh, never bare `wrangler deploy`. Redeploying this
+// Worker to track vibecodelisboa main is pre-approved (Sean, 2026-10-09) and
+// runs automatically from the Jax install's host LaunchAgent
+// com.jax.executor-auto-deploy (new-jaxity scripts/executor-auto-deploy.sh).
+// Anything beyond that - other Cloudflare resources, account or binding
+// changes, secret rotation - still needs Sean's explicit approval. Auth: wrangler
 // reads CLOUDFLARE_API_TOKEN from the environment (account-owned token
 // "behalfbot-fable-cf-containers", stored in Vaultwarden). The token is
 // never written to this repo or baked into any file.

@@ -14,8 +14,8 @@
 #
 # Usage:
 #   GITHUB_PAT=... ./build.sh
-# Then, deploy-gated on Sean's approval:
-#   CLOUDFLARE_API_TOKEN=... ./deploy.sh   # DO NOT run without approval
+# Then (redeploying to track main is pre-approved, see deploy.sh):
+#   CLOUDFLARE_API_TOKEN=... ./deploy.sh
 #
 # Use deploy.sh rather than calling wrangler directly. It passes the
 # appCommit/builtAt recorded below to the Worker as vars so /healthz can
@@ -54,4 +54,4 @@ find "${REPO_DIR}" -maxdepth 2 -name ".env*" -type f -delete
 # instead, so platform-specific optional deps resolve for the container.
 
 echo "[build] build-context ready: ${REPO_DIR}"
-echo "[build] next (GATED ON SEAN'S APPROVAL): CLOUDFLARE_API_TOKEN in env, then './deploy.sh' from ${SCRIPT_DIR}"
+echo "[build] next: CLOUDFLARE_API_TOKEN in env, then './deploy.sh' from ${SCRIPT_DIR}"
