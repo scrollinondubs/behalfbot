@@ -6,6 +6,8 @@ type: feedback
 
 > **Template.** Copy this file pattern when writing a feedback-type memory. Body MUST include `**Why:**` and `**How to apply:**` lines so future-you can judge edge cases.
 
+> **Frontmatter.** Every note carries `name`, `description`, `type` and `domain` (the index it belongs in, e.g. `domain: workflow`), and optionally `supersedes` (the note it replaces). The index generator reads them; see `MEMORY_MODEL.md`. After saving, run `python3 chassis/scripts/memory-index-build.py --write` instead of editing an index by hand.
+
 ## Body structure
 
 Lead with the rule (the actual guidance), then explain WHY and HOW TO APPLY.
@@ -17,6 +19,7 @@ Lead with the rule (the actual guidance), then explain WHY and HOW TO APPLY.
 name: Don't mock the database in integration tests
 description: Tests against the real DB caught a migration bug that mocked tests missed last quarter.
 type: feedback
+domain: workflow
 ---
 
 Integration tests must hit a real database, not mocks.
@@ -33,4 +36,4 @@ reject any new mock of the DB layer. Use a `-preview` test database instead.
 - Any time the installer confirms a non-obvious approach worked ("yes exactly", "perfect, keep doing that")
 - After a near-miss or a successful save where the rule emerged
 
-Both directions matter. Confirmations are quieter than corrections — watch for them. If you only save corrections, you'll avoid past mistakes but drift away from validated patterns.
+Both directions matter. Confirmations are quieter than corrections - watch for them. If you only save corrections, you'll avoid past mistakes but drift away from validated patterns.

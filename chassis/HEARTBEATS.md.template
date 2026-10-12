@@ -409,6 +409,10 @@ Issue: scrollinondubs/behalfbot#145. Path shape: scrollinondubs/behalfbot#151
 (the registration below used `${CHASSIS_HOME}/chassis/...`, which resolves on
 no containerized install; see "Containerized installs" under Path conventions).
 
+Opt out via `memory.mcp_enabled: false` in `chassis.config.yaml`, for an install
+that retired the memory MCP (#219). The canary then reports `stage: skipped`
+and the gather stays at count 0, so the block below can stay as it is.
+
 ```yaml
 schedule: daily 07:00
 gather: state/chassis-root/scripts/gather-memory-canary.sh
@@ -417,6 +421,36 @@ prompt: state/chassis-root/scheduled-tasks/memory-canary-prompt.md
 model: sonnet
 budget: 1
 criticality: critical
+```
+
+---
+
+## dream (chassis-shipped, opt-in)
+
+Nightly consolidation of the auto-memory notes store, one domain per night on
+rotation. The gather (`gather-dream.sh`) runs the integrity checker and the
+index builder for free and fires only when the rotation is due or something
+new broke since the last run. The prompt edits the notes store and commits it
+by path; facts that belong elsewhere are proposed, never moved: a `dream/<date>`
+PR against the install repo for `docs/` and `skills/`, and one block in a
+dream inbox doc through the second-brain adapter. It never edits the
+installer's own docs.
+
+Opt-in because it is a paid run most nights. Prerequisites (notes store path,
+`MEMORY.md` + `index-*.md` shape, a git-tracked store, adapter mode for the
+inbox): `chassis/docs/heartbeats/dream.md`. Then uncomment the block.
+
+Issue: scrollinondubs/behalfbot#219.
+
+```yaml
+# schedule: daily 03:00
+# gather: state/chassis-root/scripts/gather-dream.sh
+# condition: threshold count > 0
+# prompt: state/chassis-root/scheduled-tasks/dream-prompt.md
+# model: sonnet
+# budget: 1.50
+# criticality: background
+# max_fires_per_day: 1
 ```
 
 ---

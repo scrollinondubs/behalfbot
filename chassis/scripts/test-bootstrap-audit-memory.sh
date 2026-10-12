@@ -21,6 +21,12 @@
 #   7. legacy env, absolute path from another namespace-> FAIL
 #   8. non-writable parent dir                         -> FAIL  (skipped as root)
 #   9. mcpServers.memory block absent entirely         -> FAIL
+#  10. memory.mcp_enabled: false, no memory block      -> SKIP (#219)
+#  11. memory.mcp_enabled: false, broken graph         -> SKIP (flag wins)
+#  12. memory.mcp_enabled: true, healthy / no block    -> pass / FAIL (as today)
+#  13. memory: block without the key, no memory block  -> FAIL (absent == true)
+#  14. flag false, python3 has no PyYAML (awk path)    -> SKIP
+#  15. awk path, mcp_enabled under another block       -> FAIL
 #
 # No docker, no network - pure temp dirs + jq. Exit 0 all pass, 1 on failure,
 # 2 on harness error.
@@ -68,9 +74,13 @@ run_gap3() {
 }
 
 assert_case() {
-    local name="$1" out="$2" want="$3"   # want = pass | fail
+    local name="$1" out="$2" want="$3"   # want = pass | fail | skip
     local got
-    if printf '%s' "$out" | grep -q '✓'; then
+    # A skip line carries neither glyph, so without its own branch it would
+    # read as "none" - and so would a Gap 3 that printed nothing at all.
+    if printf '%s' "$out" | grep -q 'skipped: memory MCP disabled'; then
+        got=skip
+    elif printf '%s' "$out" | grep -q '✓'; then
         got=pass
     elif printf '%s' "$out" | grep -q '✗'; then
         got=fail
@@ -136,6 +146,64 @@ fi
 # 9. No memory server at all.
 h="$(make_home nomemory '"filesystem":{"command":"npx"}')"
 assert_case "mcpServers.memory absent" "$(run_gap3 "$h")" fail
+
+# ------------------------------------------------------------------
+# memory.mcp_enabled (#219)
+#
+# The memory MCP is optional. An install that sets the flag false must see Gap
+# 3 skipped - not passed, not failed - and an install that never set it must
+# see exactly the behaviour above.
+# ------------------------------------------------------------------
+
+# write_config <home> <yaml-body>
+write_config() { printf '%s\n' "$2" > "$1/chassis.config.yaml"; }
+
+h="$(make_home flag-off-nomemory '"filesystem":{"command":"npx"}')"
+write_config "$h" $'memory:\n  ships_with: pre_seeded\n  mcp_enabled: false'
+assert_case "mcp_enabled false, no memory block" "$(run_gap3 "$h")" skip
+
+h="$(make_home flag-off-broken "$TEMPLATE_BLOCK" nomemdir)"
+write_config "$h" $'memory:\n  mcp_enabled: false   # retired'
+assert_case "mcp_enabled false, broken graph" "$(run_gap3 "$h")" skip
+
+h="$(make_home flag-on "$TEMPLATE_BLOCK")"
+write_config "$h" $'memory:\n  mcp_enabled: true'
+assert_case "mcp_enabled true, healthy graph" "$(run_gap3 "$h")" pass
+
+h="$(make_home flag-on-nomemory '"filesystem":{"command":"npx"}')"
+write_config "$h" $'memory:\n  mcp_enabled: true'
+assert_case "mcp_enabled true, memory block absent" "$(run_gap3 "$h")" fail
+
+h="$(make_home flag-absent-nomemory '"filesystem":{"command":"npx"}')"
+write_config "$h" $'memory:\n  ships_with: pre_seeded'
+assert_case "memory block without mcp_enabled, memory server absent" "$(run_gap3 "$h")" fail
+
+# The awk fallback: python3 present but PyYAML not importable. A yaml.py that
+# raises ImportError shadows the real one through PYTHONPATH.
+NOYAML="$TMP/noyaml"
+mkdir -p "$NOYAML"
+printf 'raise ImportError("stubbed for test")\n' > "$NOYAML/yaml.py"
+h="$(make_home flag-off-awk '"filesystem":{"command":"npx"}')"
+write_config "$h" $'memory:\n  ships_with: pre_seeded\n  mcp_enabled: false   # retired 2026'
+assert_case "mcp_enabled false read by the awk fallback (no PyYAML)" \
+    "$(PYTHONPATH="$NOYAML" run_gap3 "$h")" skip
+h="$(make_home flag-absent-awk '"filesystem":{"command":"npx"}')"
+write_config "$h" $'memory:\n  ships_with: pre_seeded\nother:\n  mcp_enabled: false'
+assert_case "awk fallback ignores mcp_enabled outside the memory block" \
+    "$(PYTHONPATH="$NOYAML" run_gap3 "$h")" fail
+
+# The summary line still carries "N failed" where the gather parses it.
+h="$(make_home flag-summary '"filesystem":{"command":"npx"}')"
+write_config "$h" $'memory:\n  mcp_enabled: false'
+summary="$(env -u CHASSIS_HOME BOT_NAME=testbot bash "$AUDIT" --customer-home "$h" 2>/dev/null \
+    | sed 's/\x1b\[[0-9;]*m//g' | grep '^Summary:')"
+if printf '%s' "$summary" | grep -qE '^Summary: [0-9]+ passed, [0-9]+ warned, [0-9]+ failed, [1-9][0-9]* skipped$'; then
+    printf '  ok   summary line counts the skip and keeps "N failed" (%s)\n' "$summary"
+    pass=$((pass + 1))
+else
+    printf '  FAIL summary line shape: %s\n' "$summary"
+    fail=$((fail + 1))
+fi
 
 # ------------------------------------------------------------------
 # gather-bootstrap-audit.sh locates the audit (#151)

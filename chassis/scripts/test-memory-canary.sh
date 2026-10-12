@@ -24,6 +24,9 @@
 #  11. gather-memory-canary.sh on a chassis root that is NOT $CHASSIS_HOME/chassis
 #      (#151): resolves through chassis-root.state.json -> PASS, and a state
 #      record pointing at a tree with no canary still fires rather than passing
+#  12. memory.mcp_enabled: false (#219): canary reports ok with stage=skipped
+#      and spawns no server, even with no memory block or a broken graph; the
+#      gather maps it to count 0. mcp_enabled: true behaves exactly as today
 #
 # No docker, no network, no npx: a stub memory server stands in for
 # @modelcontextprotocol/server-memory. The stub persists to $MEMORY_FILE_PATH
@@ -352,6 +355,63 @@ cat > "$h/chassis-root.state.json" <<EOF
 EOF
 assert_gather_from "$LONE_DIR/gather-memory-canary.sh" "stale chassis-root record still fires" \
     "$h" "$TMP/chassis-empty" 1 unavailable
+
+# ------------------------------------------------------------------
+# memory.mcp_enabled (#219)
+#
+# An install that retired the memory MCP must not be paged every morning for a
+# graph that is meant to be gone. One that never set the flag must see the
+# canary run exactly as above.
+# ------------------------------------------------------------------
+
+write_config() { printf '%s\n' "$2" > "$1/chassis.config.yaml"; }
+
+h="$(make_home flag-off-nomemory '"filesystem":{"command":"npx"}')"
+write_config "$h" $'memory:\n  ships_with: pre_seeded\n  mcp_enabled: false'
+out="$(run_canary "$h")"
+assert_case "mcp_enabled false, no memory block" "$out" pass skipped
+if [[ "$(printf '%s' "$out" | jq -r '.reason // ""')" == "memory_mcp_disabled" ]]; then
+    printf '  ok   skipped verdict carries reason memory_mcp_disabled\n'
+    pass=$((pass + 1))
+else
+    printf '  FAIL skipped verdict has no reason: %s\n' "$out"
+    fail=$((fail + 1))
+fi
+
+# A broken graph would fail at precheck if the canary ran. With the flag off it
+# must not run at all: no server spawn, nothing written.
+h="$(make_home flag-off-broken "$(stub_legacy_block /dev/null)")"
+write_config "$h" $'memory:\n  mcp_enabled: false'
+: > "$PIDLOG"
+out="$(STUB_PID_LOG="$PIDLOG" run_canary "$h")"
+assert_case "mcp_enabled false, broken graph" "$out" pass skipped
+if [[ ! -s "$PIDLOG" ]]; then
+    printf '  ok   mcp_enabled false spawns no memory server\n'
+    pass=$((pass + 1))
+else
+    printf '  FAIL mcp_enabled false still spawned the memory server %s time(s)\n' "$(wc -l < "$PIDLOG" | tr -d ' ')"
+    fail=$((fail + 1))
+fi
+
+h="$(make_home flag-on "$(stub_template_block)")"
+write_config "$h" $'memory:\n  mcp_enabled: true'
+assert_case "mcp_enabled true, healthy graph" "$(run_canary "$h")" pass verified
+
+h="$(make_home flag-on-broken "$(stub_legacy_block /dev/null)")"
+write_config "$h" $'memory:\n  mcp_enabled: true'
+assert_case "mcp_enabled true, broken graph still fails" "$(run_canary "$h")" fail read "EMPTY"
+
+h="$(make_home flag-absent-broken "$(stub_legacy_block /dev/null)")"
+write_config "$h" $'memory:\n  ships_with: pre_seeded'
+assert_case "memory block without mcp_enabled, broken graph still fails" "$(run_canary "$h")" fail read "EMPTY"
+
+h="$(make_home gather-flag-off "$(stub_legacy_block /dev/null)")"
+write_config "$h" $'memory:\n  mcp_enabled: false'
+assert_gather "mcp_enabled false is silent" "$h" "$FAKE_CHASSIS" 0 skipped
+
+h="$(make_home gather-flag-on-broken "$(stub_legacy_block /dev/null)")"
+write_config "$h" $'memory:\n  mcp_enabled: true'
+assert_gather "mcp_enabled true, broken graph still fires" "$h" "$FAKE_CHASSIS" 1 read
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]] || exit 1

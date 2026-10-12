@@ -105,7 +105,7 @@ bash chassis/bootstrap.sh
 5. Render `CLAUDE.md` from template + `INSTALL_PROFILE.md`
 6. Initialize `HEARTBEATS.md` from chassis-defaults + plugin-registered heartbeats
 7. Activate enabled plugins per `chassis.config.yaml.modules`
-8. Seed memory entries from `INSTALL_PROFILE.md`
+8. Seed memory entries from `INSTALL_PROFILE.md` (model: `chassis/memory/MEMORY_MODEL.md`; an install from before 2026-10 migrates with `docs/memory-architecture-migration.md`)
 9. Install OS-level dependencies
 10. Set up the dispatcher unit (launchd on macOS, systemd on Linux)
 11. Run plugin smoke tests

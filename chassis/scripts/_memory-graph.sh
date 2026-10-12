@@ -58,6 +58,66 @@ expand_home_tokens() {
     printf '%s' "$s"
 }
 
+# memory_mcp_enabled <customer_home>
+#
+# Returns 0 when this install runs the memory MCP, 1 when chassis.config.yaml
+# says `memory.mcp_enabled: false`. The memory MCP is optional (#219): an
+# install that keeps its long-term facts in the second brain and its
+# corrections in the auto-memory notes store can retire the graph, and once it
+# does, Gap 3 and the canary can only fail.
+#
+# Anything short of an explicit false means enabled: no config file, no
+# `memory:` block, no key, an unreadable file, a parser that is not installed.
+# An install that never heard of the flag must behave exactly as before, so
+# every failure to read it falls toward the old behaviour, never away from it.
+#
+# Exported: MEMORY_MCP_FLAG_SOURCE, a human label for where the verdict came
+# from (used in the skip messages so an operator can find the setting).
+memory_mcp_enabled() {
+    local customer_home="$1"
+    local cfg="$customer_home/chassis.config.yaml"
+    MEMORY_MCP_FLAG_SOURCE="default (no memory.mcp_enabled in $cfg)"
+    [[ -f "$cfg" ]] || return 0
+
+    local v=""
+    if command -v python3 >/dev/null 2>&1; then
+        v="$(python3 - "$cfg" <<'PY' 2>/dev/null
+import sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(3)
+try:
+    with open(sys.argv[1]) as f:
+        c = yaml.safe_load(f) or {}
+    m = c.get("memory") if isinstance(c, dict) else None
+    v = m.get("mcp_enabled") if isinstance(m, dict) else None
+    sys.stdout.write("false" if v is False else "true")
+except Exception:
+    sys.stdout.write("true")
+PY
+)"
+    fi
+    if [[ -z "$v" ]]; then
+        # No python3 or no PyYAML: read the canonical two-space layout of the
+        # shipped config. Gives up toward "enabled" on anything else.
+        v="$(awk '
+            /^memory:/ {in_block=1; next}
+            in_block && /^[^ #]/ {exit}
+            in_block && /^  mcp_enabled:/ {
+                sub(/^  mcp_enabled:[ \t]*/, ""); sub(/[ \t]*#.*$/, "");
+                gsub(/["\047]/, ""); print tolower($0); exit
+            }
+        ' "$cfg" 2>/dev/null)"
+        [[ "$v" == "false" || "$v" == "no" || "$v" == "off" ]] && v="false" || v="true"
+    fi
+    if [[ "$v" == "false" ]]; then
+        MEMORY_MCP_FLAG_SOURCE="memory.mcp_enabled: false in $cfg"
+        return 1
+    fi
+    return 0
+}
+
 # memory_graph_resolve <customer_home>
 #
 # Reads $customer_home/.mcp.json and works out where the memory graph lives.
