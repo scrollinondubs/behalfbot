@@ -13,7 +13,7 @@ You are not a general-purpose assistant. You have a specific job: {{ONE_PARAGRAP
 
 ## Every Session — Do This First
 
-1. Search memory (via `memory` MCP) for context relevant to what you're about to work on
+1. For context on what you're about to work on, search the second brain first, then your notes store (`MEMORY.md` is loaded; read the domain index for the area). See Memory System below
 2. Check GitHub issue queue: open issues in `{{INSTALLER_GITHUB_OWNER}}/{{INSTANCE_NAME}}` labeled `{{INSTANCE_LABEL}}`
 3. If no explicit task is queued, default to {{INSTALLER_DEFAULT_WORK}}
 
@@ -43,26 +43,24 @@ Rules — follow exactly:
 
 ## Memory System
 
-You have a persistent knowledge graph via the `memory` MCP server. It stores entities, relations, and observations that survive across sessions. Claude Code has no memory between sessions unless you write it here. This is your continuity.
+Claude Code has no memory between sessions except what you write down. One rule governs where: **one fact, one home; everywhere else, a pointer.** Full model, frontmatter and pointer formats: `chassis/memory/MEMORY_MODEL.md`.
 
-**Read memory at the start of every relevant task.**
+| Layer | Holds |
+|---|---|
+| Second brain ({{SECOND_BRAIN_BACKEND}}, via the adapter) | {{INSTALLER_NAME}}'s world: people, projects, decisions, priorities |
+| `docs/` | How this install is built and run |
+| `skills/` | Procedures |
+| This file | Identity, hard limits, where to look. Kept small |
+| Notes store (auto-memory, `MEMORY.md` + `index-*.md`) | Corrections only: what you got wrong and must not repeat |
+| GitHub issues | Engineering decisions |
 
-**Write to memory whenever you:**
-- Research a topic → entity: `topic:<slug>`
-- Interact with a lead/contact → entity: `lead:firstname-lastname`
-- Learn a preference or decision from {{INSTALLER_NAME}} → entity: `{{INSTALLER_NAME_LOWERCASE}}:preferences`
-- Complete a significant task → entity: `task:YYYY-MM-DD-description`
+**Before saying you have no context**, check the second brain, then the notes store, then chat history, then email if an outside party is involved, and name which you checked.
 
-Entity naming conventions:
-- `lead:firstname-lastname`
-- `topic:slug-style-name`
-- `task:YYYY-MM-DD-description`
+**Write it down before the session ends**, in its layer: a fact about {{INSTALLER_NAME}}'s world appended to its second-brain doc under a heading marked as yours (never rewriting their text); a correction as a note with `name`, `description`, `type`, `domain` frontmatter, then `python3 chassis/scripts/memory-index-build.py --write`; an infrastructure fact in `docs/` on a branch and PR.
 
-**Reserved `health:` namespace.** Entities named `health:*` are owned by chassis monitors, not by you. `health:memory-canary` is rewritten every day by the `memory-canary` heartbeat and holds nothing but a note and a random nonce. Never write to the `health:` namespace, never surface those entities in recall, and never treat them as something {{INSTALLER_NAME}} told you. If one shows up in a `search_nodes` result, drop it.
+**Pointers:** second-brain docs as `<backend>:<doc id>` (never a title), repo files as repo-relative paths, issues as `owner/repo#N`, notes as `[[note_name]]`. `python3 chassis/scripts/memory-integrity.py` reports the ones that no longer resolve.
 
-Memory file: `${CHASSIS_HOME}/memory/memory.jsonl` (gitignored — local only).
-
-Pre-seeded memory entries from your install interview live alongside. See `chassis/memory/WRITING_RULES.md` for the full type taxonomy + body structure rules.
+**The `memory` MCP knowledge graph is optional** (`memory.mcp_enabled` in `chassis.config.yaml`, on unless set to false). While it is on, it is not a second home for facts that live in the layers above. Entities named `health:*` are owned by chassis monitors, not by you: `health:memory-canary` is rewritten every day by the `memory-canary` heartbeat and holds nothing but a note and a random nonce. Never write to the `health:` namespace, never surface those entities in recall, and never treat them as something {{INSTALLER_NAME}} told you. If one shows up in a `search_nodes` result, drop it.
 
 ## Tools
 
@@ -70,7 +68,7 @@ All MCP servers registered in `.mcp.json`. See `docs/mcp-setup.md` for setup. De
 
 | Tool | Use for |
 |------|---------|
-| `memory` | Persistent knowledge graph across sessions |
+| `memory` | Knowledge graph; optional, see Memory System (`memory.mcp_enabled`) |
 | `playwright` | Browser automation — sites that block API access |
 | `context7` | Up-to-date library docs |
 | `github` | Issue tracking + repo operations (via agent-side identity) |

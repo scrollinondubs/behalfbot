@@ -1,5 +1,7 @@
 # Memory Seeding (install day)
 
+> The memory model these seeds live in (layers, two-level `MEMORY.md` root, generated `index-*.md`, `domain:` frontmatter, pointer formats) is `chassis/memory/MEMORY_MODEL.md`. Existing installs moving to it: `docs/memory-architecture-migration.md`.
+
 The chassis ships memory **pre-seeded** for new installers — not empty. Per a 2026-05-05 design call: time-to-delight matters. An installer opening their first session with `lead:<top-3-prospects>`, `topic:<their-active-research-area>`, `feedback:<their-communication-preferences>` already there means they get useful behavior from minute one rather than after weeks of incremental memory accumulation.
 
 This document covers what gets seeded, where the inputs come from, and the no-fabrication rule.
@@ -103,17 +105,19 @@ print(f"Seeded {len(seeded_files)} memory entries.")
 
 After seeding, the bootstrap script runs a sanity check:
 
-1. Every file in `${CHASSIS_HOME}/memory/` has valid frontmatter (`name`, `description`, `type`)
-2. Every file has a corresponding entry in `MEMORY.md`
-3. Every entry in `MEMORY.md` points to an existing file
+1. Every file in `${CHASSIS_HOME}/memory/` has valid frontmatter (`name`, `description`, `type`, `domain`)
+2. Every file is listed in `MEMORY.md` or, for a two-level store, in an `index-*.md` (`python3 chassis/scripts/memory-index-build.py` reports unlisted notes)
+3. Every link in `MEMORY.md` and the indexes points to an existing file (`python3 chassis/scripts/memory-integrity.py` reports dead links)
 4. No file references a `${PLACEHOLDER}` value that wasn't filled
 
 Failures here block install completion — better to catch a malformed seed than ship it and wonder why memory recall is broken.
 
 ## Cross-references
 
-- `chassis/memory/MEMORY.md.template` — empty index template
-- `chassis/memory/WRITING_RULES.md` — full type taxonomy + body structure rules
+- `chassis/memory/MEMORY.md.template` - two-level root: always-loaded rules plus one pointer per domain index
+- `chassis/memory/MEMORY_MODEL.md` - the memory model: layers, type taxonomy, frontmatter, pointer formats (replaces `WRITING_RULES.md`)
+- `chassis/scripts/memory-index-build.py --init` - creates and fills the `index-*.md` files from frontmatter after seeding
+- `docs/memory-architecture-migration.md` - moving an existing install to the model
 - `chassis/memory/template_*.md` — per-type frontmatter examples
 - `INSTALL_PROFILE.md` (per installer) — narrative source for bio + voice + module-calibration seeds
 - `chassis.config.yaml` (per installer) — machine-readable source for which plugins seed which entries
