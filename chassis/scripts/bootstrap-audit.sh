@@ -134,10 +134,14 @@ OS="$(uname -s)"
 PASS=0
 WARN=0
 FAIL=0
+SKIP=0
 
 ok()    { printf '\033[32m  ✓\033[0m %s\n' "$1"; PASS=$((PASS + 1)); }
 warn()  { printf '\033[33m  ⚠\033[0m %s\n' "$1"; WARN=$((WARN + 1)); }
 fail()  { printf '\033[31m  ✗\033[0m %s\n' "$1"; FAIL=$((FAIL + 1)); }
+# A check that does not apply to this install by its own configuration. Not a
+# pass (nothing was verified) and not a failure (nothing is wrong).
+skip()  { printf '\033[36m  -\033[0m skipped: %s\n' "$1"; SKIP=$((SKIP + 1)); }
 hint()  { printf '    %s\n' "$1" >&2; }
 group() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
@@ -208,6 +212,13 @@ audit_gap_2_customer_remote() {
 
 audit_gap_3_memory_mcp() {
     group "Gap 3: memory MCP wired with writable path"
+    # The memory MCP is optional (#219). An install that retired it would fail
+    # this gap every week for a server it removed on purpose, so the flag is
+    # read first. Absent flag == enabled == the check below, unchanged.
+    if ! memory_mcp_enabled "$CUSTOMER_HOME"; then
+        skip "memory MCP disabled ($MEMORY_MCP_FLAG_SOURCE)"
+        return
+    fi
     local mcp="$CUSTOMER_HOME/.mcp.json"
     if [[ ! -f "$mcp" ]]; then
         fail ".mcp.json not found at $mcp"
@@ -382,7 +393,9 @@ main() {
     audit_gap_6_kill_switch
     audit_tmux_session
 
-    printf '\n\033[1mSummary:\033[0m %d passed, %d warned, %d failed\n' "$PASS" "$WARN" "$FAIL"
+    # gather-bootstrap-audit.sh parses the number before "failed"; keep that
+    # token and its position relative to the count stable.
+    printf '\n\033[1mSummary:\033[0m %d passed, %d warned, %d failed, %d skipped\n' "$PASS" "$WARN" "$FAIL" "$SKIP"
     [[ $FAIL -gt 0 ]] && exit 1 || exit 0
 }
 

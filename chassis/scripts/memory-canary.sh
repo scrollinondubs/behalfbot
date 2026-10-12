@@ -70,7 +70,8 @@
 #   --json   emit one JSON object instead of human-readable text. Used by
 #            gather-memory-canary.sh.
 #
-# Exit codes: 0 healthy, 1 canary failed, 2 harness error (bad args).
+# Exit codes: 0 healthy (or skipped: memory.mcp_enabled is false in
+# chassis.config.yaml), 1 canary failed, 2 harness error (bad args).
 #
 # Env:
 #   MEMORY_CANARY_TIMEOUT   seconds per server invocation (default 90). `npx -y`
@@ -102,7 +103,7 @@ while [[ $# -gt 0 ]]; do
         --customer-home) CUSTOMER_HOME="$2"; shift 2 ;;
         --json) OUTPUT_JSON=true; shift ;;
         --help|-h)
-            sed -n '1,84p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '1,85p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) echo "Unknown arg: $1" >&2; exit 2 ;;
@@ -228,6 +229,31 @@ tool_payload() {
     fi
     printf '%s' "$payload"
 }
+
+# ------------------------------------------------------------------
+# Stage 0 - is the memory MCP part of this install at all?
+#
+# `memory.mcp_enabled: false` in chassis.config.yaml (#219) means the install
+# retired the graph on purpose. A canary for a server that is meant to be gone
+# can only fail, and at criticality: critical that is a page every morning, so
+# it reports ok with stage "skipped" and the gather maps that to count 0.
+# Absent flag == enabled == everything below, unchanged.
+# ------------------------------------------------------------------
+
+if ! memory_mcp_enabled "$CUSTOMER_HOME"; then
+    STAGE="skipped"
+    if [[ "$OUTPUT_JSON" == true ]] && ! command -v jq >/dev/null 2>&1; then
+        # report() needs jq, and this exit runs before the jq dependency check
+        # in memory_graph_resolve. Fixed, quote-free fields only.
+        printf '{"ok": true, "stage": "skipped", "error": "", "reason": "memory_mcp_disabled"}\n'
+        exit 0
+    fi
+    if [[ "$OUTPUT_JSON" != true ]]; then
+        printf 'memory-canary skipped: memory MCP disabled (%s)\n' "$MEMORY_MCP_FLAG_SOURCE"
+        exit 0
+    fi
+    report true
+fi
 
 # ------------------------------------------------------------------
 # Stage 1 - resolve config

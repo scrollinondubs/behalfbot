@@ -271,6 +271,17 @@ memory:
   ships_with: pre_seeded                    # Reduce time-to-delight
   seed_entries: []                          # Populated at install from interview artifacts
   no_fabrication: true                      # Only what installer confirms or is observable
+  mcp_enabled: true                         # The `memory` MCP knowledge graph is optional
+                                            # (#219). false = the server is dropped on the
+                                            # next .mcp.json hydrate, bootstrap-audit Gap 3
+                                            # reports skipped instead of failed, and the
+                                            # memory-canary heartbeat stops paging. Absent
+                                            # means true. Model: chassis/memory/MEMORY_MODEL.md
+  dream_inbox_doc: ""                       # Second-brain doc id the opt-in `dream` heartbeat
+                                            # appends its nightly proposals to. Empty = dream
+                                            # creates its own inbox doc on first run and
+                                            # remembers the id. Never one of the installer's
+                                            # own docs. See chassis/docs/heartbeats/dream.md
 
 install_execution:
   model: b_ssh_driven                       # Sean+${ASSISTANT_NAME} drive via SSH

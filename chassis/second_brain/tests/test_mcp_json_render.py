@@ -205,6 +205,31 @@ class GoogleMcpRenderTest(unittest.TestCase):
         self.assertIs(shipped["modules"]["google"]["calendar"], False)
 
 
+class MemoryMcpOptionalRenderTest(unittest.TestCase):
+    """memory.mcp_enabled (#219). The memory MCP is optional; absent == on."""
+
+    def test_absent_flag_keeps_memory(self) -> None:
+        for config in ({}, {"memory": {"ships_with": "pre_seeded"}}):
+            self.assertIn("memory", _render_config(config))
+
+    def test_true_keeps_memory(self) -> None:
+        self.assertIn("memory", _render_config({"memory": {"mcp_enabled": True}}))
+
+    def test_false_drops_memory_and_nothing_else(self) -> None:
+        on = _render_config({"second_brain": {"backend": "siyuan"}})
+        off = _render_config({"second_brain": {"backend": "siyuan"}, "memory": {"mcp_enabled": False}})
+        self.assertNotIn("memory", off)
+        self.assertEqual(set(on) - set(off), {"memory"})
+
+    def test_shipped_config_keeps_memory_on(self) -> None:
+        import yaml
+
+        with open(REPO_ROOT / "chassis.config.yaml") as f:
+            shipped = yaml.safe_load(f)
+        self.assertIs(shipped["memory"]["mcp_enabled"], True)
+        self.assertIn("memory", _render_config(shipped))
+
+
 class GoogleSheetsMcpRenderTest(unittest.TestCase):
     """Google Sheets MCP server (issue #63).
 
