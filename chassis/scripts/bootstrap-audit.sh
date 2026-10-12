@@ -17,6 +17,8 @@
 #   Gap 3 - `.mcp.json.mcpServers.memory` block is missing OR the memory graph
 #           it resolves to is unreachable / non-writable in this namespace.
 #           Surfaced via William Holdeman 2026-06-20 amnesiac-bot incident.
+#           Reported as skipped, not failed, when chassis.config.yaml sets
+#           memory.mcp_enabled: false - the memory MCP is optional (#219).
 #   Gap 4 - macOS LaunchDaemons not loaded. discord-restart + discord-watchdog
 #           must be `launchctl print system/com.behalfbot.<name>` OK. Without
 #           the Daemons loaded, the tmux session that backs Discord routing
@@ -53,7 +55,7 @@ while [[ $# -gt 0 ]]; do
         --customer-home) CUSTOMER_HOME="$2"; shift 2 ;;
         --bot-name) BOT_NAME="$2"; shift 2 ;;
         --help|-h)
-            sed -n '1,40p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '1,42p' "$0" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *) echo "Unknown arg: $1" >&2; exit 2 ;;

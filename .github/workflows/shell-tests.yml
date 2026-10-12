@@ -36,6 +36,11 @@ on:
       - 'chassis/scripts/gather-memory-canary.sh'
       - 'chassis/scripts/test-memory-canary.sh'
       - 'chassis/scripts/tests/stub-memory-server.sh'
+      - 'chassis/scripts/gather-dream.sh'
+      - 'chassis/scripts/test-dream-gather.sh'
+      - 'chassis/scripts/memory-integrity.py'
+      - 'chassis/scripts/memory-index-build.py'
+      - 'chassis/scripts/_memory_store.py'
       - 'chassis/scripts/gather-chassis-update-check.sh'
       - 'chassis/scripts/test-chassis-update-check.sh'
       - 'chassis/scripts/_chassis-changelog.sh'
@@ -87,6 +92,11 @@ on:
       - 'chassis/scripts/gather-memory-canary.sh'
       - 'chassis/scripts/test-memory-canary.sh'
       - 'chassis/scripts/tests/stub-memory-server.sh'
+      - 'chassis/scripts/gather-dream.sh'
+      - 'chassis/scripts/test-dream-gather.sh'
+      - 'chassis/scripts/memory-integrity.py'
+      - 'chassis/scripts/memory-index-build.py'
+      - 'chassis/scripts/_memory_store.py'
       - 'chassis/scripts/gather-chassis-update-check.sh'
       - 'chassis/scripts/test-chassis-update-check.sh'
       - 'chassis/scripts/_chassis-changelog.sh'
@@ -185,6 +195,17 @@ jobs:
       # a write that does not persist - plus that the read-back really does
       # happen in a second process.
       - run: bash chassis/scripts/test-memory-canary.sh
+
+  dream-gather:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Behavioural coverage for #219: the free gate in front of the opt-in
+      # nightly dream run. It must fire on a new dead link, a stale rotation,
+      # an out-of-date index and a missing store, and it must NOT re-fire on a
+      # finding the last run already recorded - otherwise an unfixable dead
+      # link becomes a paid run every night. No network, no docker.
+      - run: bash chassis/scripts/test-dream-gather.sh
   chassis-update-check:
     runs-on: ubuntu-latest
     steps:
@@ -479,6 +500,7 @@ jobs:
           bash:chassis/scripts/test-chassis-root-resolution.sh
           bash:chassis/scripts/test-bootstrap-audit-memory.sh
           bash:chassis/scripts/test-memory-canary.sh
+          bash:chassis/scripts/test-dream-gather.sh
           bash:chassis/scripts/test-chassis-update-check.sh
           bash:chassis/scripts/test-chassis-update-mode.sh
           bash:chassis/scripts/test-discord-reply-param-fix.sh

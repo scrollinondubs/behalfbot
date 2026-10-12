@@ -111,6 +111,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 STAGE=""
+REASON=""
 ERROR=""
 NONCE=""
 SERVER_CMD=""
@@ -132,9 +133,11 @@ report() {
             --arg server_cmd "$SERVER_CMD" \
             --arg customer_home "$CUSTOMER_HOME" \
             --arg ts_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg reason "$REASON" \
             '{ok:$ok, stage:$stage, error:$error, resolved_path:$resolved_path,
               shape:$shape, entity:$entity, nonce:$nonce, server_cmd:$server_cmd,
-              customer_home:$customer_home, ts_utc:$ts_utc}'
+              customer_home:$customer_home, ts_utc:$ts_utc}
+             + (if $reason == "" then {} else {reason:$reason} end)'
     elif [[ "$ok" == "true" ]]; then
         printf 'memory-canary OK\n'
         printf '  graph:  %s (%s)\n' "${MEMORY_GRAPH_PATH:-}" "${MEMORY_GRAPH_SHAPE:-}"
@@ -242,6 +245,7 @@ tool_payload() {
 
 if ! memory_mcp_enabled "$CUSTOMER_HOME"; then
     STAGE="skipped"
+    REASON="memory_mcp_disabled"
     if [[ "$OUTPUT_JSON" == true ]] && ! command -v jq >/dev/null 2>&1; then
         # report() needs jq, and this exit runs before the jq dependency check
         # in memory_graph_resolve. Fixed, quote-free fields only.

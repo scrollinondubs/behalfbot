@@ -20,7 +20,9 @@ Whether a well-formed second-brain id still resolves is a question only the
 backend can answer, so it is the adapter's job, not this script's:
 --probe-second-brain asks the configured adapter to read_doc() each ref
 (chassis/second_brain, any backend). Off by default because it is a network
-call per ref on SiYuan and Notion.
+call per ref on SiYuan and Notion. The adapter reads its credentials from the
+environment and does not load .env itself, so a hand run needs
+`set -a; . "$CUSTOMER_HOME/.env"; set +a` first; heartbeat runs already have it.
 
 Usage:
   python3 chassis/scripts/memory-integrity.py [--json] [--repo PATH] [--store PATH]

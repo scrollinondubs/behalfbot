@@ -368,7 +368,15 @@ write_config() { printf '%s\n' "$2" > "$1/chassis.config.yaml"; }
 
 h="$(make_home flag-off-nomemory '"filesystem":{"command":"npx"}')"
 write_config "$h" $'memory:\n  ships_with: pre_seeded\n  mcp_enabled: false'
-assert_case "mcp_enabled false, no memory block" "$(run_canary "$h")" pass skipped
+out="$(run_canary "$h")"
+assert_case "mcp_enabled false, no memory block" "$out" pass skipped
+if [[ "$(printf '%s' "$out" | jq -r '.reason // ""')" == "memory_mcp_disabled" ]]; then
+    printf '  ok   skipped verdict carries reason memory_mcp_disabled\n'
+    pass=$((pass + 1))
+else
+    printf '  FAIL skipped verdict has no reason: %s\n' "$out"
+    fail=$((fail + 1))
+fi
 
 # A broken graph would fail at precheck if the canary ran. With the flag off it
 # must not run at all: no server spawn, nothing written.
