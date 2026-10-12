@@ -18,6 +18,8 @@
 #   8. store without MEMORY.md                           -> count 1, probe_failed
 #   9. payload carries what the prompt must not guess    -> fields present
 #  10. ALWAYS exit 0, stdout is one JSON object
+#  11. store nested in another git repo                 -> store_is_git false
+#  12. store that is its own git repo                   -> store_is_git true
 #
 # No network, no docker, no git remote. Exit 0 all pass, 1 on failure.
 
@@ -171,6 +173,31 @@ if python3 -c 'import yaml' >/dev/null 2>&1; then
     fi
 else
     echo "  skip config values (python3 has no PyYAML; the chassis image ships it)"
+fi
+
+# store_is_git means the store is its OWN repo. A store nested in the install
+# repo must report false, or the prompt commits into the install repo's
+# checked-out branch unattended.
+r="$(make_store nested)"
+write_state "$r" 48
+git -C "$r" init -q
+assert_gather "store nested in another repo" "$r" 1 rotation_due
+got="$(printf '%s' "$LAST_OUT" | jq -r '[.store_is_git, (.store_git_toplevel != "")] | map(tostring) | join(",")')"
+if [[ "$got" == "false,true" ]]; then
+    printf '  ok   nested store is not its own repo (store_is_git false, toplevel named)\n'
+    pass=$((pass + 1))
+else
+    printf '  FAIL nested store: store_is_git,toplevel-set = %s\n' "$got"
+    fail=$((fail + 1))
+fi
+git -C "$r/store" init -q
+assert_gather "store with its own repo" "$r" 1 rotation_due
+if [[ "$(printf '%s' "$LAST_OUT" | jq -r '.store_is_git')" == "true" ]]; then
+    printf '  ok   store with its own repo reports store_is_git true\n'
+    pass=$((pass + 1))
+else
+    printf '  FAIL store with its own repo: %s\n' "$(printf '%s' "$LAST_OUT" | jq -c '{store_is_git,store_git_toplevel}')"
+    fail=$((fail + 1))
 fi
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"

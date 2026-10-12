@@ -30,7 +30,7 @@ Reading every note every night costs more than the budget allows, and a run that
 
 - **Never modify `CLAUDE.md`, anything under `chassis/`, or any file in the live install checkout.** Repo-side changes happen only in a separate git worktree on a `dream/YYYY-MM-DD` branch, opened as a PR against the install repo's `main` (`customer_repo` in the payload). Never against the chassis upstream. Never push to `main`, never merge, never force-push.
 - **Notes store:** edit only files directly under `memory_dir`. Subfolders belong to subagents and keep their own index; leave them alone. Commit by path (`git -C "$MEM" commit -m "..." -- <paths>`). Never `git add -A`, `git add .`, or a bare `git commit`.
-- **If `store_is_git` is false, delete nothing and merge nothing.** Without git a deletion cannot be undone. Edits are fine; every delete or merge you would have made becomes a line in the report under "Proposed deletions".
+- **If `store_is_git` is false, delete nothing, merge nothing and commit nothing.** `store_is_git` is true only when the store is its own git repo. When it is false the store is either unversioned (a deletion cannot be undone) or sits inside another repo, usually the install repo (`store_git_toplevel` names it), where a commit would land on whatever branch is checked out there. Edits are fine and stay uncommitted for the installer to review; every delete or merge you would have made becomes a line in the report under "Proposed deletions".
 - **Second brain:** the ONLY write is ONE block appended to the dream inbox doc at the end of the run (Phase 7). Never edit, append to, move, rename or create any other doc. Reads (`search`, `read_doc`) are fine.
 - **Lock file:** `<customer_home>/scheduled-tasks/dream.lock`. If it exists and the PID in it is alive, stop and report that. Otherwise write your PID to it, and remove it at the end.
 - **Deleting a note deletes one of the installer's corrections.** When a note is merely narrower than you would write it today, edit it. Delete only when the thing it describes no longer exists.
@@ -47,7 +47,7 @@ The payload is one JSON object:
 - `probes`: checks that could not run, each with a `detail`. Do not treat their missing counts as zero.
 - `memory_dir`: the absolute notes-store path in this environment. Use it as `$MEM` everywhere below. Do not guess between host and container paths.
 - `customer_home`, `chassis_scripts`, `state_file`: the install root, the directory holding the chassis memory scripts, and dream's own state file.
-- `store_is_git`, `customer_repo`, `second_brain_mode`, `inbox_doc`, `assistant_name`: see the phases that use them.
+- `store_is_git` (the store is its own git repo), `store_git_toplevel`, `customer_repo`, `second_brain_mode`, `inbox_doc`, `assistant_name`: see the phases that use them.
 - `tonight_domain`, `domain_cursor`, `domains_total`, `domain_resume`: the rotation.
 - `integrity`: counts from `memory-integrity.py --json`. `baseline` is what the last run recorded; `new_since_baseline` is the difference.
 - `index`: from `memory-index-build.py`. `would_rewrite` lists index files that are out of date, `missing_indexes` lists indexes `MEMORY.md` links that do not exist, `unlisted_orphans` counts notes no index and no `MEMORY.md` line reaches.
@@ -123,7 +123,7 @@ Checks on every note you keep:
 
    If `index.missing_indexes` is non-empty, use `--init` instead of `--write`. Touch `MEMORY.md` only when a domain index was added or removed, or a root-level rule changed.
 3. Re-run `memory-integrity.py --json --store "$MEM" --repo "<customer_home>"` and keep its `counts` for Phases 7 and 8. This is the post-run state.
-4. If `store_is_git`, commit the store by path, listing exactly the files you changed:
+4. If `store_is_git`, commit the store by path, listing exactly the files you changed. If it is false, do not commit anywhere; list the changed files in the report:
 
    ```bash
    git -C "$MEM" status --short
@@ -166,7 +166,7 @@ The inbox is a second-brain doc this assistant owns. It is never one of the inst
 
 ```markdown
 ### Dream YYYY-MM-DD - <domain or "integrity only">
-**Changed in the notes store:** <N edited, N deleted, N merged, N pointerized, indexes rewritten: list> (commit <short sha>, or "store is not a git repo")
+**Changed in the notes store:** <N edited, N deleted, N merged, N pointerized, indexes rewritten: list> (commit <short sha>, or "store is not its own git repo, left uncommitted")
 **Pending proposals:**
 - PR: <full https://github.com/... URL> - <N facts to docs/ and skills/>
 - Second brain: `<note filename>` -> candidate home <backend>:<id> ("<title>"), or "no home found"
@@ -213,7 +213,7 @@ A brief report to stdout (the dispatcher keeps it):
 - Edited / deleted / merged / pointerized counts, with the reason for every delete
 - Proposals: PR URL (full URL) and second-brain proposals, or "none"
 - Inbox doc id and whether the block was written
-- Notes-store commit sha, "no changes", or "store is not a git repo"
+- Notes-store commit sha, "no changes", or "store is not its own git repo, left uncommitted"
 - Next domain up
 
 If the run stopped early, say which phase and why. A truncated pass reported as complete is the failure this prompt exists to end.

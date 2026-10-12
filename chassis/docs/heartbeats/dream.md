@@ -58,10 +58,15 @@ on most nights, expect one run per night at the configured `budget`.
    `index-<domain>.md` per domain, and notes with `domain:` frontmatter. Run
    the index builder once with `--init` (see the migration note,
    `docs/memory-architecture-migration.md`).
-3. **The store is a git repo** (`git -C "$STORE" init` and one commit). Dream
-   commits by path, so every change is reviewable and revertable. Without git
-   it still runs, but deletes and merges become proposals in the report
-   instead.
+3. **The store is its own git repo** (`git -C "$STORE" init` and one commit).
+   Dream commits by path, so every change is reviewable and revertable. If the
+   store is unversioned, or sits inside another repo (an older install that
+   keeps notes under `$CUSTOMER_HOME/memory` inside the install repo), dream
+   still runs but commits nothing: edits stay uncommitted for you to review,
+   and deletes and merges become proposals in the report. The gather tells
+   the two apart (`store_is_git`, `store_git_toplevel`); a store nested in the
+   install repo is never committed to, because that commit would land on
+   whatever branch the install repo has checked out.
 4. **For the inbox block:** `second_brain.mode: adapter` in
    `chassis.config.yaml`, so the `secondbrain` MCP server is registered. In
    `direct` mode the block goes into the run's stdout report instead.

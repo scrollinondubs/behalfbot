@@ -9,7 +9,7 @@ Read `chassis/memory/MEMORY_MODEL.md` first. The steps below are the mechanics; 
 ## 0. Before you start
 
 - Find your notes store. It is Claude Code's auto-memory directory for the install, `~/.claude/projects/<mangled install path>/memory/` on the host (the install path with every non-alphanumeric character replaced by `-`). Inside the container it is wherever `~/.claude` is bind-mounted. Set `CLAUDE_AUTO_MEMORY_DIR` to that path in `.env` on a containerized install; every chassis memory script reads it.
-- Make the store a git repo if it is not one yet, so every step below is reviewable and revertable:
+- Make the store its own git repo if it is not one yet, so every step below is reviewable and revertable. If the store sits inside the install repo (older installs seeded notes under `$CUSTOMER_HOME/memory`), do not create a nested repo: the install repo already versions it, commit your migration there on a branch, and know that dream will leave its nightly edits uncommitted for you to review. Otherwise:
 
   ```bash
   STORE="$CLAUDE_AUTO_MEMORY_DIR"

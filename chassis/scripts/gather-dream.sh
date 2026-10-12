@@ -55,8 +55,15 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 0
 fi
 
-OUT="$(SCRIPT_DIR="$SCRIPT_DIR" CUSTOMER_HOME="$CUSTOMER_HOME" STATE_FILE="$STATE_FILE" \
-    DREAM_MIN_HOURS="${DREAM_MIN_HOURS:-20}" python3 - <<'PY' 2>/dev/null
+# The python runs from a heredoc redirected to files, NOT inside $( ): bash
+# 3.2 (stock macOS) parses quotes inside a heredoc nested in a command
+# substitution, so one apostrophe in a python comment breaks the whole script.
+WORK="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/gather-dream.$$")"
+mkdir -p "$WORK"
+trap 'rm -rf "$WORK"' EXIT
+
+SCRIPT_DIR="$SCRIPT_DIR" CUSTOMER_HOME="$CUSTOMER_HOME" STATE_FILE="$STATE_FILE" \
+    DREAM_MIN_HOURS="${DREAM_MIN_HOURS:-20}" python3 - >"$WORK/out" 2>"$WORK/err" <<'PY'
 import contextlib
 import datetime
 import glob
@@ -170,8 +177,12 @@ store = str(store)
 if not os.path.isfile(os.path.join(store, "MEMORY.md")):
     probe("no MEMORY.md in %s (%s); wrong directory, or the store was never set up" % (store, store_how))
 
-store_is_git = subprocess.run(["git", "-C", store, "rev-parse", "--is-inside-work-tree"],
-                              capture_output=True, text=True).stdout.strip() == "true"
+# "Its own repo", not "inside some work tree": a store under the install repo
+# ($CUSTOMER_HOME/memory on older installs) would otherwise pass, and the
+# prompt's commit would land in the install repo on whatever branch is out.
+store_git_toplevel = subprocess.run(["git", "-C", store, "rev-parse", "--show-toplevel"],
+                                    capture_output=True, text=True).stdout.strip()
+store_is_git = bool(store_git_toplevel) and os.path.realpath(store_git_toplevel) == os.path.realpath(store)
 
 indexes = sorted(os.path.basename(p) for p in glob.glob(os.path.join(store, "index-*.md")))
 cursor = as_int(state.get("domainCursor"), 0)
@@ -254,6 +265,7 @@ print(json.dumps({
     "memory_dir": store,
     "memory_dir_source": store_how,
     "store_is_git": store_is_git,
+    "store_git_toplevel": store_git_toplevel,
     "customer_repo": customer_repo,
     "second_brain_mode": sb_mode,
     "config_note": config_note,
@@ -270,10 +282,13 @@ print(json.dumps({
     "index": index,
 }))
 PY
-)"
 
+OUT="$(cat "$WORK/out" 2>/dev/null)"
 if [[ -z "$OUT" ]]; then
-    printf '{"count": 1, "reasons": ["probe_failed"], "probes": [{"kind": "probe_failed", "detail": "gather-dream python block crashed"}]}\n'
+    # Last stderr line names the cause; keep only characters that are safe
+    # inside a JSON string without an encoder.
+    CAUSE="$(tail -n 1 "$WORK/err" 2>/dev/null | tr -cd 'A-Za-z0-9 _.,:()/=-' | cut -c1-200)"
+    printf '{"count": 1, "reasons": ["probe_failed"], "probes": [{"kind": "probe_failed", "detail": "gather-dream python block crashed: %s"}]}\n' "$CAUSE"
     exit 0
 fi
 printf '%s\n' "$OUT"
