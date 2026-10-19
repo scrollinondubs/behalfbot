@@ -47,10 +47,13 @@ function fakeClaude(envelope = { reply: 'ok', ledger_writes: [] }) {
   const spawnImpl = (bin, args, opts) => {
     const files = listFiles(opts.cwd)
     const contents = Object.fromEntries(files.map(f => [f, readFileSync(join(opts.cwd, f), 'utf8')]))
-    calls.push({ bin, args, opts, files, contents })
+    calls.push({ stdin: '', bin, args, opts, files, contents })
     const child = new EventEmitter()
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
+    child.stdin = new PassThrough()
+    child.stdin.setEncoding('utf8')
+    child.stdin.on('data', c => (calls.at(-1).stdin += c))
     child.kill = () => {}
     setImmediate(() => {
       child.stdout.end(JSON.stringify({ result: JSON.stringify(envelope) }))
@@ -70,7 +73,7 @@ function body(extra = {}) {
 }
 
 const system = call => call.args[call.args.indexOf('--append-system-prompt') + 1]
-const prompt = call => call.args.at(-1)
+const prompt = call => call.stdin
 
 const CORPUS = {
   watering_holes: [
@@ -236,7 +239,7 @@ test('a focus ebomb is inlined too', async () => {
   assert.ok(prompt(call).includes('# OPEN ITEM (ebomb eb-1)\n' + call.contents['safari/ebombs/eb-1.md']))
 })
 
-test('a long focus item is cut under the argv limit, in bytes, and points at its file', async () => {
+test('a long focus item is cut in bytes and points at its file', async () => {
   // Three bytes a char: a char cap of the same number would blow the limit.
   for (const text of ['word '.repeat(60000), '\u20ac'.repeat(100000)]) {
     vcl.serveSafariCorpus({ threads: [{ id: 'big', title: 'Big', text }] })
@@ -247,8 +250,21 @@ test('a long focus item is cut under the argv limit, in bytes, and points at its
     const p = prompt(call)
     assert.ok(p.includes(`[cut at ${MAX_FOCUS_INLINE_BYTES} bytes: Read safari/threads/big.md for the rest]`))
     assert.ok(!p.includes('\uFFFD'), 'no half char at the cut')
-    assert.ok(Buffer.byteLength(p, 'utf8') < 64 * 1024, `prompt is ${Buffer.byteLength(p, 'utf8')} bytes`)
+    assert.ok(Buffer.byteLength(p, 'utf8') < MAX_FOCUS_INLINE_BYTES + 32 * 1024, `prompt is ${Buffer.byteLength(p, 'utf8')} bytes`)
   }
+})
+
+test('the user prompt goes on stdin, so a prompt past the 128 KB argv cap still reaches claude', async () => {
+  const text = 'pain '.repeat(40000)
+  vcl.serveSafariCorpus({ threads: [{ id: 'big', title: 'Big', text }] })
+  tokenA = vcl.mintToken(A)
+  const message = 'x'.repeat(20000)
+  const { outcome, call } = await run({ request: { message, focus: { type: 'thread', id: 'big' } } })
+  assert.equal(outcome.status, 'completed')
+  assert.ok(call.stdin.endsWith(message), 'the whole message arrives on stdin')
+  assert.ok(Buffer.byteLength(call.stdin, 'utf8') > 128 * 1024)
+  assert.ok(!call.args.some(a => a.includes('# FOUNDER MESSAGE')), 'no argument carries the user prompt')
+  assert.equal(call.opts.stdio[0], 'pipe')
 })
 
 test('a focus id that is not in the corpus, or with no corpus, tells the model it could not be loaded', async () => {

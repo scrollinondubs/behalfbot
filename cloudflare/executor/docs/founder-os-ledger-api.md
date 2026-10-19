@@ -234,8 +234,9 @@ system prompt tells the model to read `safari/index.md` and use Grep and Read
 to find what the student names by id or keyword.
 
 That focus item's file goes inline in the
-user prompt under `# OPEN ITEM`, cut at 32 KB with a pointer to the
-file (the prompt is one argv element, which Linux caps at 128 KB). If the
+user prompt under `# OPEN ITEM`, cut at 128 KB with a pointer to the
+file. The user prompt reaches claude on stdin, not as an argument, so Linux's
+128 KB cap on one argv element does not apply. If the
 item is not in the corpus, or the corpus was skipped, the prompt says it could
 not be loaded.
 

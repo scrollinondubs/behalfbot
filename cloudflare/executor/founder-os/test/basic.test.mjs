@@ -48,10 +48,13 @@ function fakeClaude(envelope) {
   const spawnImpl = (bin, args, opts) => {
     const files = listFiles(opts.cwd)
     const contents = Object.fromEntries(files.map(f => [f, readFileSync(join(opts.cwd, f))]))
-    calls.push({ bin, args, opts, files, contents })
+    calls.push({ stdin: '', bin, args, opts, files, contents })
     const child = new EventEmitter()
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
+    child.stdin = new PassThrough()
+    child.stdin.setEncoding('utf8')
+    child.stdin.on('data', c => (calls.at(-1).stdin += c))
     child.kill = () => {}
     setImmediate(() => {
       child.stdout.end(JSON.stringify({ result: JSON.stringify(envelope) }))
@@ -179,7 +182,7 @@ test('the card text VCL appends to the message still reaches the model unchanged
   const message = 'Please review my work on: Painstorm\n\n---\nid: basic-painstorm-one-thread\n---\n## Coach checks\n- appended'
   const { spawnImpl, calls } = fakeClaude({ reply: 'ok', ledger_writes: [] })
   await executeSession(await prepareSession(body({ message }), deps()), deps({ spawnImpl }))
-  assert.ok(calls[0].args.at(-1).endsWith(message))
+  assert.ok(calls[0].stdin.endsWith(message))
 })
 
 // --- stage files from VCL ----------------------------------------------------
@@ -317,7 +320,7 @@ test('an image submission is downloaded into the workdir and its path is in the 
   assert.deepEqual(calls[0].contents['attachments/ref-1.png'], PNG)
 
   const workdir = calls[0].opts.cwd
-  const prompt = calls[0].args.at(-1)
+  const prompt = calls[0].stdin
   const expected = join(workdir, 'attachments', 'ref-1.png')
   assert.ok(prompt.includes(`"attached_image": ${JSON.stringify(expected)}`), 'prompt names the local image path')
   assert.equal(relative(workdir, expected), 'attachments/ref-1.png')
@@ -334,7 +337,7 @@ test('an image that cannot be fetched does not fail the session; the prompt says
   assert.equal(outcome.status, 'completed')
   assert.equal(blobCalls.length, 0, 'a host off the allowlist is never fetched')
   assert.ok(!calls[0].files.some(f => f.startsWith('attachments/')))
-  assert.ok(calls[0].args.at(-1).includes('"attached_image_error": "host_not_allowed"'))
+  assert.ok(calls[0].stdin.includes('"attached_image_error": "host_not_allowed"'))
 })
 
 test('PDFs, links and text submissions are left alone', async () => {
@@ -345,7 +348,7 @@ test('PDFs, links and text submissions are left alone', async () => {
   const d = deps({ spawnImpl, fetchImpl })
   await executeSession(await prepareSession(body({ artifact_refs: [pdf.id, link.id] }), d), d)
   assert.equal(blobCalls.length, 0)
-  assert.ok(!calls[0].args.at(-1).includes('attached_image'))
+  assert.ok(!calls[0].stdin.includes('attached_image'))
 })
 
 test('fetchImage accepts PNG, JPEG and WebP from a Vercel Blob host', async () => {

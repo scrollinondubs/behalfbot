@@ -32,10 +32,11 @@ export const CONTENT_FETCH_TIMEOUT_MS = 5000
 // VCL caps /safari/corpus at about 4 MB, so it gets longer than a stage fetch.
 export const CORPUS_FETCH_TIMEOUT_MS = 15000
 export const MAX_FOCUS_ID_CHARS = 128
-// The user prompt is one argv element, and Linux caps one at 128 KB
-// (MAX_ARG_STRLEN). The open item is cut well under that, in bytes since one
-// char can be four; the model can Read the rest from its file.
-export const MAX_FOCUS_INLINE_BYTES = 32 * 1024
+// The user prompt goes to claude on stdin, so no argv limit applies; this cut
+// only keeps one huge open item from crowding out the rest of the context.
+// Counted in bytes since one char can be four; the model can Read the rest
+// from its file.
+export const MAX_FOCUS_INLINE_BYTES = 128 * 1024
 const FOCUS_TYPES = new Set(['thread', 'ebomb'])
 
 export const ALLOWED_TOOLS = 'Read,Glob,Grep'
@@ -236,7 +237,10 @@ export function buildChildEnv(parentEnv, apiKey) {
   return env
 }
 
-export function buildClaudeArgs({ workdir, systemPrompt, userPrompt, model }) {
+// The user prompt is not an argument: it carries the founder context and
+// grows past Linux's 128 KB cap on one argv element (MAX_ARG_STRLEN), so
+// runClaude writes it to claude's stdin instead.
+export function buildClaudeArgs({ workdir, systemPrompt, model }) {
   return [
     '-p',
     '--bare',
@@ -246,7 +250,6 @@ export function buildClaudeArgs({ workdir, systemPrompt, userPrompt, model }) {
     '--allowedTools', ALLOWED_TOOLS,
     '--disallowedTools', DISALLOWED_TOOLS,
     '--append-system-prompt', systemPrompt,
-    userPrompt,
   ]
 }
 
@@ -519,9 +522,12 @@ async function stageSafari(workdir, session, deps) {
   }
 }
 
-function runClaude({ args, env, cwd, timeoutMs, spawnImpl, claudeBin }) {
+function runClaude({ args, input, env, cwd, timeoutMs, spawnImpl, claudeBin }) {
   return new Promise((resolve, reject) => {
-    const child = spawnImpl(claudeBin, args, { env, cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawnImpl(claudeBin, args, { env, cwd, stdio: ['pipe', 'pipe', 'pipe'] })
+    // A child that dies early closes stdin; the close handler reports that.
+    child.stdin?.on('error', () => {})
+    child.stdin?.end(input)
     let stdout = ''
     let stderr = ''
     let settled = false
@@ -577,7 +583,8 @@ export async function executeSession(session, deps) {
     })
     const { systemPrompt, userPrompt } = buildPrompts(session, referenced, safari)
     const result = await runClaude({
-      args: buildClaudeArgs({ workdir, systemPrompt, userPrompt, model: deps.model }),
+      args: buildClaudeArgs({ workdir, systemPrompt, model: deps.model }),
+      input: userPrompt,
       env: buildChildEnv(deps.parentEnv ?? process.env, deps.apiKey),
       cwd: workdir,
       timeoutMs: deps.timeoutMs ?? SESSION_TIMEOUT_MS,
