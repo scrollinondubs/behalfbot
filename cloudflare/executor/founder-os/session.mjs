@@ -487,10 +487,14 @@ function focusInline(file) {
   return `${head}\n\n[cut at ${MAX_FOCUS_INLINE_BYTES} bytes: Read ${file.path} for the rest]`
 }
 
-// Throws only on the tenant tripwire. A 404 (VCL without the route), any
-// other error, a timeout or a payload of the wrong shape skips the corpus and
-// the session goes on without it.
+// Only a session with a focus (the Hub's Ask Jax panels) gets the corpus;
+// lesson sessions never pay for the fetch. Throws only on the tenant
+// tripwire. A 404 (VCL without the route), any other error, a timeout or a
+// payload of the wrong shape skips the corpus and the session goes on
+// without it.
 async function stageSafari(workdir, session, deps) {
+  const focus = session.req.focus
+  if (!focus) return { written: false, focusText: null, log: { skipped: 'no_focus' } }
   let corpus
   try {
     corpus = await fetchWithTimeout(
@@ -507,12 +511,11 @@ async function stageSafari(workdir, session, deps) {
   }
   const staged = safariFiles(corpus)
   writeWorkdirFiles(workdir, staged.files)
-  const focus = session.req.focus
-  const file = focus ? staged.byId[focus.type].get(oneLine(focus.id)) : null
+  const file = staged.byId[focus.type].get(oneLine(focus.id))
   return {
     written: true,
     focusText: file ? focusInline(file) : null,
-    log: { source: 'vcl', ...staged.counts, truncated: staged.truncated, ...(focus ? { focus_found: !!file } : {}) },
+    log: { source: 'vcl', ...staged.counts, truncated: staged.truncated, focus_found: !!file },
   }
 }
 
