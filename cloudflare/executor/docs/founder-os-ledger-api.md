@@ -29,15 +29,21 @@ student clicks "start coach session" in the VCL dashboard
   VCL: resolve founder_id from the student's login session
   VCL: mint session token T  -> { founder_id, session_id, expires_at }
   VCL -> Worker  POST /founder-os/sessions          (Bearer FOUNDER_OS_TRIGGER_TOKEN)
-        { founder_id, stage, skill, message?, artifact_refs?, session_token: T }
+        { founder_id, stage, skill, message?, artifact_refs?, focus?, session_token: T }
     Worker -> FounderOSContainer instance named by founder_id
       shim -> VCL  GET  /me                         (Bearer T)  must equal founder_id
       shim -> VCL  GET  /founder, /stage-progress, ... (context prefetch)
       shim <- 202 to the Worker, then runs claude in the background
+      shim -> VCL  GET  /safari/corpus              (Bearer T)  404 = skip
       shim -> VCL  POST /artifacts, /pains, ...     (writes the skill asked for)
       shim -> VCL  POST /session/result             (reply + write outcomes)
   VCL: revoke T (or let it expire)
 ```
+
+`focus` is optional: `{ "type": "thread" | "ebomb", "id": "..." }`, the item
+the student has open in the Safari Hub's Ask Jax panel. `id` is a string of at
+most 128 chars. Any other shape is `400 bad_request`. See "Safari corpus" below
+for what the executor does with it.
 
 The Worker answers 400, 403, 404, 409 or 503 synchronously when the session
 cannot start (bad input, token/founder mismatch, stage mismatch, unknown skill,
@@ -186,6 +192,56 @@ at most 32 files, at least one card. Otherwise, or on any error or a 5 second
 timeout, it copies the pinned files exactly as before and the session goes on.
 Each session logs one `founder_os_materials` line saying which it used.
 
+### Safari corpus
+
+| Method and path | Body / query | Response |
+|---|---|---|
+| `GET /safari/corpus` | none | `{ watering_holes, threads, ebombs, truncated }` |
+
+Not a ledger row. The founder's whole Sales Safari work, founder-scoped by the
+token like every other route:
+
+```json
+{
+  "watering_holes": [{ "id": "", "url": "", "title": "", "status": "" }],
+  "threads": [{ "id": "", "title": "", "url": "", "watering_hole_id": "", "text": "", "notes": [{ "id": "", "kind": "", "quote": "", "body": "", "tags": [] }] }],
+  "ebombs": [{ "id": "", "title": "", "status": "", "draft_markdown": "", "sources": [{ "note_id": "", "quote": "" }] }],
+  "truncated": false
+}
+```
+
+VCL owns the exact field contents. The executor ignores extra fields and
+tolerates missing optional ones. VCL caps the payload at about 4 MB and sets
+`truncated: true` when it had to cut, dropping the oldest threads' `text`
+first. Any row that carries a `founder_id` must carry the token's, or the
+executor aborts the session (`tenant_mismatch`), the same tripwire as rule 3.
+
+The executor fetches it for every session after the preflight, with a 15
+second timeout, and writes it into the session workdir:
+
+- `safari/index.md`: one line per watering hole, thread and ebomb (id, title,
+  counts, file), plus a note when `truncated` is set
+- `safari/threads/<id>.md`: title, url, watering hole, text, notes with their ids
+- `safari/ebombs/<id>.md`: title, status, draft, sources
+
+File names are the id with anything outside `[A-Za-z0-9_-]` turned into `_`,
+cut at 128 chars; the real id stays in the file. An item with no id, or whose
+name is already taken, gets no file. Every path goes through the same
+inside-the-workdir guard as the stage files. When the corpus was written, the
+system prompt tells the model to read `safari/index.md` and use Grep and Read
+to find what the student names by id or keyword.
+
+When the session request has a `focus`, that item's file goes inline in the
+user prompt under `# OPEN ITEM`, cut at 32 KB with a pointer to the
+file (the prompt is one argv element, which Linux caps at 128 KB). If the
+item is not in the corpus, or the corpus was skipped, the prompt says it could
+not be loaded.
+
+A `404` (a VCL without the route), any other error, a timeout or a payload of
+the wrong shape skips all of this. The session runs as it did before the
+route existed. Each session logs one `founder_os_safari` line with the counts
+or the skip reason.
+
 ### Session result
 
 | Method and path | Body | Response |
@@ -207,8 +263,8 @@ also the signal to revoke the token.
 ## What the executor lets a skill write
 
 The executor does not give the model live access to this API. Claude runs with
-`Read`, `Glob` and `Grep` over a scratch directory holding only the skill and
-the stage's cards, and returns an envelope `{ reply, ledger_writes: [...] }`.
+`Read`, `Glob` and `Grep` over a scratch directory holding only the skill, the
+stage's cards and, when VCL serves it, the founder's `safari/` corpus, and returns an envelope `{ reply, ledger_writes: [...] }`.
 The executor validates the whole envelope, then applies the writes itself
 through the token-scoped client. If any write in the envelope is invalid, none
 are applied.
@@ -240,6 +296,8 @@ Extra executor-side rules, on top of VCL's:
 - [ ] `POST /session/result` stores the reply and revokes the token.
 - [ ] Port `founder-os/test/isolation.test.mjs` cases against the real routes
       with two seeded founders.
+- [ ] `GET /safari/corpus` returns only the token's founder's Safari work,
+      capped at about 4 MB with `truncated` set when cut.
 - [ ] Call the Worker's `POST /founder-os/sessions` with
       `FOUNDER_OS_TRIGGER_TOKEN` from the server side only, never from the
       browser.

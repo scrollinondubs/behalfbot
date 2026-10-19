@@ -28,6 +28,8 @@ export async function startMockVcl() {
   // GET /content/stage answers 404, as a VCL without the route does, until a
   // test sets a body or a handler (req, url, send) => void.
   let stageContent = null
+  // GET /safari/corpus works the same way: 404 until a test serves something.
+  let safariCorpus = null
 
   const state = {
     founders,
@@ -61,6 +63,9 @@ export async function startMockVcl() {
     tokenInfo: token => tokens.get(token),
     serveStageContent(value) {
       stageContent = value
+    },
+    serveSafariCorpus(value) {
+      safariCorpus = value
     },
     rowsFor: (table, founder_id) => rows[table].filter(r => r.founder_id === founder_id),
   }
@@ -109,6 +114,11 @@ export async function startMockVcl() {
         if (stageContent === null) return fail(404, 'not_found')
         if (typeof stageContent === 'function') return stageContent(req, url, send)
         return send(200, stageContent)
+      }
+      if (m === 'GET' && p === '/safari/corpus') {
+        if (safariCorpus === null) return fail(404, 'not_found')
+        if (typeof safariCorpus === 'function') return safariCorpus(req, url, send)
+        return send(200, safariCorpus)
       }
       if (m === 'GET' && p === '/stage-progress') return send(200, { rows: mine('stage_progress') })
       const gp = /^\/stage-progress\/(\d+)\/gate-pending$/.exec(p)
