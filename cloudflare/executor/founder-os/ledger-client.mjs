@@ -151,5 +151,22 @@ export function createLedgerClient({ baseUrl, token, fetchImpl = globalThis.fetc
     // Not a ledger row: { base_sha, files: [{ path, text }] }.
     contentStage: (stage, { signal } = {}) =>
       call('GET', `/content/stage${query({ stage: Number.isInteger(stage) ? stage : 'x' })}`, undefined, { signal }),
+
+    // The founder's Sales Safari work: { watering_holes, threads, ebombs,
+    // truncated }. Its rows sit in nested arrays that checkRows never sees,
+    // so the tripwire walks them here.
+    safariCorpus: async ({ signal } = {}) => {
+      const payload = await call('GET', '/safari/corpus', undefined, { signal })
+      if (boundFounderId !== null && payload && typeof payload === 'object') {
+        const items = [payload.watering_holes, payload.threads, payload.ebombs].filter(Array.isArray).flat()
+        const notes = items.flatMap(item => (Array.isArray(item?.notes) ? item.notes : []))
+        for (const row of [...items, ...notes]) {
+          if (row && typeof row === 'object' && 'founder_id' in row && row.founder_id !== boundFounderId) {
+            throw new LedgerApiError(0, 'tenant_mismatch', 'the ledger API returned another founder\'s row')
+          }
+        }
+      }
+      return payload
+    },
   }
 }

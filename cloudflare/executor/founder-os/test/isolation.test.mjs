@@ -46,10 +46,13 @@ afterEach(async () => {
 function fakeClaude(envelope) {
   const calls = []
   const spawnImpl = (bin, args, opts) => {
-    calls.push({ bin, args, opts })
+    calls.push({ stdin: '', bin, args, opts })
     const child = new EventEmitter()
     child.stdout = new PassThrough()
     child.stderr = new PassThrough()
+    child.stdin = new PassThrough()
+    child.stdin.setEncoding('utf8')
+    child.stdin.on('data', c => (calls.at(-1).stdin += c))
     child.kill = () => {}
     setImmediate(() => {
       const result = typeof envelope === 'string' ? envelope : JSON.stringify(envelope)
