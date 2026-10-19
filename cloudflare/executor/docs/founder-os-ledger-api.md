@@ -34,7 +34,7 @@ student clicks "start coach session" in the VCL dashboard
       shim -> VCL  GET  /me                         (Bearer T)  must equal founder_id
       shim -> VCL  GET  /founder, /stage-progress, ... (context prefetch)
       shim <- 202 to the Worker, then runs claude in the background
-      shim -> VCL  GET  /safari/corpus              (Bearer T)  404 = skip
+      shim -> VCL  GET  /safari/corpus              (Bearer T)  only with focus; 404 = skip
       shim -> VCL  POST /artifacts, /pains, ...     (writes the skill asked for)
       shim -> VCL  POST /session/result             (reply + write outcomes)
   VCL: revoke T (or let it expire)
@@ -216,8 +216,10 @@ tolerates missing optional ones. VCL caps the payload at about 4 MB and sets
 first. Any row that carries a `founder_id` must carry the token's, or the
 executor aborts the session (`tenant_mismatch`), the same tripwire as rule 3.
 
-The executor fetches it for every session after the preflight, with a 15
-second timeout, and writes it into the session workdir:
+The executor fetches it only for a session request with a `focus` (the Safari
+Hub's Ask Jax panels always send one), after the preflight, with a 15 second
+timeout. Lesson sessions without a `focus` never call this route. It writes the
+corpus into the session workdir:
 
 - `safari/index.md`: one line per watering hole, thread and ebomb (id, title,
   counts, file), plus a note when `truncated` is set
@@ -231,7 +233,7 @@ inside-the-workdir guard as the stage files. When the corpus was written, the
 system prompt tells the model to read `safari/index.md` and use Grep and Read
 to find what the student names by id or keyword.
 
-When the session request has a `focus`, that item's file goes inline in the
+That focus item's file goes inline in the
 user prompt under `# OPEN ITEM`, cut at 32 KB with a pointer to the
 file (the prompt is one argv element, which Linux caps at 128 KB). If the
 item is not in the corpus, or the corpus was skipped, the prompt says it could

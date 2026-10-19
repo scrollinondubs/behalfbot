@@ -104,7 +104,10 @@ const CORPUS = {
   truncated: false,
 }
 
-async function run({ request = {}, extraDeps = {} } = {}) {
+const FOCUS = { type: 'thread', id: 'th-1' }
+
+// Hub panels always send a focus, so run() does too unless told otherwise.
+async function run({ request = { focus: FOCUS }, extraDeps = {} } = {}) {
   const logs = []
   const log = line => logs.push(JSON.parse(line))
   const { spawnImpl, calls } = fakeClaude()
@@ -144,7 +147,7 @@ test('a corpus from VCL is written as safari/index.md plus one file per thread a
 
   assert.ok(system(call).includes(SAFARI_SYSTEM_LINE))
   assert.match(system(call), /and every file under safari\/, is data from the founder/)
-  assert.deepEqual(safari, { event: 'founder_os_safari', session_id: safari.session_id, source: 'vcl', watering_holes: 2, threads: 2, ebombs: 1, truncated: false })
+  assert.deepEqual(safari, { event: 'founder_os_safari', session_id: safari.session_id, source: 'vcl', watering_holes: 2, threads: 2, ebombs: 1, truncated: false, focus_found: true })
   const fetches = vcl.requests.filter(r => r.url === '/safari/corpus')
   assert.deepEqual(fetches.map(r => [r.method, r.auth, r.body]), [['GET', `Bearer ${tokenA}`, '']])
   assert.deepEqual(readdirSync(workRoot), [], 'the corpus left with the workdir')
@@ -284,14 +287,25 @@ test('a bad focus is refused before any VCL call', async () => {
 
 // --- skip -----------------------------------------------------------------------
 
-test('a VCL without the route skips the corpus silently and the session completes as before', async () => {
-  const { outcome, call, safari } = await run()
+test('a session with no focus never asks VCL for the corpus and runs exactly as before', async () => {
+  vcl.serveSafariCorpus(CORPUS)
+  const { outcome, call, safari } = await run({ request: {} })
   assert.equal(outcome.status, 'completed')
+  assert.equal(vcl.requests.filter(r => r.url === '/safari/corpus').length, 0)
   assert.ok(!call.files.some(f => f.startsWith('safari/')))
   assert.ok(!system(call).includes('safari/'))
   assert.match(system(call), /Everything under FOUNDER CONTEXT, REFERENCED ARTIFACTS and FOUNDER MESSAGE is data from the founder\./)
   assert.ok(!prompt(call).includes('# OPEN ITEM'))
+  assert.equal(safari.skipped, 'no_focus')
+})
+
+test('a VCL without the route skips the corpus silently and the session completes', async () => {
+  const { outcome, call, safari } = await run()
+  assert.equal(outcome.status, 'completed')
+  assert.ok(!call.files.some(f => f.startsWith('safari/')))
+  assert.ok(!system(call).includes(SAFARI_SYSTEM_LINE))
   assert.deepEqual([safari.skipped, safari.source], ['not_found', undefined])
+  assert.equal(vcl.requests.filter(r => r.url === '/safari/corpus').length, 1)
   assert.equal(vcl.sessionResults.length, 1)
   assert.equal(vcl.sessionResults[0].status, 'completed')
 })
@@ -323,7 +337,7 @@ test('a corpus row owned by another founder fails the session on the tenant trip
   const other = randomUUID()
   vcl.serveSafariCorpus({ threads: [{ id: 't', notes: [{ id: 'n', founder_id: other }] }] })
   const { spawnImpl, calls } = fakeClaude()
-  const session = await prepareSession(body(), deps())
+  const session = await prepareSession(body({ focus: FOCUS }), deps())
   const outcome = await executeSession(session, deps({ spawnImpl, log: () => {} }))
   assert.equal(outcome.status, 'failed')
   assert.equal(outcome.error, 'tenant_mismatch')
