@@ -118,5 +118,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     model: process.env.FOUNDER_OS_CLAUDE_MODEL || undefined,
     claudeBin: process.env.FOUNDER_OS_CLAUDE_BIN || 'claude',
   })
+  // PID 1 ignores SIGTERM without a handler, so the idle stop from
+  // @cloudflare/containers never landed and instances lived until the next
+  // deploy replaced them. Same fix as container/server.mjs in the executor.
+  process.on('SIGTERM', () => {
+    console.log(JSON.stringify({ event: 'sigterm' }))
+    server.close()
+    setTimeout(() => process.exit(0), 2000).unref()
+  })
   server.listen(8080, () => console.log(JSON.stringify({ event: 'listening', port: 8080 })))
 }
