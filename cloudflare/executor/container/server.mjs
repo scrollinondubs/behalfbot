@@ -41,6 +41,7 @@ const TICK_HARD_TIMEOUT_MS = 35 * 60 * 1000
 
 let inFlight = null // { startedAt, mode } while a tick runs
 let lastRun = null // { startedAt, endedAt, exitCode, mode, stdoutTail }
+let currentChild = null // the running tick's process, so SIGTERM can stop it
 
 // Restored in #174. #166 deleted this function while adding the chaining it was
 // supposed to call, and nothing replaced it, so the shim crashed on the first
@@ -63,6 +64,7 @@ function runTick(mode) {
   }
   child.stdout.on('data', keepTail)
   child.stderr.on('data', keepTail)
+  currentChild = child
 
   const killer = setTimeout(() => {
     try {
@@ -75,6 +77,7 @@ function runTick(mode) {
   inFlight = { startedAt, mode }
   child.on('exit', code => {
     clearTimeout(killer)
+    if (currentChild === child) currentChild = null
     lastRun = {
       startedAt,
       endedAt: new Date().toISOString(),
@@ -133,6 +136,26 @@ const server = createServer((req, res) => {
   }
 
   respond(404, { error: 'not_found' })
+})
+
+// This shim runs as PID 1, and Linux ignores SIGTERM for PID 1 unless the
+// process installs a handler. @cloudflare/containers stops an idle container
+// by sending SIGTERM, so without this the container never exits: the
+// executor sat awake 24/7 billing ~26 USD/mo while the library logged
+// "Activity expired, signalling container to stop" every 45 minutes. A tick
+// killed here leaves its queue row `processing`; sweepOrphanedProcessingRows()
+// fails and refunds it on the next tick, the same path a host restart takes.
+process.on('SIGTERM', () => {
+  console.log(JSON.stringify({ event: 'sigterm', inFlight }))
+  if (currentChild) {
+    try {
+      currentChild.kill('SIGTERM')
+    } catch {
+      // best-effort
+    }
+  }
+  server.close()
+  setTimeout(() => process.exit(0), 2000).unref()
 })
 
 server.listen(PORT, () => {
