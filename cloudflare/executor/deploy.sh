@@ -16,6 +16,12 @@
 # the image and the Worker reporting the same commit, so use it instead of
 # calling wrangler directly.
 #
+# The vars only prove what the Worker upload carried. wrangler uploads the
+# Worker before it pushes the images, so a push that fails (2026-10-22,
+# registry "broken pipe") leaves /healthz on the new commit over the old
+# image - and this script exits non-zero. Confirm a deploy with
+# GET /healthz?deep=1 (trigger bearer), which asks the container itself.
+#
 # Usage:
 #   GITHUB_PAT=... ./build.sh          # stages build-context/, writes build-info.json
 #   ./build-founder-os.sh               # stages founder-os-context/ (#215)

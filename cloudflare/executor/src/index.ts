@@ -10,6 +10,7 @@
 // DO NOT DEPLOY without Sean's explicit approval (see README.md).
 
 import { Container, getContainer } from '@cloudflare/containers'
+import { deepHealthz } from './healthz'
 
 interface Env {
   EXECUTOR_CONTAINER: DurableObjectNamespace<ExecutorContainer>
@@ -149,14 +150,14 @@ export default {
     // Unauthenticated liveness probe for the Worker itself (does not wake
     // the container).
     //
-    // It also carries build identity (issue #173). The container answers
-    // the same fields on its own /healthz, but nothing routes to that
-    // path: this handler returns before any container.fetch, deliberately,
-    // so a probe never wakes a standard-1 instance. Reading the vars here
-    // keeps the endpoint free and unauthenticated while still making
-    // "which app commit is live" answerable, which is the whole point of
-    // #173. Deploying without deploy.sh yields nulls rather than a lie.
-    if (request.method === 'GET' && url.pathname === '/healthz') {
+    // It also carries build identity (issue #173), read from the Worker's
+    // own vars so a probe never wakes a standard-1 instance. That makes it
+    // free, but it only proves what the Worker upload carried: wrangler
+    // uploads the Worker before it pushes the container image, so a failed
+    // push leaves this answering the new commit over the old image. The
+    // container's own answer is behind ?deep=1 below. Deploying without
+    // deploy.sh yields nulls rather than a lie.
+    if (request.method === 'GET' && url.pathname === '/healthz' && url.searchParams.get('deep') !== '1') {
       return Response.json({
         ok: true,
         appCommit: env.APP_COMMIT ?? null,
@@ -179,6 +180,20 @@ export default {
     // instance level; the DB-level optimistic UPDATE remains the
     // authoritative lock (same as on the Mac mini today).
     const container = getContainer(env.EXECUTOR_CONTAINER, 'singleton')
+
+    // Deep health: ask the executor container which image it booted from.
+    // Behind the trigger bearer because it starts the singleton if it is
+    // asleep and resets its 45m sleepAfter, so an open version would be a
+    // way for anyone to keep a billable instance awake. The Asks container
+    // only - FounderOS has no singleton to ask, and probing it would
+    // cold-start a per-founder instance that reports a plugin pin, not an
+    // app commit.
+    if (request.method === 'GET' && url.pathname === '/healthz') {
+      return deepHealthz(
+        { appCommit: env.APP_COMMIT ?? null, builtAt: env.BUILT_AT ?? null },
+        () => container.fetch(new Request('http://container/healthz')),
+      )
+    }
 
     if (request.method === 'POST' && url.pathname === '/trigger') {
       const mode = url.searchParams.get('mode') === 'prescan' ? '?mode=prescan' : ''
