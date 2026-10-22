@@ -21,6 +21,26 @@ curl -s https://behalfbot-executor.sean-8a1.workers.dev/healthz
 # {"ok":true,"appCommit":"<vibecodelisboa sha>","builtAt":"<utc>"}
 ```
 
+That answer comes from the Worker's own vars and never wakes the container,
+so it only proves what the Worker upload carried. `wrangler deploy` uploads
+the Worker before it pushes the container image, so a failed push leaves
+`/healthz` reporting the new commit over the old image (2026-10-22). To ask
+the container which image it actually booted, use the deep check. It needs
+the trigger bearer because it starts the singleton if asleep and resets its
+45m idle timer:
+
+```bash
+curl -s -H "Authorization: Bearer $EXECUTOR_TRIGGER_TOKEN" \
+  'https://behalfbot-executor.sean-8a1.workers.dev/healthz?deep=1'
+# {"ok":true,"appCommit":"<worker var>","builtAt":"<worker var>",
+#  "worker":{...},"container":{"appCommit":"<image sha>","builtAt":"<utc>","inFlight":false},
+#  "containerError":null,"inSync":true}
+```
+
+`inSync` is true only when the container's baked `build-info.json` matches the
+Worker's `APP_COMMIT`. A container that cannot be reached answers 503 with
+`container: null` and the reason in `containerError`.
+
 Post-mortem on the stale build: `docs/postmortems/2026-08-19-executor-stale-since-july.md`
 in `scrollinondubs/new-jaxity`.
 
@@ -140,7 +160,8 @@ fails closed instead of deploying to the wrong account.
    without waking a container. A bare `wrangler deploy` still works and
    still ships correct code, but /healthz then answers
    `appCommit: null` and the executor-drift heartbeat reports a deploy
-   owed.
+   owed. Plain /healthz cannot see a failed image push (the Worker vars
+   land first); confirm with `/healthz?deep=1`, which asks the container.
 4. **Smoke test**: seed a test ask on a throwaway repo, `curl -X POST
    .../trigger -H "Authorization: Bearer ..."`, watch `GET /status` until
    the tick completes, confirm the PR opens and the queue row lands in
