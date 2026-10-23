@@ -18,7 +18,7 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { createLedgerClient, isUuid } from './ledger-client.mjs'
 import { isBasicSkill, loadSkill, readPin, stageMaterials } from './plugin.mjs'
 import { stageImageAttachments } from './attachments.mjs'
-import { EnvelopeError, WRITES_BY_SKILL_TYPE, applyWrites, parseEnvelope, validateWrites } from './envelope.mjs'
+import { EnvelopeError, WRITES_BY_SKILL_TYPE, applyWrites, parseEnvelope, reviewFallback, validateWrites } from './envelope.mjs'
 
 export const SESSION_TIMEOUT_MS = 10 * 60 * 1000
 export const MAX_MESSAGE_CHARS = 20000
@@ -199,6 +199,7 @@ export function buildPrompts(session, referenced = session.referenced, safari = 
     '',
     'Answer with exactly one JSON object and nothing else:',
     '{"reply": "<markdown for the founder>", "ledger_writes": [{"method": "<name>", "args": {...}}]}',
+    'When the skill says to end your reply with a fenced block (such as founderos-verdict), that block goes at the end of the reply string, inside this JSON object.',
     allowed.length
       ? `Allowed methods for this ${skill.type}: ${allowed.join(', ')}.`
       : `A ${skill.type} may not write anything: ledger_writes must be empty.`,
@@ -522,6 +523,39 @@ async function stageSafari(workdir, session, deps) {
   }
 }
 
+// A Basic review writes nothing and VCL reads its verdict from the reply, so
+// one that answered in the skill's own format (markdown ending in the verdict
+// block) instead of the envelope still has a usable reply. Every other skill
+// type can write to the ledger, and a reply salvaged from raw text would drop
+// its writes silently, so those fail as before.
+function parseOrFallBack(text, skill, sessionId, log) {
+  try {
+    return parseEnvelope(text)
+  } catch (err) {
+    if (!(err instanceof EnvelopeError) || err.code !== 'parse_error' || skill.type !== 'basic-review') throw err
+    const fallback = reviewFallback(text)
+    if (!fallback) throw err
+    log(JSON.stringify({
+      event: 'founder_os_envelope_fallback',
+      session_id: sessionId,
+      check: err.detail?.check ?? null,
+      card_id: fallback.verdict.card_id,
+      verdict: fallback.verdict.verdict,
+    }))
+    return fallback
+  }
+}
+
+// VCL keeps one error column (fos_sessions.error, free text) and no detail
+// column, and on a failed session nothing there matches the code. So the
+// posted error leads with the code and carries the failed check and the start
+// of the model output after it; outcome.error itself stays the bare code.
+export function reportBody(outcome) {
+  const { error_detail: detail, ...body } = outcome
+  if (!detail) return body
+  return { ...body, error: `${outcome.error}: ${detail.check}: ${detail.message}\n--- model output (first ${detail.excerpt.length} chars) ---\n${detail.excerpt}` }
+}
+
 function runClaude({ args, input, env, cwd, timeoutMs, spawnImpl, claudeBin }) {
   return new Promise((resolve, reject) => {
     const child = spawnImpl(claudeBin, args, { env, cwd, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -569,10 +603,10 @@ export async function executeSession(session, deps) {
   const { client, req, skill, sessionId } = session
   let workdir = null
   let outcome
+  const log = deps.log ?? console.log
   try {
     mkdirSync(deps.workRoot, { recursive: true })
     workdir = mkdtempSync(join(deps.workRoot, 'session-'))
-    const log = deps.log ?? console.log
     const materials = await stageWorkdir(workdir, session, deps)
     log(JSON.stringify({ event: 'founder_os_materials', session_id: sessionId, ...materials }))
     const safari = await stageSafari(workdir, session, deps)
@@ -591,7 +625,7 @@ export async function executeSession(session, deps) {
       spawnImpl: deps.spawnImpl ?? spawn,
       claudeBin: deps.claudeBin ?? 'claude',
     })
-    const envelope = parseEnvelope(result.text)
+    const envelope = parseOrFallBack(result.text, skill, sessionId, log)
     const writes = validateWrites(envelope.writes, { skillType: skill.type, currentStage: req.stage })
     const applied = await applyWrites(client, writes)
     outcome = { session_id: sessionId, status: 'completed', reply: envelope.reply, writes: applied, usage: result.usage }
@@ -600,11 +634,15 @@ export async function executeSession(session, deps) {
       ? err.code
       : 'internal_error'
     outcome = { session_id: sessionId, status: 'failed', error: code, writes: [] }
+    if (err instanceof EnvelopeError && err.detail) {
+      outcome.error_detail = err.detail
+      log(JSON.stringify({ event: 'founder_os_envelope_error', session_id: sessionId, code, ...err.detail }))
+    }
   } finally {
     if (workdir) rmSync(workdir, { recursive: true, force: true })
   }
   try {
-    await client.postSessionResult(outcome)
+    await client.postSessionResult(reportBody(outcome))
   } catch (err) {
     outcome.report_error = err.code || 'report_failed'
   }
