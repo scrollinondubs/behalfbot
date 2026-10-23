@@ -28,6 +28,8 @@ on:
       - 'plugins/dating/scripts/gather-dating-swipe.sh'
       - 'plugins/dating/scheduled-tasks/recovery-hooks.d/dating-emulator-recovery.sh'
       - 'plugins/dating/tests/test-emulator-state.sh'
+      - 'plugins/dating/scripts/dating-swipe-host.sh'
+      - 'plugins/dating/tests/test-swipe-host-control-flags.sh'
       - 'chassis/scripts/bootstrap-audit.sh'
       - 'chassis/scripts/gather-bootstrap-audit.sh'
       - 'chassis/scripts/test-bootstrap-audit-memory.sh'
@@ -84,6 +86,8 @@ on:
       - 'plugins/dating/scripts/gather-dating-swipe.sh'
       - 'plugins/dating/scheduled-tasks/recovery-hooks.d/dating-emulator-recovery.sh'
       - 'plugins/dating/tests/test-emulator-state.sh'
+      - 'plugins/dating/scripts/dating-swipe-host.sh'
+      - 'plugins/dating/tests/test-swipe-host-control-flags.sh'
       - 'chassis/scripts/bootstrap-audit.sh'
       - 'chassis/scripts/gather-bootstrap-audit.sh'
       - 'chassis/scripts/test-bootstrap-audit-memory.sh'
@@ -238,6 +242,16 @@ jobs:
       # locked from unlocked, the gather reports emulator_locked instead of
       # ready, and the recovery hook unlocks rather than restart-looping.
       - run: bash plugins/dating/tests/test-emulator-state.sh
+
+  dating-swipe-host-control-flags:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The swipe wrapper runs from host launchd, outside the dispatcher's
+      # criticality gate, so it reads halt and conservation mode itself. The
+      # suite proves either flag stops a slot, a flag set mid-jitter is caught,
+      # an expired flag lifts, and the jq fallback holds without the library.
+      - run: bash plugins/dating/tests/test-swipe-host-control-flags.sh
 
   chassis-update-mode:
     runs-on: ubuntu-latest
@@ -509,6 +523,7 @@ jobs:
           bash:chassis/scripts/test-credential-expiry.sh
           bash:chassis/scripts/test-claude-oauth-bridge-alert.sh
           bash:plugins/dating/tests/test-emulator-state.sh
+          bash:plugins/dating/tests/test-swipe-host-control-flags.sh
           zsh:chassis/scheduled-tasks/tests/test_state_write_race.sh
           zsh:chassis/scheduled-tasks/tests/test_fire_caps.sh
           "
