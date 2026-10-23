@@ -30,6 +30,7 @@ on:
       - 'plugins/dating/tests/test-emulator-state.sh'
       - 'plugins/dating/scripts/dating-swipe-host.sh'
       - 'plugins/dating/tests/test-swipe-host-control-flags.sh'
+      - 'plugins/dating/tests/test-swipe-host-session-lifecycle.sh'
       - 'chassis/scripts/bootstrap-audit.sh'
       - 'chassis/scripts/gather-bootstrap-audit.sh'
       - 'chassis/scripts/test-bootstrap-audit-memory.sh'
@@ -88,6 +89,7 @@ on:
       - 'plugins/dating/tests/test-emulator-state.sh'
       - 'plugins/dating/scripts/dating-swipe-host.sh'
       - 'plugins/dating/tests/test-swipe-host-control-flags.sh'
+      - 'plugins/dating/tests/test-swipe-host-session-lifecycle.sh'
       - 'chassis/scripts/bootstrap-audit.sh'
       - 'chassis/scripts/gather-bootstrap-audit.sh'
       - 'chassis/scripts/test-bootstrap-audit-memory.sh'
@@ -252,6 +254,16 @@ jobs:
       # suite proves either flag stops a slot, a flag set mid-jitter is caught,
       # an expired flag lifts, and the jq fallback holds without the library.
       - run: bash plugins/dating/tests/test-swipe-host-control-flags.sh
+
+  dating-swipe-host-session-lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The emulator runs only for a session, a low-memory host skips the
+      # session, the model is pinned, and every outcome reaches the state
+      # file the pipeline-health check reads. memory_pressure is stubbed, so
+      # this runs on ubuntu too.
+      - run: bash plugins/dating/tests/test-swipe-host-session-lifecycle.sh
 
   chassis-update-mode:
     runs-on: ubuntu-latest
@@ -524,6 +536,7 @@ jobs:
           bash:chassis/scripts/test-claude-oauth-bridge-alert.sh
           bash:plugins/dating/tests/test-emulator-state.sh
           bash:plugins/dating/tests/test-swipe-host-control-flags.sh
+          bash:plugins/dating/tests/test-swipe-host-session-lifecycle.sh
           zsh:chassis/scheduled-tasks/tests/test_state_write_race.sh
           zsh:chassis/scheduled-tasks/tests/test_fire_caps.sh
           "
