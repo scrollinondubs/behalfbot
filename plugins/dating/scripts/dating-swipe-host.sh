@@ -34,6 +34,11 @@
 # Pause flags: the prompt itself reads HARD_PAUSE / SOFT_PAUSE flags from
 # dating-context/, so we don't need to short-circuit here.
 #
+# Control flags are different: conservation mode and halt are install-wide,
+# and the chassis dispatcher only enforces them for heartbeats it runs. This
+# wrapper runs from launchd, outside the dispatcher, so it checks them itself.
+# Dating is background work, so either flag skips the session.
+#
 # See: <v1-reference-install>#698 follow-up + the installer's #<primary> decision to run
 # dating-stack host-side as a V1-pattern fat-client plugin.
 
@@ -49,6 +54,42 @@ LOG_DIR="$CHASSIS_HOME/logs/scheduled"
 DATE=$(date +%Y-%m-%d)
 LOG_DIR_ROOT="$LOG_DIR"
 mkdir -p "$LOG_DIR_ROOT"
+
+FLAG_DIR="${CUSTOMER_HOME:-$CHASSIS_HOME}/scheduled-tasks"
+CONSERVATION_FILE="$FLAG_DIR/conservation-mode.json"
+HALT_FILE="$FLAG_DIR/halt.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+for _lib in "$SCRIPT_DIR/../../../chassis/scripts/_control-flags.sh" "$CHASSIS_HOME/scripts/_control-flags.sh"; do
+    if [[ -f "$_lib" ]]; then
+        # shellcheck source=/dev/null
+        source "$_lib"
+        break
+    fi
+done
+unset _lib
+
+# flag_on <file> - true when the flag is on. Uses the dispatcher's own reader
+# (auto-lift included) when it is available; otherwise reads .enabled, and an
+# existing file that cannot be parsed counts as on, matching the library.
+flag_on() {
+    if declare -F chassis_control_flag_state >/dev/null; then
+        [[ "$(chassis_control_flag_state "$1")" == "on" ]]
+        return
+    fi
+    [[ -f "$1" ]] || return 1
+    local enabled
+    enabled=$(jq -r '.enabled // false' "$1" 2>/dev/null) || return 0
+    [[ "$enabled" == "true" ]]
+}
+
+# control_flag_blocks - print why this session must not run, or nothing.
+control_flag_blocks() {
+    if flag_on "$HALT_FILE"; then
+        echo "halt"
+    elif flag_on "$CONSERVATION_FILE"; then
+        echo "conservation mode"
+    fi
+}
 
 # SLOT validation. The launchd plists pass 1/2/3 — those are the only valid
 # values. If anything else is passed (e.g. claude itself invoking this script
@@ -110,12 +151,26 @@ trap 'rm -rf "$LOCK_DIR"' EXIT
 
 log "=== dating-swipe-${SLOT} starting ==="
 
+# Checked before and after the jitter, because a flag can flip during the
+# sleep of up to 30 minutes.
+skip_if_flagged() {
+    local why
+    why=$(control_flag_blocks)
+    [[ -n "$why" ]] || return 0
+    log "skip: $why is on ($1). The next slot after it lifts runs normally."
+    log "=== dating-swipe-${SLOT} complete (no-op, $why) ==="
+    exit 0
+}
+skip_if_flagged "before jitter"
+
 # Jitter 0-30 min. Matches the chassis dispatcher's jitter behavior so the
 # bot-detection profile (when sessions fire relative to slot anchor) is
 # preserved across the cutover.
 JITTER_SEC=$((RANDOM % 1800))
 log "jitter: sleeping ${JITTER_SEC}s before gather"
 sleep "$JITTER_SEC"
+
+skip_if_flagged "after jitter"
 
 # Gather: only fire claude if the emulator is actually ready. Without this
 # we'd waste a sonnet invocation when the emulator is down, the gather is
