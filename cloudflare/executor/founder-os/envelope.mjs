@@ -22,12 +22,22 @@ export const WRITES_BY_SKILL_TYPE = {
 
 const STAGE_BOUND = new Set(['add_artifact', 'add_prfaq_version', 'mark_gate_pending', 'record_gate_decision'])
 
+export const EXCERPT_CHARS = 1500
+
+// `detail` says which format check failed (no_json, invalid_json, no_reply,
+// writes_not_list) and carries the start of the model's output, so a failed
+// session can be diagnosed from its VCL row and the container log.
 export class EnvelopeError extends Error {
-  constructor(code, message) {
+  constructor(code, message, detail = null) {
     super(message)
     this.name = 'EnvelopeError'
     this.code = code
+    this.detail = detail
   }
+}
+
+function parseError(check, message, rawText) {
+  return new EnvelopeError('parse_error', message, { check, message, excerpt: String(rawText || '').slice(0, EXCERPT_CHARS) })
 }
 
 function stripFence(text) {
@@ -35,42 +45,138 @@ function stripFence(text) {
   return fenced ? fenced[1] : text
 }
 
-function firstJsonObject(text) {
-  const start = text.indexOf('{')
-  if (start < 0) return null
-  let depth = 0
+// Every balanced top-level {...} span, in order. The envelope is not always
+// the first one: prose before it can hold a brace, and a reply in the skill's
+// own format holds only the verdict object.
+function jsonObjects(text) {
+  const spans = []
+  let from = 0
+  for (;;) {
+    const start = text.indexOf('{', from)
+    if (start < 0) return spans
+    let depth = 0
+    let inString = false
+    let escaped = false
+    let end = -1
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i]
+      if (inString) {
+        if (escaped) escaped = false
+        else if (ch === '\\') escaped = true
+        else if (ch === '"') inString = false
+        continue
+      }
+      if (ch === '"') inString = true
+      else if (ch === '{') depth++
+      else if (ch === '}' && --depth === 0) {
+        end = i
+        break
+      }
+    }
+    if (end < 0) {
+      from = start + 1
+      continue
+    }
+    spans.push(text.slice(start, end + 1))
+    from = end + 1
+  }
+}
+
+// Models sometimes put real newlines or tabs inside a JSON string, most often
+// in a multi-line reply that ends in a fenced block. JSON forbids them; escape
+// them and try again rather than fail the session.
+function escapeControlCharsInStrings(text) {
+  let out = ''
   let inString = false
   let escaped = false
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i]
+  for (const ch of text) {
     if (inString) {
       if (escaped) escaped = false
       else if (ch === '\\') escaped = true
       else if (ch === '"') inString = false
-      continue
-    }
-    if (ch === '"') inString = true
-    else if (ch === '{') depth++
-    else if (ch === '}' && --depth === 0) return text.slice(start, i + 1)
+      else if (ch === '\n') {
+        out += '\\n'
+        continue
+      } else if (ch === '\r') {
+        out += '\\r'
+        continue
+      } else if (ch === '\t') {
+        out += '\\t'
+        continue
+      }
+    } else if (ch === '"') inString = true
+    out += ch
   }
-  return null
+  return out
 }
 
-export function parseEnvelope(rawText) {
-  const candidate = firstJsonObject(stripFence(String(rawText || '')))
-  if (!candidate) throw new EnvelopeError('parse_error', 'no JSON envelope in the model output')
-  let parsed
+function tryJson(text) {
   try {
-    parsed = JSON.parse(candidate)
+    return { value: JSON.parse(text) }
   } catch (err) {
-    throw new EnvelopeError('parse_error', `envelope is not valid JSON: ${err.message}`)
+    try {
+      return { value: JSON.parse(escapeControlCharsInStrings(text)) }
+    } catch {
+      return { error: err }
+    }
   }
-  if (typeof parsed.reply !== 'string' || parsed.reply.trim() === '') {
-    throw new EnvelopeError('parse_error', 'envelope has no reply')
+}
+
+const isObject = v => v !== null && typeof v === 'object' && !Array.isArray(v)
+
+export function parseEnvelope(rawText) {
+  const raw = String(rawText || '')
+  const stripped = stripFence(raw)
+  const candidates = [...new Set([...jsonObjects(stripped), ...jsonObjects(raw)])]
+  if (candidates.length === 0) throw parseError('no_json', 'no JSON envelope in the model output', raw)
+
+  let firstError = null
+  let parsedAny = false
+  for (const candidate of candidates) {
+    const { value, error } = tryJson(candidate)
+    if (error) {
+      firstError ??= error
+      continue
+    }
+    if (!isObject(value)) continue
+    parsedAny = true
+    if (typeof value.reply !== 'string' || value.reply.trim() === '') continue
+    const writes = value.ledger_writes ?? []
+    if (!Array.isArray(writes)) throw parseError('writes_not_list', 'ledger_writes must be a list', raw)
+    return { reply: value.reply, writes }
   }
-  const writes = parsed.ledger_writes ?? []
-  if (!Array.isArray(writes)) throw new EnvelopeError('parse_error', 'ledger_writes must be a list')
-  return { reply: parsed.reply, writes }
+  if (!parsedAny && firstError) {
+    throw parseError('invalid_json', `envelope is not valid JSON: ${firstError.message}`, raw)
+  }
+  const also = firstError ? ` (another object was not valid JSON: ${firstError.message})` : ''
+  throw parseError('no_reply', `envelope has no reply${also}`, raw)
+}
+
+const VERDICT_RE = /```founderos-verdict[^\n]*\n([\s\S]*?)```/g
+const VERDICTS = new Set(['accepted', 'needs_work'])
+
+// The last founderos-verdict block, the way VCL reads it (vibecodelisboa
+// src/lib/founderos/basic.ts parseVerdict), or null if it would not parse there.
+export function findVerdict(text) {
+  const last = Array.from(String(text || '').matchAll(VERDICT_RE)).at(-1)
+  if (!last) return null
+  try {
+    const v = JSON.parse(last[1].trim())
+    if (!isObject(v) || typeof v.card_id !== 'string' || !VERDICTS.has(v.verdict)) return null
+    return { card_id: v.card_id, verdict: v.verdict }
+  } catch {
+    return null
+  }
+}
+
+// A Basic review answered in the skill's own format (markdown ending in the
+// verdict block) instead of the JSON envelope. The review writes nothing and
+// VCL reads the verdict from the reply text, so the whole output is the reply.
+// Returns null when there is no verdict VCL could use.
+export function reviewFallback(rawText) {
+  const verdict = findVerdict(rawText)
+  if (!verdict) return null
+  return { reply: String(rawText).trim(), writes: [], verdict }
 }
 
 // Returns the writes normalised and ready to apply, or throws EnvelopeError.

@@ -94,6 +94,7 @@ export function createFounderOsServer(deps) {
           skill: session.skill.name,
           status: outcome.status,
           error: outcome.error ?? null,
+          errorCheck: outcome.error_detail?.check ?? null,
           writes: outcome.writes.map(w => ({ method: w.method, status: w.status })),
         }
         inFlight = null

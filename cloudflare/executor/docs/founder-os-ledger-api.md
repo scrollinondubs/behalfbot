@@ -254,7 +254,11 @@ or the skip reason.
 - `status` is `"completed"` or `"failed"`.
 - `reply` is the coach's message to the founder, markdown, on completion.
 - `error` is an error code on failure (`envelope_rejected`, `claude_failed`,
-  `timeout`, `parse_error`, ...).
+  `timeout`, `parse_error`, ...). A `parse_error` is followed by the format
+  check that failed (`no_json`, `invalid_json`, `no_reply`,
+  `writes_not_list`), its message, and the first 1,500 characters of the
+  model output: `parse_error: no_reply: envelope has no reply\n--- model
+  output (first N chars) ---\n...`. Match on the prefix, not the whole string.
 - `writes` is one entry per write the skill asked for, in order:
   `{ method, status: "applied" | "rejected" | "failed", id?, error? }`.
 - `session_id` must equal the token's `session_id`, or VCL answers
