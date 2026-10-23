@@ -69,6 +69,7 @@ test('reviewFallback takes text with a verdict VCL can read, and nothing else', 
   assert.equal(reviewFallback('Good work, no verdict here.'), null)
   assert.equal(reviewFallback('x\n```founderos-verdict\n{"card_id": "c", "verdict": "maybe"}\n```'), null)
   assert.equal(reviewFallback('x\n```founderos-verdict\n{not json}\n```'), null)
+  assert.equal(reviewFallback(`{"reply": "Nice "list".\n\n${VERDICT}", "ledger_writes": []}`), null)
 })
 
 // --- executeSession ------------------------------------------------------------

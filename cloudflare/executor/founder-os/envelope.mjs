@@ -172,8 +172,10 @@ export function findVerdict(text) {
 // A Basic review answered in the skill's own format (markdown ending in the
 // verdict block) instead of the JSON envelope. The review writes nothing and
 // VCL reads the verdict from the reply text, so the whole output is the reply.
-// Returns null when there is no verdict VCL could use.
+// Returns null when there is no verdict VCL could use, or when the output is
+// a broken envelope: the student would read its JSON as the reply.
 export function reviewFallback(rawText) {
+  if (String(rawText || '').trim().startsWith('{')) return null
   const verdict = findVerdict(rawText)
   if (!verdict) return null
   return { reply: String(rawText).trim(), writes: [], verdict }
