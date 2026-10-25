@@ -40,10 +40,22 @@
 #   CHASSIS_LIVENESS_STATE       State file path for restart-loop detection.
 #                                Default: $CUSTOMER_HOME/scheduled-tasks/
 #                                container-liveness-state.json
+#   CHASSIS_LIVENESS_REQUIRE_SOCKET
+#                                Set to 1 when the caller KNOWS a docker daemon
+#                                should be reachable - a host-side LaunchAgent
+#                                always does. Turns an unreachable socket from
+#                                a silent no-op into a real issue
+#                                (docker_unreachable, count 1). Unset by
+#                                default so socket-less in-container installs
+#                                stay quiet, which is why the no-op exists.
 #
 # Gather JSON contract:
-#   { "count": N, "issues": [...], "checked": M, "status": "...",
-#     "ts_utc": "..." }
+#   { "count": N, "issues": [...], "checked": M, "blind": true|false,
+#     "status": "...", "ts_utc": "..." }
+#
+# `blind` is the field that makes "I looked and everything is fine" different
+# from "I could not look at all". Both used to emit count=0, and every caller
+# that gated on `count > 0` alone read blindness as health. Gate on `blind`.
 #
 # Issue tags (per container <c>):
 #   <c>_absent            - no such container (never created / removed)
@@ -54,9 +66,11 @@
 #
 # Emits no secrets: only container names and states.
 #
-# docker unreachable is a deliberate NO-OP (count=0, status=docker_unreachable):
+# docker unreachable stays a NO-OP by default (count=0, status=docker_unreachable):
 # a broken socket is gather-docker-prune.sh's job to flag, and on an install
 # that never mounts the socket this heartbeat must not false-alarm every tick.
+# It now also sets blind=true, and a caller that knows better can set
+# CHASSIS_LIVENESS_REQUIRE_SOCKET=1 to make it count.
 
 set -uo pipefail
 
@@ -70,19 +84,26 @@ fi
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 emit() {
-    # $1 count, $2 issues_json, $3 checked, $4 status
+    # $1 count, $2 issues_json, $3 checked, $4 status, $5 blind (true|false)
     jq -n \
         --argjson count "$1" \
         --argjson issues "$2" \
         --argjson checked "$3" \
         --arg status "$4" \
+        --argjson blind "${5:-false}" \
         --arg ts "$TS" \
-        '{count: $count, issues: $issues, checked: $checked, status: $status, ts_utc: $ts}'
+        '{count: $count, issues: $issues, checked: $checked, blind: $blind, status: $status, ts_utc: $ts}'
 }
 
-# --- Cheap no-op gate: docker must be reachable. If not, do not alarm. -------
+# --- Docker must be reachable. Blind either way; only alarm when asked. ------
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-    emit 0 '[]' 0 "docker_unreachable"
+    if [[ "${CHASSIS_LIVENESS_REQUIRE_SOCKET:-0}" == "1" ]]; then
+        # The caller asserted a daemon should be here, so its absence is a
+        # finding, not the socket-less install's deliberate silence.
+        emit 1 '["docker_unreachable"]' 0 "docker_unreachable" true
+    else
+        emit 0 '[]' 0 "docker_unreachable" true
+    fi
     exit 0
 fi
 
@@ -96,7 +117,8 @@ while IFS= read -r line; do
 done <<< "${RAW//,/$'\n'}"
 
 if (( ${#CONTAINERS[@]} == 0 )); then
-    emit 0 '[]' 0 "no_containers_configured"
+    # Nothing to check is also blind: checked=0 is not a clean bill of health.
+    emit 0 '[]' 0 "no_containers_configured" true
     exit 0
 fi
 
@@ -167,4 +189,4 @@ else
     status_out="containers_unhealthy"
 fi
 
-emit "$count" "$issues_json" "$checked" "$status_out"
+emit "$count" "$issues_json" "$checked" "$status_out" false
