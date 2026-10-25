@@ -77,6 +77,32 @@ Any missing env var degrades gracefully: the corresponding surface is
 skipped, a note is added to `warnings`, and the rest of the gather runs.
 The gather never crashes.
 
+### Per-surface status (`surfaces`)
+
+Alongside `warnings`, the gather emits a `surfaces` block giving each of the
+four surfaces a `status` of `ok`, `error`, or `skipped` plus an `error`
+string explaining anything that is not `ok`:
+
+```json
+"surfaces": {
+  "github":       { "status": "error", "error": "gh graphql viewer query failed" },
+  "gmail":        { "status": "skipped", "error": "DAILY_LOG_GMAIL_IDENTITY unset" },
+  "second_brain": { "status": "ok", "error": null },
+  "discord":      { "status": "ok", "error": null }
+}
+```
+
+This exists because `warnings` could not tell the prompt whether an empty
+bucket meant "nothing happened" or "we could not look". Both render as `{}`,
+so the prompt reported a quiet day on a day 8 PRs merged across three repos
+(new-jaxity#307). The prompt now reads `surfaces` first and writes an
+explicit blind-spot line for anything that is not `ok`, rather than narrating
+an absence it cannot vouch for.
+
+`warnings` is retained unchanged for installs whose on-disk
+`daily-log-prompt.md` predates this - bootstrap copies the template once and
+never rewrites it.
+
 ## Customer-install setup
 
 1. Copy the prompt template into the customer install:

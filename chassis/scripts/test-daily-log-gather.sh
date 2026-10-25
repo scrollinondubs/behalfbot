@@ -7,6 +7,9 @@
 #   2. Individual surfaces can be independently disabled via env var absence.
 #   3. Output is parseable JSON in every scenario.
 #   4. The `warnings` array reports each skipped surface.
+#   5. The `surfaces` block reports a per-surface status, and a surface that
+#      was attempted and failed reports `error` rather than a bare empty
+#      bucket the prompt would read as a quiet day (new-jaxity#307).
 #
 # No real API calls: every scenario runs with the required auth env vars
 # unset, so each surface short-circuits into the "skipped, warning added"
@@ -115,6 +118,37 @@ assert_warning_contains() {
     return 0
 }
 
+assert_surface_status() {
+    local name="$1"
+    local surface="$2"
+    local expected="$3"
+    local actual
+    actual=$(jq -r --arg s "$surface" '.surfaces[$s].status // "MISSING"' \
+        "$TMPHOME/last-output.json")
+    if [[ "$actual" != "$expected" ]]; then
+        echo "FAIL [$name] surfaces.$surface.status: expected '$expected', got '$actual'"
+        fail=$((fail + 1))
+        return 1
+    fi
+    return 0
+}
+
+# A surface reporting `error` must say why. An error with a null reason is
+# useless to the prompt, which is required to name the unread source.
+assert_surface_error_nonempty() {
+    local name="$1"
+    local surface="$2"
+    local detail
+    detail=$(jq -r --arg s "$surface" '.surfaces[$s].error // ""' \
+        "$TMPHOME/last-output.json")
+    if [[ -z "$detail" ]]; then
+        echo "FAIL [$name] surfaces.$surface.status is error but .error is empty"
+        fail=$((fail + 1))
+        return 1
+    fi
+    return 0
+}
+
 # ------------------------------------------------------------------------
 # Scenario 1: bare invocation, zero env config. Every surface skips with a
 # warning. All buckets empty. Metrics all zeros.
@@ -142,6 +176,14 @@ if [[ -f "$TMPHOME/last-output.json" ]]; then
     assert_warning_contains "bare" "DAILY_LOG_GMAIL_IDENTITY"
     assert_warning_contains "bare" "DAILY_LOG_SIYUAN_URL"
     assert_warning_contains "bare" "DAILY_LOG_DISCORD_CHANNEL_ID"
+    # Nothing was configured, so nothing was attempted. Every surface must say
+    # `skipped` - NOT `ok`, which would license the prompt to call this a day
+    # on which nothing happened.
+    assert_key "bare" ".surfaces"
+    assert_surface_status "bare" "github" "skipped"
+    assert_surface_status "bare" "gmail" "skipped"
+    assert_surface_status "bare" "second_brain" "skipped"
+    assert_surface_status "bare" "discord" "skipped"
 fi
 
 # ------------------------------------------------------------------------
@@ -158,6 +200,12 @@ if [[ -f "$TMPHOME/last-output.json" ]]; then
         fail=$((fail + 1))
     fi
     assert_empty_array "siyuan-unreachable" ".siyuan_activity"
+    # The load-bearing assertion for new-jaxity#307. SiYuan WAS configured and
+    # WAS attempted; the query failed. second_brain_activity is empty either
+    # way, so an empty bucket cannot carry this - only the status can. `ok`
+    # here is what produced "quiet day" on a day with real activity.
+    assert_surface_status "siyuan-unreachable" "second_brain" "error"
+    assert_surface_error_nonempty "siyuan-unreachable" "second_brain"
 fi
 
 # ------------------------------------------------------------------------
@@ -169,6 +217,38 @@ run_scenario "discord-no-token" \
 if [[ -f "$TMPHOME/last-output.json" ]]; then
     assert_warning_contains "discord-no-token" "DISCORD_TOKEN"
     assert_empty_array "discord-no-token" ".postmortems"
+    # Channel known, credential absent: never attempted, so `skipped`.
+    assert_surface_status "discord-no-token" "discord" "skipped"
+    assert_surface_error_nonempty "discord-no-token" "discord"
+fi
+
+# ------------------------------------------------------------------------
+# Scenario 3b (new-jaxity#307 REGRESSION): GitHub is configured, so the scan
+# IS attempted, and the `gh` call fails. This is the shape of the incident:
+# prs_by_repo comes back `{}` exactly as it would on a day with no PRs, so
+# nothing in the buckets can distinguish "nothing shipped" from "we could not
+# look" - the status has to. A `gh` shim on PATH keeps it offline; a failing
+# `gh api graphql` is precisely what happened on the day 8 merged PRs were
+# reported as a quiet day.
+# ------------------------------------------------------------------------
+mkdir -p "$TMPHOME/fakebin"
+cat >"$TMPHOME/fakebin/gh" <<'FAKEGH'
+#!/bin/bash
+echo "gh: could not authenticate" >&2
+exit 1
+FAKEGH
+chmod +x "$TMPHOME/fakebin/gh"
+run_scenario "github-gh-failing" \
+    PATH="$TMPHOME/fakebin:$PATH" \
+    DAILY_LOG_GH_USER="testuser"
+if [[ -f "$TMPHOME/last-output.json" ]]; then
+    assert_surface_status "github-gh-failing" "github" "error"
+    assert_surface_error_nonempty "github-gh-failing" "github"
+    # Empty buckets, same as a genuinely quiet day. Only the status differs.
+    if [[ "$(jq -r '.prs_by_repo | length' "$TMPHOME/last-output.json")" != "0" ]]; then
+        echo "FAIL [github-gh-failing] expected empty prs_by_repo"
+        fail=$((fail + 1))
+    fi
 fi
 
 # ------------------------------------------------------------------------
