@@ -6,7 +6,6 @@
     "typecheck": "tsc --noEmit",
     "test": "node --test container/*.test.mjs founder-os/test/*.test.mjs test/*.test.mjs",
     "build-context": "bash build.sh",
-    "build-founder-os": "bash build-founder-os.sh",
     "deploy": "bash deploy.sh"
   },
   "dependencies": {

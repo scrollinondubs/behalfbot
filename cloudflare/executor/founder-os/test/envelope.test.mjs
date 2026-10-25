@@ -7,17 +7,15 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { startMockVcl } from './mock-vcl.mjs'
 import { prepareSession, executeSession, buildPrompts } from '../session.mjs'
 import { EXCERPT_CHARS, EnvelopeError, findVerdict, parseEnvelope, reviewFallback } from '../envelope.mjs'
 
-const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'plugin')
 
-const VERDICT = '```founderos-verdict\n{"card_id": "basic-find-where-they-talk", "verdict": "needs_work", "failed": ["Each place shows recent conversation between members, not only announcements or sales posts."]}\n```'
-// The skill's own example reply: markdown ending in the verdict block, no envelope.
-const SKILL_FORMAT = `Your search words are great. "Bookkeeper", "close the books" and "QBO" are insider talk. Can you find a spot where bookkeepers answer each other instead?\n\n${VERDICT}`
+const VERDICT = '```founderos-verdict\n{"card_id": "basic-alpha-card", "verdict": "needs_work", "failed": ["Lorem ipsum dolor sit amet, consectetur adipiscing elit."]}\n```'
+// A reply in a skill's own format: markdown ending in the verdict block, no envelope.
+const SKILL_FORMAT = `Lorem ipsum dolor sit amet. "Alpha", "beta" and "gamma" are a good start. Sed do eiusmod tempor incididunt?\n\n${VERDICT}`
 
 function checkOf(fn) {
   try {
@@ -44,7 +42,7 @@ test('an envelope with real newlines inside the reply string parses', () => {
   assert.throws(() => JSON.parse(raw))
   const env = parseEnvelope(raw)
   assert.equal(env.reply, `Nice list.\n\n${VERDICT}`)
-  assert.deepEqual(findVerdict(env.reply), { card_id: 'basic-find-where-they-talk', verdict: 'needs_work' })
+  assert.deepEqual(findVerdict(env.reply), { card_id: 'basic-alpha-card', verdict: 'needs_work' })
 })
 
 test('each format check that fails is named, with the start of the output', () => {
@@ -64,7 +62,7 @@ test('reviewFallback takes text with a verdict VCL can read, and nothing else', 
   assert.deepEqual(reviewFallback(SKILL_FORMAT), {
     reply: SKILL_FORMAT,
     writes: [],
-    verdict: { card_id: 'basic-find-where-they-talk', verdict: 'needs_work' },
+    verdict: { card_id: 'basic-alpha-card', verdict: 'needs_work' },
   })
   assert.equal(reviewFallback('Good work, no verdict here.'), null)
   assert.equal(reviewFallback('x\n```founderos-verdict\n{"card_id": "c", "verdict": "maybe"}\n```'), null)
@@ -107,10 +105,10 @@ function fakeClaude(text) {
 function run(skill, text) {
   const logs = []
   const deps = {
-    pluginDir: PLUGIN_DIR, workRoot, apiBase: vcl.baseUrl, apiKey: 'sk-ant-test-dedicated-key',
+    workRoot, apiBase: vcl.baseUrl, apiKey: 'sk-ant-test-dedicated-key',
     parentEnv: { PATH: '/usr/bin' }, spawnImpl: fakeClaude(text), log: line => logs.push(JSON.parse(line)),
   }
-  const body = { founder_id: A, stage: 1, skill, message: 'Please review my work on: Find where they talk', session_token: vcl.mintToken(A) }
+  const body = { founder_id: A, stage: 1, skill, message: 'Please review my work on: Alpha card', session_token: vcl.mintToken(A, { skill }) }
   return prepareSession(body, deps)
     .then(session => executeSession(session, deps))
     .then(outcome => ({ outcome, logs, posted: vcl.sessionResults.at(-1) }))
@@ -129,7 +127,7 @@ test('a Basic review answered in the skill format completes with the whole text 
 })
 
 test('a malformed output fails with parse_error and reports the check and an excerpt to VCL', async () => {
-  const text = 'I looked at the three places. Two are busy, one is a vendor forum.'
+  const text = 'Lorem ipsum dolor sit amet. Ut enim ad minim veniam.'
   const { outcome, logs, posted } = await run('founder-os-basic-review', text)
   assert.equal(outcome.status, 'failed')
   assert.equal(outcome.error, 'parse_error')
@@ -162,9 +160,9 @@ test('a coach session never falls back: its writes would be lost', async () => {
 })
 
 test('the system prompt puts a skill\'s fenced block inside the reply string', async () => {
-  const deps = { pluginDir: PLUGIN_DIR, workRoot, apiBase: vcl.baseUrl }
+  const deps = { workRoot, apiBase: vcl.baseUrl }
   const session = await prepareSession(
-    { founder_id: A, stage: 1, skill: 'founder-os-basic-review', message: 'x', session_token: vcl.mintToken(A) },
+    { founder_id: A, stage: 1, skill: 'founder-os-basic-review', message: 'x', session_token: vcl.mintToken(A, { skill: 'founder-os-basic-review' }) },
     deps,
   )
   assert.match(buildPrompts(session).systemPrompt, /founderos-verdict\), that block goes at the end of the reply string, inside this JSON object/)

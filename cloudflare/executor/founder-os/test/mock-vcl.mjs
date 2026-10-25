@@ -7,6 +7,7 @@
 
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
+import { CONTENT_SHA, SKILLS, STAGE_FILES } from './fixtures/content.mjs'
 
 const TABLES = ['artifacts', 'pains', 'interviews', 'audits', 'prfaq_versions', 'gate_decisions', 'stage_progress']
 const AUDIT_TARGETS = new Set(['artifacts', 'pains', 'interviews', 'prfaq_versions'])
@@ -25,8 +26,10 @@ export async function startMockVcl() {
   const tokens = new Map()
   const requests = []
   const sessionResults = []
-  // GET /content/stage answers 404, as a VCL without the route does, until a
-  // test sets a body or a handler (req, url, send) => void.
+  // GET /content/skill and /content/stage serve the synthetic fixtures
+  // (fixtures/content.mjs) for the token's skill, as VCL serves the session's,
+  // until a test sets a body or a handler (req, url, send) => void.
+  let skillContent = null
   let stageContent = null
   // GET /safari/corpus works the same way: 404 until a test serves something.
   let safariCorpus = null
@@ -55,12 +58,16 @@ export async function startMockVcl() {
       rows[table].push(row)
       return row
     },
-    mintToken(founder_id, { ttlMs = 15 * 60 * 1000 } = {}) {
+    // Like VCL, a token is minted for one session and so one skill.
+    mintToken(founder_id, { ttlMs = 15 * 60 * 1000, skill = null } = {}) {
       const token = `tok_${randomUUID().replace(/-/g, '')}`
-      tokens.set(token, { founder_id, session_id: randomUUID(), expires_at: new Date(Date.now() + ttlMs).toISOString() })
+      tokens.set(token, { founder_id, session_id: randomUUID(), expires_at: new Date(Date.now() + ttlMs).toISOString(), skill })
       return token
     },
     tokenInfo: token => tokens.get(token),
+    serveSkillContent(value) {
+      skillContent = value
+    },
     serveStageContent(value) {
       stageContent = value
     },
@@ -108,12 +115,24 @@ export async function startMockVcl() {
       const p = url.pathname
       const m = req.method
 
-      if (m === 'GET' && p === '/me') return send(200, info)
+      if (m === 'GET' && p === '/me') {
+        const { skill: _skill, ...me } = info
+        return send(200, me)
+      }
       if (m === 'GET' && p === '/founder') return send(200, founders.get(fid))
+      if (m === 'GET' && p === '/content/skill') {
+        if (typeof skillContent === 'function') return skillContent(req, url, send)
+        if (skillContent !== null) return send(200, skillContent)
+        if (!info.skill || !Object.hasOwn(SKILLS, info.skill)) return fail(404, 'not_found')
+        return send(200, { base_sha: CONTENT_SHA, name: info.skill, text: SKILLS[info.skill] })
+      }
       if (m === 'GET' && p === '/content/stage') {
-        if (stageContent === null) return fail(404, 'not_found')
         if (typeof stageContent === 'function') return stageContent(req, url, send)
-        return send(200, stageContent)
+        if (stageContent !== null) return send(200, stageContent)
+        // VCL serves the venture's track; here the session's skill stands in for it.
+        const track = String(info.skill).startsWith('founder-os-basic-') ? 'basic' : 'advanced'
+        const files = STAGE_FILES[track][Number(url.searchParams.get('stage'))] ?? []
+        return send(200, { base_sha: CONTENT_SHA, files })
       }
       if (m === 'GET' && p === '/safari/corpus') {
         if (safariCorpus === null) return fail(404, 'not_found')

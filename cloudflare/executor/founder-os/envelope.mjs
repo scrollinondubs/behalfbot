@@ -10,7 +10,7 @@ export const MAX_WRITES = 25
 
 const COACH_WRITES = ['add_artifact', 'add_pain', 'add_interview', 'add_prfaq_version', 'mark_gate_pending']
 
-// Keyed by the executor's skill type (plugin.mjs loadSkill). A Basic review
+// Keyed by the executor's skill type (content.mjs parseSkill). A Basic review
 // only answers: VCL reads its verdict block and records the card status.
 export const WRITES_BY_SKILL_TYPE = {
   'stage-skill': COACH_WRITES,

@@ -186,8 +186,8 @@ export default {
     // asleep and resets its 45m sleepAfter, so an open version would be a
     // way for anyone to keep a billable instance awake. The Asks container
     // only - FounderOS has no singleton to ask, and probing it would
-    // cold-start a per-founder instance that reports a plugin pin, not an
-    // app commit.
+    // cold-start a per-founder instance that reports no app commit at all,
+    // only that its content comes from VCL.
     if (request.method === 'GET' && url.pathname === '/healthz') {
       return deepHealthz(
         { appCommit: env.APP_COMMIT ?? null, builtAt: env.BUILT_AT ?? null },

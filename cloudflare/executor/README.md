@@ -205,19 +205,20 @@ VCL server  -> POST /founder-os/sessions   (Bearer FOUNDER_OS_TRIGGER_TOKEN)
   rejects the whole envelope.
 - **One founder per instance, one session per instance.** `max_instances: 5`
   caps concurrent founders. Sessions are capped at 10 minutes.
-- **Plugin pin.** `FOUNDER_OS_PIN` follows the `chassis/PLUGINS_PIN` rules
-  (`<tag> <40-hex-sha>`, tag must still resolve to the SHA).
-  `build-founder-os.sh` stages the pinned `founder-os/` into
-  `founder-os-context/` (gitignored). With no pin line every session
-  answers `503 plugin_unpinned` and the image still builds, so Asks deploys
-  are not blocked.
-- **Skill types.** `plugin.mjs` maps the plugin's frontmatter `type` to the
+- **No content in the image.** The image carries no skills, cards or gates.
+  Each session fetches its skill (`GET /content/skill`, the one VCL minted
+  the token for) and its stage's cards and gate (`GET /content/stage`) from
+  VCL over the session token. VCL is the only copy, so a card edit there
+  reaches the next session with no release. No skill is `404
+  skill_not_found`; no cards fails the session with `content_unavailable`
+  (there is nothing to fall back to).
+- **Skill types.** `content.mjs` maps the skill's frontmatter `type` to the
   executor's write allowlist (`envelope.mjs`): `stage-skill`,
   `coach-skill` (alias `coach`), `auditor-skill` (alias `auditor`), and
   `basic-skill`, which also needs `role: coach` (writes like a coach) or
   `role: review` (no writes; VCL reads the verdict block in the reply).
-- **Session materials.** Advanced skills get `core/stage-N/` as `cards/`
-  and their gate as `gate-<id>.md`. Basic skills get `basic/stage-N/` and
+- **Session materials.** Advanced skills get VCL's `core/stage-N/` files as
+  `cards/` and `gates/stage-N-<slug>.md` as `gate-<file>`. Basic skills get `basic/stage-N/` and
   `basic/gates/stage-N-*.md` at the same paths, so the skill's
   `$FOUNDER_OS_DIR/basic/...` reads resolve against the workdir.
 - **Images.** A referenced artifact whose `meta` has a `blob_url` and an
@@ -229,10 +230,10 @@ VCL server  -> POST /founder-os/sessions   (Bearer FOUNDER_OS_TRIGGER_TOKEN)
   prompt says `attached_image_error` and the skill asks for a resend.
 - **Tests:** `npm test` (node:test, no network). `founder-os/test/isolation.test.mjs`
   runs founders A and B against `founder-os/test/mock-vcl.mjs`, which
-  implements the contract.
+  implements the contract and serves synthetic placeholder skills and cards
+  (`founder-os/test/fixtures/content.mjs`).
 
-Deploy additions (gated like everything else here): run
-`./build-founder-os.sh` before `./deploy.sh`, and
+Deploy additions (gated like everything else here):
 `wrangler secret put FOUNDER_OS_TRIGGER_TOKEN` (mint fresh, store in
 Vaultwarden, give the same value to VCL's server env). Do not put any other
 secret into the FounderOS container.

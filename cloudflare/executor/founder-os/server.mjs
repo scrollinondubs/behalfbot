@@ -15,7 +15,6 @@
 
 import { createServer } from 'node:http'
 import { pathToFileURL } from 'node:url'
-import { readPin } from './plugin.mjs'
 import { SessionError, executeSession, prepareSession } from './session.mjs'
 
 const MAX_BODY_BYTES = 256 * 1024
@@ -51,8 +50,7 @@ export function createFounderOsServer(deps) {
     }
 
     if (req.method === 'GET' && req.url === '/healthz') {
-      const pin = readPin(deps.pluginDir)
-      return respond(200, { ok: true, inFlight: inFlight !== null, plugin: pin.pinned ? { tag: pin.tag, sha: pin.sha } : null })
+      return respond(200, { ok: true, inFlight: inFlight !== null, content: 'vcl' })
     }
 
     if (req.method === 'GET' && req.url === '/status') {
@@ -112,7 +110,6 @@ export function createFounderOsServer(deps) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const { server } = createFounderOsServer({
-    pluginDir: process.env.FOUNDER_OS_PLUGIN_DIR || '/app/founder-os-plugin',
     workRoot: process.env.FOUNDER_OS_WORK_ROOT || '/tmp/founder-os-work',
     apiBase: process.env.FOUNDER_OS_VCL_API_BASE,
     apiKey: process.env.BEHALFBOT_ANTHROPIC_API_KEY,

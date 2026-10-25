@@ -32,8 +32,10 @@ student clicks "start coach session" in the VCL dashboard
         { founder_id, stage, skill, message?, artifact_refs?, focus?, session_token: T }
     Worker -> FounderOSContainer instance named by founder_id
       shim -> VCL  GET  /me                         (Bearer T)  must equal founder_id
+      shim -> VCL  GET  /content/skill              (Bearer T)  the session's skill
       shim -> VCL  GET  /founder, /stage-progress, ... (context prefetch)
       shim <- 202 to the Worker, then runs claude in the background
+      shim -> VCL  GET  /content/stage?stage=N      (Bearer T)  the stage's cards and gate
       shim -> VCL  GET  /safari/corpus              (Bearer T)  only with focus; 404 = skip
       shim -> VCL  POST /artifacts, /pains, ...     (writes the skill asked for)
       shim -> VCL  POST /session/result             (reply + write outcomes)
@@ -47,7 +49,7 @@ for what the executor does with it.
 
 The Worker answers 400, 403, 404, 409 or 503 synchronously when the session
 cannot start (bad input, token/founder mismatch, stage mismatch, unknown skill,
-plugin not pinned). Once it answers 202, the outcome arrives only through
+VCL unable to serve the skill). Once it answers 202, the outcome arrives only through
 `POST /session/result`.
 
 ## Base URL and auth
@@ -79,8 +81,8 @@ plugin not pinned). Once it answers 202, the outcome arrives only through
 2. **Another tenant's row is a row that does not exist.** A lookup, audit target
    or evidence ref naming a row owned by a different founder answers exactly
    what a nonexistent id answers: `404 not_found`. The response must not say
-   whether the row exists elsewhere. This matches the convention in
-   `founder-os/founder_ledger/interface.py`.
+   whether the row exists elsewhere. This matches the convention of the
+   founder ledger interface VCL implements.
 3. **Rows come back with their `founder_id`**, as the interface returns them.
    The executor checks every returned row against the token's founder and
    aborts the session (`tenant_mismatch`) if one ever differs. That is a
@@ -111,7 +113,7 @@ Every error is JSON: `{ "error": "<code>", "message": "<human text>" }`.
 
 ## Endpoints
 
-Each maps to one method of `founder_ledger/interface.py`. Request and response
+Each maps to one method of the founder ledger interface (in VCL). Request and response
 fields use the interface's snake_case names and row shapes: ids are UUID
 strings, timestamps ISO-8601 UTC, JSON columns decoded, 0/1 columns booleans.
 
@@ -172,25 +174,47 @@ request.
 | `GET /gate-decisions` | `list_gate_decisions` | `?stage=` (optional) | `{ rows: [...] }` |
 | `POST /gate-decisions` | `record_gate_decision` | `{ stage, gate_id, decision, decided_by, evidence, rationale, sean_signoff?, routes_to_stage? }` | 201, decision row. 404 if any evidence ref is not this founder's row. |
 
-### Stage content
+### Session content
+
+VCL is the only copy of FounderOS skills and cards. The executor image holds
+none, so every session reads both from these routes.
 
 | Method and path | Body / query | Response |
 |---|---|---|
+| `GET /content/skill` | none | `{ base_sha, name, text }` |
 | `GET /content/stage` | `?stage=` (required) | `{ base_sha, files: [{ path, text }] }` |
 
-Not a ledger row. The card files and gate file of one stage on the session
-venture's track, whole files (frontmatter and Coach checks included) with the
-admin's edits from VCL applied, at their plugin paths: `basic/stage-N/<card>.md`
-and `basic/gates/stage-N-<slug>.md`. `base_sha` is the behalfbot-plugins commit
-VCL vendored. An Advanced venture gets `files: []`. A missing or out-of-track
-stage is `400 bad_request`.
+Neither is a ledger row. `base_sha` identifies the content version VCL holds.
 
-The executor asks only for Basic skills and writes the files into the session
-workdir in place of its pinned copies. It uses them only if every file is
-safe: a path in that stage's card dir or its gate file, `.md`, at most 64 KB,
-at most 32 files, at least one card. Otherwise, or on any error or a 5 second
-timeout, it copies the pinned files exactly as before and the session goes on.
-Each session logs one `founder_os_materials` line saying which it used.
+`/content/skill` answers the skill VCL minted the token for, whole `SKILL.md`
+with its frontmatter. It takes no name from the request, so a token can only
+ever read its own session's skill. A session whose skill VCL does not have is
+`404 not_found`. The executor fetches it in the preflight, before the
+founder context, with a 5 second timeout, and refuses the session with:
+
+- `404 skill_not_found` on a 404, or when the text is not a well-formed skill
+  of a known type whose frontmatter `name` is the requested skill
+- `409 skill_mismatch` when `name` is not the skill in the session request
+- a 5xx on any other error or the timeout
+
+`/content/stage` answers the card files and gate file of one stage on the
+session venture's track, whole files (frontmatter and Coach checks included)
+with the admin's edits from VCL applied. Paths by track:
+
+- Basic and Post-revenue: `basic/stage-N/<card>.md` and
+  `basic/gates/stage-N-<slug>.md`
+- Advanced: `core/stage-N/<card>.md` and `gates/stage-N-<slug>.md`
+
+A missing or out-of-track stage is `400 bad_request`.
+
+The executor fetches it after the 202, with a 5 second timeout, and writes the
+files into the session workdir: Basic at the same paths, Advanced as
+`cards/<card>.md` and `gate-stage-N-<slug>.md`. It uses them only if every file
+is safe: a path in that stage's card dir or its gate file for the skill's
+track, `.md`, at most 64 KB, at most 32 files, at least one card. Otherwise,
+or on any error or the timeout, the session fails with `content_unavailable`
+before claude runs: there is no copy to fall back to. Each session logs one
+`founder_os_materials` line with the file count or the reason.
 
 ### Safari corpus
 
@@ -305,6 +329,8 @@ Extra executor-side rules, on top of VCL's:
       with two seeded founders.
 - [ ] `GET /safari/corpus` returns only the token's founder's Safari work,
       capped at about 4 MB with `truncated` set when cut.
+- [ ] `GET /content/skill` serves the token session's own skill and nothing else;
+      `GET /content/stage` serves every track, Advanced included.
 - [ ] Call the Worker's `POST /founder-os/sessions` with
       `FOUNDER_OS_TRIGGER_TOKEN` from the server side only, never from the
       browser.
