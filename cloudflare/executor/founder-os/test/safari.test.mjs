@@ -8,7 +8,6 @@ import { PassThrough } from 'node:stream'
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { startMockVcl } from './mock-vcl.mjs'
 import {
@@ -17,7 +16,7 @@ import {
 } from '../session.mjs'
 import { createFounderOsServer } from '../server.mjs'
 
-const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'plugin')
+const SKILL = 'founder-os-basic-coach'
 const API_KEY = 'sk-ant-test-dedicated-key'
 
 let vcl, A, tokenA, workRoot
@@ -25,7 +24,7 @@ let vcl, A, tokenA, workRoot
 beforeEach(async () => {
   vcl = await startMockVcl()
   A = vcl.addFounder({ stage: 1, name: 'Founder A' })
-  tokenA = vcl.mintToken(A)
+  tokenA = vcl.mintToken(A, { skill: SKILL })
   workRoot = mkdtempSync(join(tmpdir(), 'fos-safari-test-'))
 })
 
@@ -65,11 +64,11 @@ function fakeClaude(envelope = { reply: 'ok', ledger_writes: [] }) {
 }
 
 function deps(extra = {}) {
-  return { pluginDir: PLUGIN_DIR, workRoot, apiBase: vcl.baseUrl, apiKey: API_KEY, parentEnv: { PATH: '/usr/bin' }, ...extra }
+  return { workRoot, apiBase: vcl.baseUrl, apiKey: API_KEY, parentEnv: { PATH: '/usr/bin' }, ...extra }
 }
 
 function body(extra = {}) {
-  return { founder_id: A, stage: 1, skill: 'founder-os-basic-coach', message: 'What did I find in the bakery thread?', session_token: tokenA, ...extra }
+  return { founder_id: A, stage: 1, skill: SKILL, message: 'What did I find in the bakery thread?', session_token: tokenA, ...extra }
 }
 
 const system = call => call.args[call.args.indexOf('--append-system-prompt') + 1]
@@ -243,7 +242,7 @@ test('a long focus item is cut in bytes and points at its file', async () => {
   // Three bytes a char: a char cap of the same number would blow the limit.
   for (const text of ['word '.repeat(60000), '\u20ac'.repeat(100000)]) {
     vcl.serveSafariCorpus({ threads: [{ id: 'big', title: 'Big', text }] })
-    tokenA = vcl.mintToken(A)
+    tokenA = vcl.mintToken(A, { skill: SKILL })
     const { outcome, call } = await run({ request: { focus: { type: 'thread', id: 'big' } } })
     assert.equal(outcome.status, 'completed')
     assert.ok(call.contents['safari/threads/big.md'].includes(text), 'the file keeps the whole text')
@@ -257,7 +256,7 @@ test('a long focus item is cut in bytes and points at its file', async () => {
 test('the user prompt goes on stdin, so a prompt past the 128 KB argv cap still reaches claude', async () => {
   const text = 'pain '.repeat(40000)
   vcl.serveSafariCorpus({ threads: [{ id: 'big', title: 'Big', text }] })
-  tokenA = vcl.mintToken(A)
+  tokenA = vcl.mintToken(A, { skill: SKILL })
   const message = 'x'.repeat(20000)
   const { outcome, call } = await run({ request: { message, focus: { type: 'thread', id: 'big' } } })
   assert.equal(outcome.status, 'completed')
@@ -275,7 +274,7 @@ test('a focus id that is not in the corpus, or with no corpus, tells the model i
   assert.equal(safari.focus_found, false)
 
   vcl.serveSafariCorpus(null)
-  tokenA = vcl.mintToken(A)
+  tokenA = vcl.mintToken(A, { skill: SKILL })
   ;({ outcome, call } = await run({ request: { focus: { type: 'thread', id: 'th-1' } } }))
   assert.equal(outcome.status, 'completed')
   assert.match(prompt(call), /The student has thread `th-1` open, but it could not be loaded\./)
@@ -296,7 +295,7 @@ test('a bad focus is refused before any VCL call', async () => {
   }
   assert.equal(vcl.requests.length, 0)
   for (const focus of [undefined, null]) {
-    const session = await prepareSession(body({ focus, session_token: vcl.mintToken(A) }), deps())
+    const session = await prepareSession(body({ focus, session_token: vcl.mintToken(A, { skill: SKILL }) }), deps())
     assert.equal(session.req.focus, null)
   }
 })
@@ -334,7 +333,7 @@ test('a VCL error, a bad shape or a hang also skip the corpus', async () => {
     [(req, url, send) => send(200, { threads: 'nope' }), 'bad_shape'],
   ]) {
     vcl.serveSafariCorpus(serve)
-    tokenA = vcl.mintToken(A)
+    tokenA = vcl.mintToken(A, { skill: SKILL })
     const { outcome, call, safari } = await run()
     assert.equal(outcome.status, 'completed', reason)
     assert.ok(!call.files.some(f => f.startsWith('safari/')), reason)
@@ -343,7 +342,7 @@ test('a VCL error, a bad shape or a hang also skip the corpus', async () => {
 
   const hang = (url, init) => (String(url).includes('/safari/corpus') ? new Promise(() => {}) : fetch(url, init))
   vcl.serveSafariCorpus(CORPUS)
-  tokenA = vcl.mintToken(A)
+  tokenA = vcl.mintToken(A, { skill: SKILL })
   const { outcome, safari } = await run({ extraDeps: { fetchImpl: hang, corpusFetchTimeoutMs: 30 } })
   assert.equal(outcome.status, 'completed')
   assert.equal(safari.skipped, 'timeout')

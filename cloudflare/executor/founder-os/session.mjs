@@ -1,10 +1,15 @@
 // One FounderOS coach session (behalfbot#215).
 //
 // prepareSession runs synchronously inside the HTTP request so a bad session
-// fails with a real status code: request shape, plugin pin, skill, token
-// identity, founder stage, artifact refs. executeSession then runs claude in
-// the background, applies the envelope's writes through the token-scoped
-// client, and reports back through POST /session/result.
+// fails with a real status code: request shape, token identity, the skill
+// VCL serves for this session, founder stage, artifact refs. executeSession
+// then fetches the stage's cards from VCL, runs claude in the background,
+// applies the envelope's writes through the token-scoped client, and reports
+// back through POST /session/result.
+//
+// The image holds no FounderOS content. The skill and the cards come from VCL
+// per session (content.mjs), over the same token as the ledger, so an edit in
+// VCL reaches the next session with no release.
 //
 // The model never holds the session token or any network tool. It sees the
 // founder's context inline, can Read the stage's cards, the skill and any
@@ -13,10 +18,10 @@
 // using a client that can only ever act as one founder.
 
 import { spawn } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import { createLedgerClient, isUuid } from './ledger-client.mjs'
-import { isBasicSkill, loadSkill, readPin, stageMaterials } from './plugin.mjs'
+import { SKILL_NAME_RE, isBasicSkill, parseSkill, stageLayout } from './content.mjs'
 import { stageImageAttachments } from './attachments.mjs'
 import { EnvelopeError, WRITES_BY_SKILL_TYPE, applyWrites, parseEnvelope, reviewFallback, validateWrites } from './envelope.mjs'
 
@@ -24,7 +29,7 @@ export const SESSION_TIMEOUT_MS = 10 * 60 * 1000
 export const MAX_MESSAGE_CHARS = 20000
 export const MAX_ARTIFACT_REFS = 20
 
-// VCL's /content/stage: Basic card files run about 3 KB, a stage has a few.
+// VCL's /content/stage: card files run about 3 KB, a stage has a few.
 export const MAX_STAGE_FILE_BYTES = 64 * 1024
 export const MAX_STAGE_FILES = 32
 export const CONTENT_FETCH_TIMEOUT_MS = 5000
@@ -101,14 +106,27 @@ function asSessionError(err, fallbackCode) {
   return new SessionError(502, fallbackCode, err?.message)
 }
 
+// The session's skill as VCL serves it. VCL answers the skill it minted the
+// token for, so a name that differs from the request is a VCL bug or a
+// mixed-up token, and the session stops rather than run the wrong skill.
+async function fetchSkill(client, name, deps) {
+  let payload
+  try {
+    payload = await fetchWithTimeout(signal => client.contentSkill({ signal }), deps.contentFetchTimeoutMs ?? CONTENT_FETCH_TIMEOUT_MS)
+  } catch (err) {
+    if (err?.status === 404) throw new SessionError(404, 'skill_not_found', `no skill ${name}`)
+    throw asSessionError(err, 'content_unavailable')
+  }
+  if (payload?.name !== name) throw new SessionError(409, 'skill_mismatch', `VCL served ${String(payload?.name)} for a ${name} session`)
+  const skill = parseSkill(name, payload.text)
+  if (!skill) throw new SessionError(404, 'skill_not_found', `no skill ${name}`)
+  return skill
+}
+
 export async function prepareSession(body, deps) {
   const req = validateRequest(body)
 
-  const pin = readPin(deps.pluginDir)
-  if (!pin.pinned) throw new SessionError(503, 'plugin_unpinned', 'no founder-os release is pinned in this image')
-
-  const skill = loadSkill(deps.pluginDir, req.skillName)
-  if (!skill) throw new SessionError(404, 'skill_not_found', `no skill ${req.skillName}`)
+  if (!SKILL_NAME_RE.test(req.skillName)) throw new SessionError(404, 'skill_not_found', `no skill ${req.skillName}`)
 
   const client = createLedgerClient({ baseUrl: deps.apiBase, token: req.token, fetchImpl: deps.fetchImpl })
 
@@ -125,6 +143,8 @@ export async function prepareSession(body, deps) {
     throw new SessionError(403, 'token_expired', 'the session token has expired')
   }
   client.bind(me.founder_id)
+
+  const skill = await fetchSkill(client, req.skillName, deps)
 
   try {
     const founder = await client.getFounder()
@@ -153,7 +173,7 @@ export async function prepareSession(body, deps) {
       gate_decisions: await client.listGateDecisions({ stage: req.stage }),
       ...(skill.type === 'auditor' ? { audits: await client.listAudits() } : {}),
     }
-    return { req, skill, pin, client, sessionId: me.session_id, context, referenced }
+    return { req, skill, client, sessionId: me.session_id, context, referenced }
   } catch (err) {
     throw asSessionError(err, 'context_fetch_failed')
   }
@@ -254,17 +274,16 @@ export function buildClaudeArgs({ workdir, systemPrompt, model }) {
   ]
 }
 
-// The files VCL serves for a Basic stage, if every one of them is safe to
-// write: a path in this stage's card dir or its gate file, markdown, under the
-// size cap, no repeats, at least one card. Anything else returns a reason and
-// the session uses the pinned copies; one bad file rejects the whole set, so a
-// workdir never mixes VCL and pinned text.
-export function validStageFiles(payload, stage) {
+// The files VCL serves for a stage, if every one of them is safe to write: a
+// path in this stage's card dir or its gate file for the skill's track,
+// markdown, under the size cap, no repeats, at least one card. Anything else
+// returns a reason and the session fails; one bad file rejects the whole set.
+// Returned paths are the workdir paths (content.mjs stageLayout).
+export function validStageFiles(payload, stage, skill) {
   const files = payload?.files
   if (!Array.isArray(files) || files.length === 0) return { reason: 'no_files' }
   if (files.length > MAX_STAGE_FILES) return { reason: 'too_many_files' }
-  const card = new RegExp(`^basic/stage-${stage}/[a-z0-9]+(?:-[a-z0-9]+)*\\.md$`)
-  const gate = new RegExp(`^basic/gates/stage-${stage}-[a-z0-9]+(?:-[a-z0-9]+)*\\.md$`)
+  const { card, gate, to } = stageLayout(stage, skill)
   const seen = new Set()
   for (const file of files) {
     const path = file?.path
@@ -276,7 +295,7 @@ export function validStageFiles(payload, stage) {
   }
   if (!files.some(f => card.test(f.path))) return { reason: 'no_cards' }
   const baseSha = typeof payload.base_sha === 'string' && /^[0-9a-f]{7,40}$/.test(payload.base_sha) ? payload.base_sha : null
-  return { files: files.map(f => ({ path: f.path, text: f.text })), baseSha }
+  return { files: files.map(f => ({ path: to(f.path), text: f.text })), baseSha }
 }
 
 // Races the request against a timer, so a fetch that ignores its abort
@@ -297,14 +316,14 @@ async function fetchWithTimeout(run, timeoutMs) {
   }
 }
 
-// Never throws: a VCL error, a bad answer or a timeout means the pinned files.
+// Never throws: a VCL error, a bad answer or a timeout comes back as a reason.
 async function fetchStageFiles(session, deps) {
   try {
     const payload = await fetchWithTimeout(
       signal => session.client.contentStage(session.req.stage, { signal }),
       deps.contentFetchTimeoutMs ?? CONTENT_FETCH_TIMEOUT_MS,
     )
-    return validStageFiles(payload, session.req.stage)
+    return validStageFiles(payload, session.req.stage, session.skill)
   } catch (err) {
     return { reason: err?.code || 'fetch_failed' }
   }
@@ -319,33 +338,19 @@ export function writeWorkdirFiles(workdir, files) {
   }
 }
 
-function copyPinnedFiles(workdir, session, deps) {
-  const { cards, gates } = stageMaterials(deps.pluginDir, session.req.stage, session.skill)
-  for (const { from, to } of [...cards, ...gates]) {
-    mkdirSync(dirname(join(workdir, to)), { recursive: true })
-    copyFileSync(from, join(workdir, to))
+// Every session reads its stage's cards from VCL. There is no copy in the
+// image to fall back to, so no cards means no session: coaching without the
+// cards would answer from nothing.
+async function stageWorkdir(workdir, session, deps, log) {
+  const fetched = await fetchStageFiles(session, deps)
+  if (!fetched.files) {
+    log(JSON.stringify({ event: 'founder_os_materials', session_id: session.sessionId, source: 'vcl', reason: fetched.reason }))
+    throw new SessionError(502, 'content_unavailable', `stage files: ${fetched.reason}`)
   }
-}
-
-// Basic sessions read the stage's cards from VCL, so an admin's edit reaches
-// the coach without a plugins release. Advanced and every skill stay pinned.
-async function stageWorkdir(workdir, session, deps) {
-  let materials = { source: 'pin', reason: 'advanced' }
-  if (isBasicSkill(session.skill)) {
-    const fetched = await fetchStageFiles(session, deps)
-    if (fetched.files) {
-      writeWorkdirFiles(workdir, fetched.files)
-      materials = { source: 'vcl', base_sha: fetched.baseSha, files: fetched.files.length }
-    } else {
-      materials = { source: 'pin', reason: fetched.reason }
-    }
-  }
-  if (materials.source === 'pin') copyPinnedFiles(workdir, session, deps)
+  writeWorkdirFiles(workdir, fetched.files)
+  log(JSON.stringify({ event: 'founder_os_materials', session_id: session.sessionId, source: 'vcl', base_sha: fetched.baseSha, files: fetched.files.length }))
   mkdirSync(join(workdir, 'skill'))
-  // Written from the text already loaded, so the model reads what the
-  // prompt quoted rather than following a path back into the plugin tree.
   writeFileSync(join(workdir, 'skill', 'SKILL.md'), session.skill.text)
-  return materials
 }
 
 // --- the Safari corpus --------------------------------------------------------
@@ -607,8 +612,7 @@ export async function executeSession(session, deps) {
   try {
     mkdirSync(deps.workRoot, { recursive: true })
     workdir = mkdtempSync(join(deps.workRoot, 'session-'))
-    const materials = await stageWorkdir(workdir, session, deps)
-    log(JSON.stringify({ event: 'founder_os_materials', session_id: sessionId, ...materials }))
+    await stageWorkdir(workdir, session, deps, log)
     const safari = await stageSafari(workdir, session, deps)
     log(JSON.stringify({ event: 'founder_os_safari', session_id: sessionId, ...safari.log }))
     const referenced = await stageImageAttachments(session.referenced, workdir, {

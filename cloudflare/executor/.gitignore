@@ -3,6 +3,7 @@
 build-context/
 node_modules/
 .wrangler/
-# Staged by build-founder-os.sh from the pinned behalfbot-plugins release.
+# Left on build hosts by the retired build-founder-os.sh. It holds FounderOS
+# content that must never be committed here; the image no longer uses it.
 founder-os-context/
 .founder-os-staging.*/

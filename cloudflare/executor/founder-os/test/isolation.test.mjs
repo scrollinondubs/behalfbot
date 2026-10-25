@@ -13,14 +13,13 @@ import { EventEmitter } from 'node:events'
 import { PassThrough } from 'node:stream'
 import { mkdtempSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { startMockVcl } from './mock-vcl.mjs'
 import { createLedgerClient, LedgerApiError } from '../ledger-client.mjs'
 import { prepareSession, executeSession, SessionError, DISALLOWED_TOOLS } from '../session.mjs'
 import { createFounderOsServer } from '../server.mjs'
 
-const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'plugin')
+const SKILL = 'founder-os-stage-1-alpha'
 const API_KEY = 'sk-ant-test-dedicated-key'
 
 let vcl, A, B, tokenA, workRoot, bArtifact, bInterview, aArtifact
@@ -32,7 +31,7 @@ beforeEach(async () => {
   aArtifact = vcl.seed('artifacts', A, { stage: 1, kind: 'audience', version: 1, body: 'A audience', meta: {} })
   bArtifact = vcl.seed('artifacts', B, { stage: 1, kind: 'audience', version: 1, body: 'B SECRET audience', meta: {} })
   bInterview = vcl.seed('interviews', B, { interviewee: 'p1', notes: 'B SECRET notes', commitment: 'none', earlyvangelist: false })
-  tokenA = vcl.mintToken(A)
+  tokenA = vcl.mintToken(A, { skill: SKILL })
   workRoot = mkdtempSync(join(tmpdir(), 'fos-test-'))
 })
 
@@ -66,7 +65,6 @@ function fakeClaude(envelope) {
 
 function deps(extra = {}) {
   return {
-    pluginDir: PLUGIN_DIR,
     workRoot,
     apiBase: vcl.baseUrl,
     apiKey: API_KEY,
@@ -85,8 +83,12 @@ function deps(extra = {}) {
   }
 }
 
+// VCL mints a token for one session and so one skill: a body naming another
+// skill gets a token minted for it.
 function sessionBody(extra = {}) {
-  return { founder_id: A, stage: 1, skill: 'founder-os-stage-1-audience', message: 'Who should I build for?', session_token: tokenA, ...extra }
+  const skill = extra.skill ?? SKILL
+  const session_token = extra.session_token ?? (skill === SKILL ? tokenA : vcl.mintToken(A, { skill }))
+  return { founder_id: A, stage: 1, message: 'Who should I build for?', ...extra, skill, session_token }
 }
 
 function assertNothingAboutB() {
@@ -164,20 +166,41 @@ test('referencing B\'s artifact from A\'s session fails as not found', async () 
   assertNothingAboutB()
 })
 
-test('unknown or malformed skill names answer 404 without touching VCL', async () => {
-  for (const skill of ['founder-os-stage-9-nope', '../../etc/passwd', 'founder-os-stage-1-audience/../x', 'Founder-OS']) {
+test('malformed skill names answer 404 without touching VCL', async () => {
+  for (const skill of ['../../etc/passwd', 'founder-os-stage-1-alpha/../x', 'Founder-OS']) {
     await assert.rejects(prepareSession(sessionBody({ skill }), deps()), e => e.status === 404 && e.code === 'skill_not_found')
   }
   assert.equal(vcl.requests.length, 0)
 })
 
-test('an unpinned plugin refuses every session with 503', async () => {
-  const empty = mkdtempSync(join(tmpdir(), 'fos-unpinned-'))
-  try {
-    await assert.rejects(prepareSession(sessionBody(), deps({ pluginDir: empty })), e => e.status === 503 && e.code === 'plugin_unpinned')
-  } finally {
-    rmSync(empty, { recursive: true, force: true })
+test('a skill VCL does not have answers 404', async () => {
+  await assert.rejects(prepareSession(sessionBody({ skill: 'founder-os-stage-9-nope' }), deps()), e => e.status === 404 && e.code === 'skill_not_found')
+  assert.equal(vcl.requests.filter(r => r.url === '/content/skill').length, 1)
+})
+
+test('the skill comes from VCL for this token, never from the image', async () => {
+  const session = await prepareSession(sessionBody(), deps())
+  assert.equal(session.skill.type, 'stage-skill')
+  assert.match(session.skill.text, /Stage 1 alpha \(fixture\)/)
+  const asked = vcl.requests.filter(r => r.url.startsWith('/content/skill'))
+  assert.deepEqual(asked.map(r => [r.method, r.url, r.auth]), [['GET', '/content/skill', `Bearer ${tokenA}`]])
+})
+
+test('VCL serving a different skill than the session asked for stops the session', async () => {
+  vcl.serveSkillContent({ name: 'founder-os-coach-fixture', text: '---\nname: founder-os-coach-fixture\ntype: coach-skill\n---\nx\n' })
+  await assert.rejects(prepareSession(sessionBody(), deps()), e => e.status === 409 && e.code === 'skill_mismatch')
+})
+
+test('a skill VCL serves that is not a well-formed skill answers 404', async () => {
+  for (const text of ['no frontmatter', '---\nname: founder-os-stage-1-alpha\ntype: mystery\n---\nx', 42, 'a'.repeat(300 * 1024)]) {
+    vcl.serveSkillContent({ name: SKILL, text })
+    await assert.rejects(prepareSession(sessionBody(), deps()), e => e.status === 404 && e.code === 'skill_not_found', String(text).slice(0, 20))
   }
+})
+
+test('VCL failing on the skill route refuses the session with a 5xx, never a guess', async () => {
+  vcl.serveSkillContent((req, url, send) => send(500, { error: 'internal_error' }))
+  await assert.rejects(prepareSession(sessionBody(), deps()), e => e instanceof SessionError && e.status === 502)
 })
 
 test('a stage mismatch is refused: never coach ahead of the ledger', async () => {
@@ -234,8 +257,8 @@ test('an auditor that targets B\'s interview by row id is refused by VCL and wri
   const { spawnImpl } = fakeClaude({
     reply: 'audited',
     ledger_writes: [
-      { method: 'add_audit', args: { target_table: 'interviews', target_id: bInterview.id, auditor: 'claude', check_name: 'mom-test', verdict: 'fail' } },
-      { method: 'record_gate_decision', args: { stage: 1, gate_id: 'stage-1-audience', decision: 'pass', decided_by: 'claude', evidence: [{ table: 'artifacts', id: bArtifact.id }], rationale: 'x' } },
+      { method: 'add_audit', args: { target_table: 'interviews', target_id: bInterview.id, auditor: 'claude', check_name: 'lorem-check', verdict: 'fail' } },
+      { method: 'record_gate_decision', args: { stage: 1, gate_id: 'stage-1-alpha', decision: 'pass', decided_by: 'claude', evidence: [{ table: 'artifacts', id: bArtifact.id }], rationale: 'x' } },
     ],
   })
   const outcome = await executeSession(await prepareSession(sessionBody({ skill: 'founder-os-stage-1-auditor' }), deps()), deps({ spawnImpl }))
@@ -249,7 +272,7 @@ test('an auditor that targets B\'s interview by row id is refused by VCL and wri
 test('an auditor cannot claim Sean\'s sign-off: the executor forces it off', async () => {
   const { spawnImpl } = fakeClaude({
     reply: 'passed',
-    ledger_writes: [{ method: 'record_gate_decision', args: { stage: 1, gate_id: 'stage-1-audience', decision: 'pass', decided_by: 'claude+sean', sean_signoff: true, evidence: [{ table: 'artifacts', id: aArtifact.id }], rationale: 'ok' } }],
+    ledger_writes: [{ method: 'record_gate_decision', args: { stage: 1, gate_id: 'stage-1-alpha', decision: 'pass', decided_by: 'claude+sean', sean_signoff: true, evidence: [{ table: 'artifacts', id: aArtifact.id }], rationale: 'ok' } }],
   })
   const outcome = await executeSession(await prepareSession(sessionBody({ skill: 'founder-os-stage-1-auditor' }), deps()), deps({ spawnImpl }))
   assert.equal(outcome.writes[0].status, 'applied')
@@ -266,7 +289,7 @@ test('a stage skill cannot record a gate decision, and no write may name another
     { method: 'delete_founder', args: {} },
   ]) {
     const { spawnImpl } = fakeClaude({ reply: 'x', ledger_writes: [write] })
-    const outcome = await executeSession(await prepareSession(sessionBody({ session_token: vcl.mintToken(A) }), deps()), deps({ spawnImpl }))
+    const outcome = await executeSession(await prepareSession(sessionBody({ session_token: vcl.mintToken(A, { skill: SKILL }) }), deps()), deps({ spawnImpl }))
     assert.equal(outcome.error, 'envelope_rejected', write.method)
   }
   assert.equal(vcl.rowsFor('gate_decisions', A).length, 0)
@@ -318,12 +341,12 @@ test('shim: one session in flight per instance, and an instance stays bound to i
   try {
     const first = await post(sessionBody())
     assert.equal(first.status, 202)
-    const second = await post(sessionBody({ session_token: vcl.mintToken(A) }))
+    const second = await post(sessionBody({ session_token: vcl.mintToken(A, { skill: SKILL }) }))
     assert.equal(second.status, 409)
     assert.equal(second.body.error, 'session_in_flight')
     release()
     await settled()
-    const other = await post(sessionBody({ founder_id: B, session_token: vcl.mintToken(B) }))
+    const other = await post(sessionBody({ founder_id: B, session_token: vcl.mintToken(B, { skill: SKILL }) }))
     assert.equal(other.status, 409)
     assert.equal(other.body.error, 'instance_bound_to_other_founder')
     const bad = await post({ founder_id: A })

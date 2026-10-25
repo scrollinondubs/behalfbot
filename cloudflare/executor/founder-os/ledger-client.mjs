@@ -147,6 +147,10 @@ export function createLedgerClient({ baseUrl, token, fetchImpl = globalThis.fetc
 
     postSessionResult: args => call('POST', '/session/result', args),
 
+    // This session's skill, whole SKILL.md: { base_sha, name, text }. VCL
+    // picks it from the token's session, never from the request.
+    contentSkill: ({ signal } = {}) => call('GET', '/content/skill', undefined, { signal }),
+
     // The stage's card and gate files as VCL serves them, admin edits applied.
     // Not a ledger row: { base_sha, files: [{ path, text }] }.
     contentStage: (stage, { signal } = {}) =>
