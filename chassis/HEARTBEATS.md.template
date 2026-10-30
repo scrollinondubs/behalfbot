@@ -508,7 +508,8 @@ Posts its own alert through `discord-post.sh` when a projection passes 1.5x the
 median of the last 3 full periods and is $10 above it, or passes a `cap`; once
 per (service, period, level). A service with no key in `.env` is recorded as
 "needs key" and skipped. Always emits `count: 0`, so no model ever runs and the
-prompt is a placeholder.
+prompt is a placeholder. `critical` so conservation mode does not pause spend
+tracking exactly when spend is the concern; it never invokes a model anyway.
 
 Opt-in because it needs billing keys. Setup: `chassis/docs/dashboard.md`
 (Projections). Then uncomment the block.
@@ -520,7 +521,7 @@ Opt-in because it needs billing keys. Setup: `chassis/docs/dashboard.md`
 # prompt: state/chassis-root/scheduled-tasks/spend-snapshots-prompt.md
 # model: haiku
 # budget: 0.05
-# criticality: normal
+# criticality: critical
 ```
 
 ---
