@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% set active_section = "/briefings" %}
+{% block title %}Briefings - {{ brand }}{% endblock %}
+
+{% block topbar %}
+<div class="topbar-inner">
+  <h1>Briefings</h1>
+  {% if briefings %}
+  <select class="date-picker" aria-label="Briefing" onchange="window.location='/briefings?date='+encodeURIComponent(this.value)">
+    {% for b in briefings %}
+    <option value="{{ b.filename }}" {% if selected and selected.filename == b.filename %}selected{% endif %}>
+      {{ b.date }} - {{ b.label }}
+    </option>
+    {% endfor %}
+  </select>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+{% if selected %}
+<iframe
+  src="/briefings/files/{{ selected.filename | urlencode }}"
+  class="briefing-frame"
+  title="{{ selected.label }} {{ selected.date }}"
+></iframe>
+{% else %}
+<div class="empty-state">No briefings yet. Rendered briefing HTML lands in <code>briefings/</code> under the customer home.</div>
+{% endif %}
+{% endblock %}

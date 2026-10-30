@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.behalfbot.dashboard.plist - chassis-rendered template.
+
+  Runs the chassis dashboard (chassis/dashboard/app.py) on 127.0.0.1:8765:
+  Briefings, DevOps, Projections, plus plugin and custom tabs. See
+  chassis/docs/dashboard.md.
+
+  A LaunchAgent (gui domain), not a LaunchDaemon: the DevOps tab's launchd
+  probes run `launchctl list <label>`, which only sees the caller's own
+  domain, and the tmux probe needs the user's tmux socket.
+
+  Installs that already run com.<name>.briefing-server do not need this one:
+  chassis/scripts/briefing-server.py now starts the same dashboard. Run one
+  or the other, not both, since they bind the same port.
+
+  Template variables (expanded at render time):
+    CUSTOMER_HOME       per-customer state root
+    CHASSIS_HOME        chassis git tree root
+    INSTANCE_NAME       assistant name shown in the sidebar
+    USER                installer's macOS short name
+    HOMEBREW_PREFIX     /opt/homebrew on Apple Silicon, /usr/local on Intel
+
+  The python at ${HOMEBREW_PREFIX}/bin/python3 needs the packages in
+  chassis/dashboard/requirements.txt.
+
+  Expose it on the tailnet with:
+    tailscale serve --bg --https=443 http://127.0.0.1:8765
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.behalfbot.dashboard</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${HOMEBREW_PREFIX}/bin/python3</string>
+        <string>${CHASSIS_HOME}/chassis/dashboard/app.py</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>${CUSTOMER_HOME}</string>
+    <key>StandardErrorPath</key>
+    <string>${CUSTOMER_HOME}/logs/dashboard.log</string>
+    <key>StandardOutPath</key>
+    <string>${CUSTOMER_HOME}/logs/dashboard.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/${USER}/.local/bin:${HOMEBREW_PREFIX}/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>/Users/${USER}</string>
+        <key>CUSTOMER_HOME</key>
+        <string>${CUSTOMER_HOME}</string>
+        <key>CHASSIS_HOME</key>
+        <string>${CHASSIS_HOME}</string>
+        <key>INSTANCE_NAME</key>
+        <string>${INSTANCE_NAME}</string>
+        <key>DASHBOARD_PORT</key>
+        <string>8765</string>
+    </dict>
+</dict>
+</plist>

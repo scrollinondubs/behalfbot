@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% set active_section = "/projections" %}
+{% block title %}Projections - {{ brand }}{% endblock %}
+
+{% macro money(v) %}{% if v is none %}-{% else %}{{ "%.2f"|format(v) }}{% endif %}{% endmacro %}
+
+{% block topbar %}
+<div class="topbar-inner">
+  <h1>{% if single and rows %}<a href="/projections" class="muted">Projections</a> · {{ rows[0].s.label }}{% else %}Projections{% endif %}</h1>
+  <span class="muted small">{{ month }} · checked {{ checked_at }}</span>
+  <a href="{{ request.url.path }}" class="btn">Refresh</a>
+</div>
+{% endblock %}
+
+{% block content %}
+{% if not have_db %}
+<section class="panel">
+  <p class="muted">No spend data yet. The <code>spend-snapshots</code> heartbeat writes
+  <code>state/projections/spend.db</code> every 6 hours; run
+  <code>chassis/scripts/gather-spend-snapshots.py</code> once to fill it.</p>
+</section>
+{% else %}
+
+{% if not single %}
+<section class="panel">
+  <div class="stat-row">
+    <div class="stat"><div class="stat-num">${{ money(totals.to_date) }}</div><div class="stat-label">Period to date</div></div>
+    <div class="stat"><div class="stat-num">${{ money(totals.projected) }}</div><div class="stat-label">Projected</div></div>
+    <div class="stat"><div class="stat-num">${{ money(totals.baseline) }}</div><div class="stat-label">Baseline</div></div>
+  </div>
+  <p class="muted small">Sums of the rows that have data. Each service runs on its own billing period.</p>
+</section>
+{% endif %}
+
+<section class="panel spend-overview">
+  <nav class="spend-chips" aria-label="Services">
+    {% for c in chips %}
+    <a class="spend-chip{% if c.selected %} selected{% endif %}" href="{{ c.href }}"{% if c.color %} style="--c: {{ c.color }}"{% endif %}{% if c.selected %} aria-current="page"{% endif %}>
+      <span class="spend-swatch{% if not c.color %} all{% endif %}"></span>
+      <span class="spend-chip-name">{{ c.label }}</span>
+      <span class="spend-chip-amt">{% if c.to_date is not none %}${{ money(c.to_date) }}{% else %}-{% endif %}</span>
+      {% if c.pill %}<span class="pill spend-{{ c.tone }}">{{ c.pill }}</span>{% endif %}
+    </a>
+    {% endfor %}
+  </nav>
+
+  <div class="spend-main">
+  {% if not single %}{% set st = totals.stacked %}
+    <h2>All services · daily usage <small>{% if st and st.range %}{{ st.range }}{% else %}{{ month }}{% endif %}{% if st and st.base_per_day %} · dashed line = combined baseline per day ${{ "%.2f"|format(st.base_per_day) }}{% endif %}</small></h2>
+    {% if st %}
+    <div class="spend-chart">
+      <div class="intensity-chart spend-stack">
+        {% for d in st.days %}<span class="day{% if d.future %} future{% elif not d.segments %} empty{% endif %}" title="{{ d.label }}{% if not d.future %}: ${{ '%.2f'|format(d.total) }}{% endif %}">{% for g in d.segments %}<a href="/projections/{{ g.service }}" style="height: {{ g.pct }}%; background: {{ g.color }}" title="{{ d.label }} · {{ g.label }} ${{ '%.2f'|format(g.cost) }} (day ${{ '%.2f'|format(d.total) }})" aria-label="{{ g.label }}, {{ d.label }}, ${{ '%.2f'|format(g.cost) }}"></a>{% endfor %}</span>{% endfor %}
+        {% if st.base_pct %}<span class="spend-baseline" style="bottom: {{ st.base_pct }}%"></span>{% endif %}
+      </div>
+      <div class="spend-axis muted small"><span>{{ st.days[0].label }}</span><span>tallest day ${{ "%.2f"|format(st.top) }}</span><span>{{ st.days[-1].label }}</span></div>
+    </div>
+    {% else %}
+    <p class="muted">No usage-billed service has data yet.</p>
+    {% endif %}
+    {% if totals.fixed %}
+    <p class="muted small spend-fixed">Fixed plans, not in the bars: {% for f in totals.fixed %}<span class="spend-fixed-item" style="--c: {{ f.color }}">{{ f.label }} ${{ money(f.amount) }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
+    (${{ money(totals.fixed_total) }} this period). They are in the totals above.</p>
+    {% endif %}
+    <p class="muted small">Tap a service, or its part of a bar, to see it against its own baseline.</p>
+  {% elif focus and focus.chart %}{% set s = focus.s %}{% set c = focus.chart %}
+    <h2>{{ s.label }} · daily <small>{{ c.range }}{% if c.base_per_day %} · dashed line = baseline per day ${{ "%.2f"|format(c.base_per_day) }}{% endif %}</small></h2>
+    <div class="spend-chart">
+      <div class="intensity-chart" style="--c: {{ focus.color }}">
+        {% for d in c.days %}<span class="bar{% if not d.cost %} bar-empty{% endif %}" style="height: {{ [d.pct, 1]|max }}%" title="{{ d.label }}: ${{ '%.2f'|format(d.cost) }}"></span>{% endfor %}
+        {% if c.base_pct %}<span class="spend-baseline" style="bottom: {{ c.base_pct }}%"></span>{% endif %}
+      </div>
+    </div>
+  {% elif focus %}
+    <h2>{{ focus.s.label }}</h2>
+    <p class="muted">{% if focus.s.kind == "api" %}No daily usage on record for this period yet.{% else %}A fixed or invoiced plan, so there is no daily usage to chart.{% endif %}</p>
+  {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="spend-scroll">
+  <table class="status-table spend-table">
+    <thead><tr>
+      <th>Service</th><th>Period</th><th class="n">To date</th><th class="n">Projected</th>
+      <th class="n">Base</th><th class="n">Cap</th><th></th>
+    </tr></thead>
+    <tbody>
+    {% for r in rows %}{% set s = r.s %}
+    <tr class="{% if r.tone in ('bad', 'warn') %}warn{% endif %}">
+      <td>{% if not single %}<a href="/projections/{{ s.service }}">{{ s.label }}</a>{% else %}{{ s.label }}{% endif %}</td>
+      <td class="muted small">{{ s.period.label() }}</td>
+      <td class="n">{{ money(s.to_date) if s.has_data else "-" }}</td>
+      <td class="n">{{ money(s.projected) if s.has_data else "-" }}</td>
+      <td class="n">{{ money(s.baseline) if s.has_data else "-" }}{% if s.has_data and s.kind == "api" and s.baseline_n and s.baseline_n < 3 %}<span class="muted small" title="median of the {{ s.baseline_n }} full period{{ 's' if s.baseline_n > 1 }} on record"> ({{ s.baseline_n }} mo)</span>{% endif %}</td>
+      <td class="n">{{ "%.0f"|format(s.cap) if s.cap is not none else "-" }}</td>
+      <td><span class="pill spend-{{ r.tone }}" {% if s.last_error %}title="{{ s.last_error }}"{% endif %}>{{ r.pill }}</span></td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <p class="muted small">Baseline is the median of the last 3 full periods (fewer shown in brackets). Projected is spend to date plus the
+  7-day daily rate for the days left, blended with the baseline rate in the first week. An alert posts to the configured channel once
+  when a projection passes 1.5x baseline and is $10 above it, and once more if it passes the cap.</p>
+</section>
+
+<section class="panel">
+  <h2>Sources</h2>
+  <div class="spend-scroll">
+  <table class="status-table">
+    <thead><tr><th>Service</th><th>Fetch</th><th>Last good</th><th>Note</th></tr></thead>
+    <tbody>
+    {% for r in rows %}{% set s = r.s %}
+    <tr>
+      <td>{{ s.label }}</td>
+      <td class="{% if s.status in ('ok', 'fixed') %}ok{% elif s.status == 'error' %}fail{% else %}muted{% endif %}">{{ s.status }}{% if s.last_error %}<div class="muted small">{{ s.last_error }}</div>{% endif %}</td>
+      <td class="muted small">{{ r.age ~ " ago" if r.age else "-" }}</td>
+      <td class="muted small">{{ s.note or "" }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+
+{% if totals.fired %}
+<section class="panel">
+  <h2>Alerts posted</h2>
+  <div class="spend-scroll">
+  <table class="status-table">
+    <thead><tr><th>Service</th><th>Level</th><th class="n">USD</th><th>When</th></tr></thead>
+    <tbody>
+    {% for a in totals.fired %}<tr><td>{{ a[0] }}</td><td>{{ a[1] }}</td><td class="n">{{ "%.2f"|format(a[2]) }}</td><td class="muted small">{{ a[3] }}</td></tr>{% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+{% endif %}
+{% endblock %}

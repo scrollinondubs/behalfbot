@@ -499,6 +499,32 @@ criticality: critical
 
 ---
 
+## spend-snapshots (chassis-shipped, opt-in)
+
+Pulls daily spend from each billing API listed in
+`${CUSTOMER_HOME}/config/spend-services.json` into
+`state/projections/spend.db`, which the dashboard's Projections tab reads.
+Posts its own alert through `discord-post.sh` when a projection passes 1.5x the
+median of the last 3 full periods and is $10 above it, or passes a `cap`; once
+per (service, period, level). A service with no key in `.env` is recorded as
+"needs key" and skipped. Always emits `count: 0`, so no model ever runs and the
+prompt is a placeholder.
+
+Opt-in because it needs billing keys. Setup: `chassis/docs/dashboard.md`
+(Projections). Then uncomment the block.
+
+```yaml
+# schedule: every 6h
+# gather: state/chassis-root/scripts/gather-spend-snapshots.py
+# condition: threshold count > 0
+# prompt: state/chassis-root/scheduled-tasks/spend-snapshots-prompt.md
+# model: haiku
+# budget: 0.05
+# criticality: normal
+```
+
+---
+
 ## Active heartbeats
 
 <!--
