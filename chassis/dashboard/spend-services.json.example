@@ -1,0 +1,15 @@
+{
+  "_comment": "Copy to $CUSTOMER_HOME/config/spend-services.json and keep only the services you pay for. Keys starting with _ are not services. env names the variable in $CUSTOMER_HOME/.env that holds the key; the key itself never goes in this file. See chassis/docs/dashboard.md.",
+  "_settings": {
+    "alert_channel_id": "<discord channel id for spend alerts>",
+    "dashboard_url": "https://<your-host>.<tailnet>.ts.net"
+  },
+  "vercel": {"label": "Vercel", "env": "VERCEL_TOKEN", "team_slug": "<team-slug>", "tz": "America/Los_Angeles", "anchor_day": 1, "cap": 100},
+  "openai": {"label": "OpenAI", "env": "OPENAI_ADMIN_KEY", "tz": "UTC", "anchor_day": 1},
+  "anthropic": {"label": "Anthropic API", "env": "ANTHROPIC_ADMIN_KEY", "tz": "UTC", "anchor_day": 1},
+  "github": {"label": "GitHub", "env": "GITHUB_BILLING_PAT", "user": "<github-user>", "tz": "UTC", "anchor_day": 1},
+  "cloudflare": {"label": "Cloudflare", "env": "CLOUDFLARE_BILLING_API_TOKEN", "tz": "UTC", "anchor_day": 1},
+  "turso": {"label": "Turso", "env": "TURSO_BILLING_API_TOKEN", "org": "<org-slug>", "fixed": 4.99, "tz": "America/New_York", "anchor_day": 1},
+  "resend": {"label": "Resend", "env": "RESEND_API_KEY", "fixed": 20, "quota": 50000, "over_per_1000": 0.9, "tz": "UTC", "anchor_day": 1},
+  "claude_plan": {"label": "Claude plan", "provider": "fixed", "fixed": 100, "tz": "UTC", "anchor_day": 1, "note": "subscription, entered by hand"}
+}

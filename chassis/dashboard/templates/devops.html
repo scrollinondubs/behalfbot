@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% set active_section = "/devops" %}
+{% block title %}DevOps - {{ brand }}{% endblock %}
+
+{% macro mark(status) %}{% if status == "ok" %}&#10003;{% elif status == "warn" %}&#9888;{% else %}&#10007;{% endif %}{% endmacro %}
+
+{% block topbar %}
+<div class="topbar-inner">
+  <h1>DevOps</h1>
+  <span class="muted small">checked {{ checked_at }}</span>
+  <a href="/devops" class="btn">Refresh</a>
+</div>
+{% endblock %}
+
+{% block content %}
+{% if load_errors or notes %}
+<section class="panel">
+  <h2>Dashboard</h2>
+  <table class="status-table">
+    <tbody>
+    {% for e in load_errors %}
+    <tr class="warn"><td class="fail">{{ mark("fail") }} {{ e.label }}: {{ e.value }}: {{ e.detail }}</td></tr>
+    {% endfor %}
+    {% for n in notes %}
+    <tr><td class="warn">{{ mark("warn") }} {{ n }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+
+{% if services %}
+<section class="panel">
+  <h2>Services</h2>
+  <div class="table-scroll">
+  <table class="status-table">
+    <thead><tr><th>Service</th><th>Probe</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for svc in services %}
+    <tr>
+      <td>{{ svc.label }}</td>
+      <td class="muted small">{{ svc.probe }}</td>
+      <td class="{% if svc.ok %}ok{% else %}fail{% endif %}">{{ mark("ok" if svc.ok else "fail") }} {{ svc.status }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% elif not configured %}
+<section class="panel">
+  <p class="muted small">No services configured. List what to probe under <code>dashboard.devops.services</code> in
+  <code>chassis.config.yaml</code>; see <code>chassis/docs/dashboard.md</code>.</p>
+</section>
+{% endif %}
+
+{% for host in remote %}
+<section class="panel">
+  <h2>{{ host.host }} <small>containers over ssh</small></h2>
+  <table class="status-table">
+    <thead><tr><th>Container</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for c in host.containers %}
+    <tr>
+      <td>{{ c.name }}</td>
+      <td class="{% if c.ok %}ok{% else %}fail{% endif %}">{{ mark("ok" if c.ok else "fail") }} {{ c.status }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+
+{% if disk_enabled %}
+<section class="panel">
+  <h2>Disk</h2>
+  {% if disk %}
+  <p>
+    {{ disk.used_gb | round(1) }} GB used of {{ disk.total_gb | round(0) | int }} GB
+    ({{ disk.used_pct | round(0) | int }}%), <span class="{% if disk.free_gb < 50 %}fail{% else %}ok{% endif %}">{{ disk.free_gb | round(1) }} GB free</span>
+  </p>
+  <p class="muted small">Scanned {{ disk.scanned_at[:16] | replace('T', ' ') }} UTC. {{ disk.unscanned_gb | round(1) }} GB sits outside the scanned folders.</p>
+  {% else %}
+  <p class="muted small">No scan yet.</p>
+  {% endif %}
+  <a href="/devops/disk" class="btn">Open disk map</a>
+</section>
+{% endif %}
+
+{% if backups %}
+<section class="panel">
+  <h2>Backups</h2>
+  <p class="muted small">A target goes red when its newest file is more than {{ backups_stale_hours | round(0) | int }} h old. Targets listed in <code>static_backup_targets</code> are not expected to refresh.</p>
+  <div class="table-scroll">
+  <table class="status-table">
+    <thead>
+      <tr><th>Target</th><th>Files</th><th>Latest</th><th>Age</th><th>Latest size</th><th>Total size</th><th>Status</th></tr>
+    </thead>
+    <tbody>
+    {% for b in backups %}
+    <tr class="{% if not b.ok %}warn{% endif %}">
+      <td>{{ b.name }}</td>
+      <td>{{ b.count }}</td>
+      <td class="muted small">{{ b.latest_name or '-' }}<br>{{ b.latest_at }}</td>
+      <td class="muted small">
+        {% if b.age_hours < 24 %}{{ b.age_hours | round(1) }} h
+        {% elif b.age_hours < 168 %}{{ (b.age_hours / 24) | round(1) }} d
+        {% else %}{{ (b.age_hours / 24) | round(0) | int }} d{% endif %}
+      </td>
+      <td class="muted small">{{ b.latest_size_human }}</td>
+      <td class="muted small">{{ b.total_size_human }}</td>
+      <td class="{% if b.ok %}ok{% else %}fail{% endif %}">
+        {% if not b.is_daily %}static
+        {% elif b.ok %}{{ mark("ok") }} fresh
+        {% else %}{{ mark("fail") }} stale{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+
+{% for p in panels %}
+<section class="panel">
+  <h2>{{ p.title }}</h2>
+  <table class="status-table">
+    <thead><tr><th>Signal</th><th>Value</th><th>Status</th></tr></thead>
+    <tbody>
+    {% for r in p.rows %}
+    <tr>
+      <td>{{ r.label }}</td>
+      <td class="muted small">{{ r.value }}{% if r.detail %}<br><span class="muted">{{ r.detail }}</span>{% endif %}</td>
+      <td class="{% if r.status == 'ok' %}ok{% elif r.status == 'warn' %}warn{% else %}fail{% endif %}">{{ mark(r.status) }} {{ r.status }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endfor %}
+
+<section class="panel">
+  <h2>Heartbeats</h2>
+  {% if heartbeats %}
+  <div class="table-scroll">
+  <table class="status-table">
+    <thead><tr><th>Name</th><th>Last check</th><th>Last fire</th><th>Fire count</th><th>Failures</th></tr></thead>
+    <tbody>
+    {% for hb in heartbeats %}
+    <tr class="{% if hb.failures > 0 %}warn{% endif %}">
+      <td>{{ hb.name }}</td>
+      <td class="muted small">{{ hb.last_check }}</td>
+      <td class="muted small">{{ hb.last_fire }}</td>
+      <td class="muted small">{{ hb.fire_count }}</td>
+      <td class="{% if hb.failures > 1 %}fail{% elif hb.failures == 1 %}warn{% endif %}">{{ hb.failures }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <p class="muted small">No heartbeat state yet. The dispatcher writes <code>scheduled-tasks/heartbeat-state.json</code> after its first tick.</p>
+  {% endif %}
+</section>
+{% endblock %}

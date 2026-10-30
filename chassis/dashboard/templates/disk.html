@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% set active_section = "/devops" %}
+{% block title %}Disk map - {{ brand }}{% endblock %}
+
+{% block topbar %}
+<div class="topbar-inner">
+  <h1><a href="/devops" class="muted" style="text-decoration:none">DevOps</a> / Disk map</h1>
+  <span class="muted small" id="scanned">{% if not has_data %}no scan yet{% endif %}</span>
+  <button class="btn" id="scan-btn" type="button">{% if scanning %}Scanning...{% else %}Scan now{% endif %}</button>
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+.dm-cap{display:grid;gap:6px;margin:16px 0}
+.dm-bar{height:12px;border-radius:6px;background:var(--border);overflow:hidden}
+.dm-bar span{display:block;height:100%;background:var(--accent)}
+.dm-num{font-size:.9em;color:var(--muted);font-variant-numeric:tabular-nums}
+.dm-crumbs{display:flex;flex-wrap:wrap;gap:6px;font-family:ui-monospace,monospace;font-size:.85em;margin:10px 0}
+.dm-crumbs button{background:none;border:0;color:var(--accent);cursor:pointer;padding:0;font:inherit}
+.dm-crumbs button:disabled{color:var(--fg);cursor:default}
+#dm-map{position:relative;width:100%;height:min(70vh,640px);background:var(--bg-2);border:1px solid var(--border);border-radius:8px;overflow:hidden}
+.dm-cell{position:absolute;box-sizing:border-box;border:1px solid var(--bg);overflow:hidden;cursor:pointer;padding:4px 6px;color:#fff;font-size:12px;line-height:1.25}
+.dm-cell b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dm-cell i{font-style:normal;font-family:ui-monospace,monospace;opacity:.85}
+.dm-cell:hover{filter:brightness(1.15)}
+.dm-table td.n,.dm-table th.n{text-align:right;font-variant-numeric:tabular-nums}
+</style>
+
+<section class="panel">
+  <div class="dm-cap"><div class="dm-bar"><span id="dm-used"></span></div><div class="dm-num" id="dm-capnum"></div></div>
+  <p class="muted small" id="dm-gap"></p>
+  <nav class="dm-crumbs" id="dm-crumbs" aria-label="Zoom path"></nav>
+  <div id="dm-map" role="img" aria-label="Treemap of disk usage"></div>
+  <p class="muted small">Click a block to zoom in, use the path above the map to zoom out. Blocks under 150 MB are folded into their parent. Sizes are on-disk usage from du. Set <code>DISK_MAP_ROOTS</code> to change what is scanned.</p>
+</section>
+
+<section class="panel">
+  <table class="status-table dm-table">
+    <thead><tr><th>Largest items at this level</th><th class="n">Size</th><th class="n">Share of used</th></tr></thead>
+    <tbody id="dm-rows"></tbody>
+  </table>
+</section>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script>
+const fmt=k=>k>=1048576?(k/1048576).toFixed(1)+' GB':(k/1024).toFixed(0)+' MB';
+const pal=['#3d63c9','#2b8a6e','#b5642a','#7b4fb8','#a8414f','#4a7f9e','#8a7a2a','#5b6b7d'];
+const map=document.getElementById('dm-map');
+let DATA=null,root=null,current=null,topNames=[];
+
+function colorOf(n){let a=n;while(a.depth>1)a=a.parent;const i=topNames.indexOf(a.data.name);return d3.color(pal[(i<0?0:i)%pal.length]).darker(Math.max(0,n.depth-2)*0.35)}
+function findReal(node,c){ // map a re-laid-out node back to the original hierarchy
+  const names=c.ancestors().reverse().slice(1).map(a=>a.data.name);
+  let cur=node;for(const n of names){cur=(cur.children||[]).find(x=>x.data.name===n);if(!cur)return null}
+  return cur;
+}
+function draw(node){
+  map.innerHTML='';
+  const w=map.clientWidth,h=map.clientHeight;
+  const h2=d3.hierarchy(node.data).sum(d=>d.value||0).sort((a,b)=>b.value-a.value);
+  d3.treemap().size([w,h]).paddingInner(1).round(true)(h2);
+  const shown=h2.children?h2.children:[h2];
+  // show two levels where room allows
+  const cells=[];
+  shown.forEach(c=>{ if(c.children&&(c.x1-c.x0)>160&&(c.y1-c.y0)>90){c.children.forEach(g=>cells.push([g,c]))} else cells.push([c,null]) });
+  cells.forEach(([c,parent])=>{
+    const el=document.createElement('div');el.className='dm-cell';
+    el.style.left=c.x0+'px';el.style.top=c.y0+'px';el.style.width=(c.x1-c.x0)+'px';el.style.height=(c.y1-c.y0)+'px';
+    el.style.background=colorOf(findReal(node,c)||node);
+    const label=parent?parent.data.name+' / '+c.data.name:c.data.name;
+    el.title=(c.data.path||label)+' : '+fmt(c.value);
+    if((c.x1-c.x0)>60&&(c.y1-c.y0)>28){el.innerHTML='<b></b><i>'+fmt(c.value)+'</i>';el.querySelector('b').textContent=label}
+    el.tabIndex=0;
+    const go=()=>{const t=findReal(node,c);if(t&&t.children){zoom(t);return}if(parent){const p=findReal(node,parent);if(p&&p.children)zoom(p)}};
+    el.addEventListener('click',go);el.addEventListener('keydown',e=>{if(e.key==='Enter')go()});
+    map.appendChild(el);
+  });
+  crumbs(node);table(node);
+}
+function zoom(n){current=n;draw(n)}
+function crumbs(n){
+  const c=document.getElementById('dm-crumbs');c.innerHTML='';
+  n.ancestors().reverse().forEach((a,i,arr)=>{
+    const b=document.createElement('button');b.textContent=a.data.name;b.onclick=()=>zoom(a);
+    if(i===arr.length-1)b.disabled=true;
+    c.appendChild(b);if(i<arr.length-1){const s=document.createElement('span');s.textContent='/';c.appendChild(s)}
+  });
+}
+function table(n){
+  const tb=document.getElementById('dm-rows');tb.innerHTML='';
+  (n.children||[n]).slice(0,15).forEach(c=>{
+    const tr=document.createElement('tr');
+    const a=document.createElement('td');a.textContent=c.data.name==='(other files)'?'(other files) in '+c.data.path:(c.data.path||c.data.name);
+    const b=document.createElement('td');b.className='n';b.textContent=fmt(c.value);
+    const p=document.createElement('td');p.className='n';p.textContent=(c.value/DATA.used_kb*100).toFixed(1)+'%';
+    tr.append(a,b,p);if(c.children){tr.style.cursor='pointer';tr.onclick=()=>zoom(c)}tb.appendChild(tr);
+  });
+}
+async function load(){
+  const r=await fetch('/devops/disk/data.json',{cache:'no-store'});
+  if(!r.ok)return;
+  DATA=await r.json();
+  const used=DATA.used_kb,total=DATA.total_kb;
+  document.getElementById('dm-used').style.width=(used/total*100).toFixed(1)+'%';
+  document.getElementById('dm-capnum').textContent=`${fmt(used)} used of ${fmt(total)} (${(used/total*100).toFixed(0)}%), ${fmt(total-used)} free`;
+  document.getElementById('dm-gap').textContent=`Scanned ${fmt(DATA.measured_kb)} under ${DATA.roots.join(', ')}. ${fmt(used-DATA.measured_kb)} of used space sits outside those folders (snapshots, other users, system data).`;
+  document.getElementById('scanned').textContent='scanned '+new Date(DATA.scanned_at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'});
+  root=d3.hierarchy(DATA.tree).sum(d=>d.value||0).sort((a,b)=>b.value-a.value);
+  topNames=root.children.map(c=>c.data.name);
+  zoom(root);
+}
+
+const btn=document.getElementById('scan-btn');
+async function poll(){
+  btn.disabled=true;btn.textContent='Scanning... (a minute or two)';
+  for(;;){
+    await new Promise(r=>setTimeout(r,4000));
+    const s=await (await fetch('/devops/disk/status',{cache:'no-store'})).json();
+    if(!s.scanning)break;
+  }
+  btn.disabled=false;btn.textContent='Scan now';
+  await load();
+}
+btn.addEventListener('click',async()=>{await fetch('/devops/disk/scan',{method:'POST'});poll()});
+load();
+{% if scanning %}poll();{% endif %}
+let t;window.addEventListener('resize',()=>{clearTimeout(t);t=setTimeout(()=>current&&draw(current),150)});
+</script>
+{% endblock %}

@@ -1,0 +1,35 @@
+[Unit]
+# Behalf.bot chassis dashboard - Linux user unit template.
+#
+# Runs chassis/dashboard/app.py on 127.0.0.1:8765 (Briefings, DevOps,
+# Projections, plugin and custom tabs). See chassis/docs/dashboard.md.
+#
+# Install (per install, as the installer user):
+#   1. python3 -m pip install --user -r %h/behalfbot/chassis/dashboard/requirements.txt
+#   2. cp this file to ~/.config/systemd/user/behalfbot-dashboard.service
+#      and edit the paths below if the install does not live at
+#      ~/behalfbot (chassis) and ~/.behalfbot (customer state).
+#   3. systemctl --user daemon-reload
+#   4. systemctl --user enable --now behalfbot-dashboard
+#   5. loginctl enable-linger $USER   (keeps it up after logout)
+#
+# A user unit, not a system one, so the DevOps docker and tmux probes run as
+# the installer. Units that run chassis/scripts/briefing-server.py today can
+# stay: that script now starts the same dashboard. Run one, not both.
+Description=Behalf.bot chassis dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.behalfbot
+Environment="PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="CUSTOMER_HOME=%h/.behalfbot"
+Environment="CHASSIS_HOME=%h/behalfbot"
+Environment="DASHBOARD_PORT=8765"
+ExecStart=/usr/bin/env python3 %h/behalfbot/chassis/dashboard/app.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

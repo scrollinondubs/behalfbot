@@ -22,6 +22,8 @@ CHASSIS_HOME=/path/to/chassis python3 chassis/scripts/md-to-briefing-html.py \
 
 ### `chassis/scripts/briefing-server.py`
 
+Now starts the chassis dashboard, which serves the same URLs plus a Briefings, DevOps and Projections UI. See [`chassis/docs/dashboard.md`](../chassis/docs/dashboard.md). The description below is the static fallback it uses when the dashboard's packages are not installed.
+
 Read-only static-file server bound to `127.0.0.1:8765` by default. Sources the directory from `${CHASSIS_HOME}/briefings`. Tailscale Funnel, nginx, or Caddy can expose it externally — the server itself stays local.
 
 ```bash

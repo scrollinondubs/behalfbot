@@ -16,6 +16,11 @@ on:
       - 'chassis/scripts/memory-integrity.py'
       - 'chassis/scripts/memory-index-build.py'
       - 'chassis/scripts/_memory_store.py'
+      - 'chassis/dashboard/**'
+      - 'chassis/scripts/_paths.py'
+      - 'chassis/scripts/_spend.py'
+      - 'chassis/scripts/gather-spend-snapshots.py'
+      - 'chassis/scripts/disk-map-scan.py'
       - 'chassis/scripts/tests/**'
       - 'chassis/.mcp.json.template'
       - 'chassis.config.yaml'
@@ -32,6 +37,11 @@ on:
       - 'chassis/scripts/memory-integrity.py'
       - 'chassis/scripts/memory-index-build.py'
       - 'chassis/scripts/_memory_store.py'
+      - 'chassis/dashboard/**'
+      - 'chassis/scripts/_paths.py'
+      - 'chassis/scripts/_spend.py'
+      - 'chassis/scripts/gather-spend-snapshots.py'
+      - 'chassis/scripts/disk-map-scan.py'
       - 'chassis/scripts/tests/**'
       - 'chassis/.mcp.json.template'
       - 'chassis.config.yaml'
@@ -50,6 +60,8 @@ jobs:
       # Install only what the suite needs, not the full chassis image deps
       # (psycopg/pillow/boto3 are runtime-only and slow the job for nothing).
       # mcp is pinned to the same version as requirements.txt so the e2e
-      # server test exercises what the image ships.
-      - run: pip install pytest pyyaml mcp==1.28.1
+      # server test exercises what the image ships. fastapi, jinja2 and httpx
+      # cover the dashboard tests (chassis/dashboard/requirements.txt is the
+      # host-side install; httpx is only for TestClient).
+      - run: pip install pytest pyyaml mcp==1.28.1 fastapi jinja2 httpx
       - run: python3 -m pytest chassis/second_brain/tests/ chassis/scripts/tests/ -v

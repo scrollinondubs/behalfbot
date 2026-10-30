@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <title>{% block title %}{{ brand }} dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="/static/dashboard.css?v={{ css_version }}">
+  <script>
+    try { if (localStorage.getItem('dashboard-sidebar-collapsed') === '1') document.documentElement.classList.add('sidebar-collapsed'); } catch (e) {}
+  </script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+  <div class="layout">
+    <nav class="sidebar" aria-label="Tabs">
+      <div class="sidebar-brand">
+        <span class="brand-text">{{ brand }}</span>
+        <span class="sidebar-toggle" role="button" tabindex="0" aria-label="Toggle sidebar"
+              onclick="(function(){var c=document.documentElement.classList.toggle('sidebar-collapsed');try{localStorage.setItem('dashboard-sidebar-collapsed',c?'1':'0');}catch(e){}})()">
+          <span class="toggle-arrow toggle-arrow-open">&#8249;</span>
+          <span class="toggle-arrow toggle-arrow-closed">&#8250;</span>
+        </span>
+      </div>
+      {% for group in nav() %}
+        {% if group.section != "core" %}<div class="nav-section">{{ "Plugins" if group.section == "plugins" else "Custom" }}</div>{% endif %}
+        {% for tab in group.tabs %}
+        <a href="{{ tab.prefix }}" class="nav-item {% if is_active(tab, active_section, request.url.path) %}active{% endif %}" title="{{ tab.label }}">
+          <span class="nav-icon">{{ tab.label[:1] }}</span><span class="nav-label"> {{ tab.label }}</span>
+        </a>
+        {% endfor %}
+      {% endfor %}
+    </nav>
+    <div class="content">
+      <header class="topbar">
+        {% block topbar %}{% endblock %}
+      </header>
+      <main>
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+</body>
+</html>
