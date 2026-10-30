@@ -1,0 +1,8 @@
+{
+  "id": "behalfbot-disk-map",
+  "name": "Behalf.bot - Disk map",
+  "description": "On-demand disk usage treemap served from briefings/.",
+  "version": "0.1.0",
+  "skills": ["./skills"],
+  "scripts": ["./scripts"]
+}

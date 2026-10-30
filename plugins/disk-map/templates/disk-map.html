@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Disk map</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: header with capacity bar, then a full-width zoomable treemap, then a ranked list */
+:root{
+  --bg:#f5f6f8; --panel:#ffffff; --fg:#1b1f27; --muted:#5d6675; --line:#d9dde4; --accent:#2f5bd3;
+  --body:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#13161c;--panel:#1b1f27;--fg:#e6e9ef;--muted:#9aa3b2;--line:#2c323d;--accent:#7b9cff;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#13161c;--panel:#1b1f27;--fg:#e6e9ef;--muted:#9aa3b2;--line:#2c323d;--accent:#7b9cff;color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--body);padding-block:20px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.wrap{max-width:1200px;margin:0 auto;display:grid;gap:16px}
+h1{font-size:22px;margin:0;text-wrap:balance}
+.sub{color:var(--muted);margin:4px 0 0;font-size:13px}
+.cap{display:grid;gap:6px}
+.bar{height:14px;border-radius:7px;background:var(--line);overflow:hidden}
+.bar span{display:block;height:100%;background:var(--accent)}
+.capnum{font-family:var(--mono);font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.crumbs{display:flex;flex-wrap:wrap;gap:6px;font-family:var(--mono);font-size:13px}
+.crumbs button{background:none;border:0;color:var(--accent);cursor:pointer;padding:0;font:inherit}
+.crumbs button:focus-visible{outline:2px solid var(--accent)}
+#map{position:relative;width:100%;height:min(70vh,640px);background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.cell{position:absolute;box-sizing:border-box;border:1px solid var(--bg);overflow:hidden;cursor:pointer;padding:4px 6px;color:#fff;font-size:12px;line-height:1.25}
+.cell b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cell i{font-style:normal;font-family:var(--mono);opacity:.85}
+.cell:hover{filter:brightness(1.12)}
+.hint{color:var(--muted);font-size:12px}
+table{width:100%;border-collapse:collapse;font-size:13px;background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+td,th{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left}
+td.n,th.n{text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+.tbl{overflow-x:auto}
+</style>
+</head><body>
+<div class="wrap">
+  <header>
+    <h1>Disk map</h1>
+    <p class="sub" id="sub"></p>
+  </header>
+  <div class="cap"><div class="bar"><span id="used"></span></div><div class="capnum" id="capnum"></div></div>
+  <p class="hint" id="gap"></p>
+  <nav class="crumbs" id="crumbs" aria-label="Zoom path"></nav>
+  <div id="map" role="img" aria-label="Treemap of disk usage"></div>
+  <p class="hint">Blocks under 150 MB are folded into their parent. Sizes are on-disk usage from du.</p>
+  <div class="tbl"><table><thead><tr><th>Largest items at this level</th><th class="n">Size</th><th class="n">Share of used</th></tr></thead><tbody id="rows"></tbody></table></div>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script>
+/*DATA*/
+const D=window.DISK, KB=D.used_kb, TOTAL=D.total_kb;
+document.getElementById('sub').textContent='Scanned '+new Date(D.scanned_at).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})+'. Click a block to zoom in, use the path above the map to zoom out.';
+const fmt=k=>k>=1048576?(k/1048576).toFixed(1)+' GB':(k/1024).toFixed(0)+' MB';
+document.getElementById('used').style.width=(KB/TOTAL*100).toFixed(1)+'%';
+document.getElementById('capnum').textContent=`${fmt(KB)} used of ${fmt(TOTAL)} (${(KB/TOTAL*100).toFixed(0)}%), ${fmt(TOTAL-KB)} free`;
+document.getElementById('gap').textContent=`Scanned ${fmt(D.measured_kb)} under ${D.roots.join(', ')}. ${fmt(KB-D.measured_kb)} of used space sits outside those folders (snapshots, other users, system data).`;
+const root=d3.hierarchy(D.tree).sum(d=>d.value||0).sort((a,b)=>b.value-a.value);
+const pal=['#3d63c9','#2b8a6e','#b5642a','#7b4fb8','#a8414f','#4a7f9e','#8a7a2a','#5b6b7d'];
+const topNames=root.children.map(c=>c.data.name);
+const colorOf=n=>{let a=n;while(a.depth>1)a=a.parent;const i=topNames.indexOf(a.data.name);const base=d3.color(pal[i%pal.length]);return base.darker(Math.max(0,n.depth-2)*0.35)};
+const map=document.getElementById('map');
+function draw(node){
+  map.innerHTML='';
+  const w=map.clientWidth,h=map.clientHeight;
+  const h2=d3.hierarchy(node.data).sum(d=>d.value||0).sort((a,b)=>b.value-a.value);
+  d3.treemap().size([w,h]).paddingInner(1).round(true)(h2);
+  const shown=h2.children?h2.children:[h2];
+  // show two levels where room allows
+  const cells=[];
+  shown.forEach(c=>{ if(c.children && (c.x1-c.x0)>160 && (c.y1-c.y0)>90){ c.children.forEach(g=>cells.push([g,c])) } else cells.push([c,null]) });
+  cells.forEach(([c,parent])=>{
+    const el=document.createElement('div');el.className='cell';
+    el.style.left=c.x0+'px';el.style.top=c.y0+'px';el.style.width=(c.x1-c.x0)+'px';el.style.height=(c.y1-c.y0)+'px';
+    const real=findReal(node,c);el.style.background=colorOf(real||node);
+    const label=parent?parent.data.name+' / '+c.data.name:c.data.name;
+    el.title=(c.data.path||label)+' : '+fmt(c.value);
+    if((c.x1-c.x0)>60&&(c.y1-c.y0)>28) el.innerHTML=`<b></b><i>${fmt(c.value)}</i>`, el.querySelector('b').textContent=label;
+    el.tabIndex=0;
+    const go=()=>{const t=findReal(node,c);if(t&&t.children){zoom(t);return}if(parent){const p=findReal(node,parent);if(p&&p.children)zoom(p)}};
+    el.addEventListener('click',go);el.addEventListener('keydown',e=>{if(e.key==='Enter')go()});
+    map.appendChild(el);
+  });
+  crumbs(node);table(node);
+}
+function findReal(node,c){ // map a re-laid-out node back to the original hierarchy
+  const names=c.ancestors().reverse().slice(1).map(a=>a.data.name);
+  let cur=node;for(const n of names){cur=(cur.children||[]).find(x=>x.data.name===n);if(!cur)return null}
+  return cur;
+}
+let current=root;
+function zoom(n){current=n;draw(n)}
+function crumbs(n){
+  const c=document.getElementById('crumbs');c.innerHTML='';
+  n.ancestors().reverse().forEach((a,i,arr)=>{
+    const b=document.createElement('button');b.textContent=a.data.name;b.onclick=()=>zoom(a);
+    if(i===arr.length-1){b.disabled=true;b.style.color='var(--fg)'}
+    c.appendChild(b);if(i<arr.length-1){const s=document.createElement('span');s.textContent='/';c.appendChild(s)}
+  });
+}
+function table(n){
+  const tb=document.getElementById('rows');tb.innerHTML='';
+  (n.children||[n]).slice(0,15).forEach(c=>{
+    const tr=document.createElement('tr');
+    const a=document.createElement('td');a.textContent=c.data.path&&c.data.name!=='(other files)'?c.data.path:c.data.name+(c.data.path?' in '+c.data.path:'');
+    const b=document.createElement('td');b.className='n';b.textContent=fmt(c.value);
+    const p=document.createElement('td');p.className='n';p.textContent=(c.value/KB*100).toFixed(1)+'%';
+    tr.append(a,b,p);if(c.children){tr.style.cursor='pointer';tr.onclick=()=>zoom(c)}tb.appendChild(tr);
+  });
+}
+draw(root);
+let t;window.addEventListener('resize',()=>{clearTimeout(t);t=setTimeout(()=>draw(current),150)});
+</script>
+</body></html>

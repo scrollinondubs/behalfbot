@@ -1,0 +1,28 @@
+{
+  "id": "behalfbot-disk-map",
+  "name": "Behalf.bot - Disk map",
+  "description": "On-demand disk usage treemap. Scans the host with du and renders a zoomable page into briefings/ so the briefing-server serves it.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "roots": {
+        "type": "string",
+        "description": "Colon-separated directories to scan (DISK_MAP_ROOTS). Defaults to $HOME plus the usual OS-level space holders (/opt, /Applications, /Library, /private/var on macOS; /opt, /var, /usr, /srv on Linux).",
+        "default": ""
+      }
+    }
+  },
+  "contracts": {
+    "tools": ["disk-map"],
+    "skills": ["disk-map"]
+  },
+  "activation": {
+    "onStartup": false
+  },
+  "_chassis_v1_notes": {
+    "shell_implementation": "Plugin ships one Python script (stdlib only) plus an HTML template. contracts.tools -> installer can invoke plugins/disk-map/scripts/disk-map.py on the HOST (du inside the container only sees bind mounts).",
+    "compat_bundle": "See .claude-plugin/plugin.json for the Claude Code compatibility shim."
+  }
+}
