@@ -142,6 +142,19 @@ second_brain:
                                             # per-backend block below overrides it.
   scaffold_para_if_missing: true            # If their Notion isn't PARA-shaped, scaffold it
 
+  # The second-brain map: a table-of-contents doc the assistant maintains, one
+  # line and one link per first-level doc in Projects / Areas / Resources.
+  # Opt-in - with doc_id empty nothing loads and nothing is checked. The seed
+  # creates a `_MAP` doc and prints its id. See chassis/docs/second-brain-map.md
+  map:
+    doc_id: ""                              # Map doc id. Env SECOND_BRAIN_MAP_DOC overrides.
+                                            # Loaded into every session by the SessionStart
+                                            # hook chassis/.claude/hooks/load-second-brain-map.sh
+    roots: {}                               # label: container, for the drift heartbeat only.
+                                            # E.g. projects: "/Projects" (SiYuan hpath),
+                                            # "notebook:<id>" (SiYuan notebook per area),
+                                            # a Notion parent page id, or "Projects/" (Obsidian)
+
   # ---------------------------------------------------------------------------
   # Per-backend blocks - OPTIONAL OVERRIDES ONLY. Leave them commented out.
   #

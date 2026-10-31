@@ -455,6 +455,35 @@ Issue: scrollinondubs/behalfbot#219.
 
 ---
 
+## second-brain-map-refresh (chassis-shipped, opt-in)
+
+Keeps the second-brain map honest. The map is the table of contents for the
+installer's second brain, loaded into every session by
+`chassis/.claude/hooks/load-second-brain-map.sh`, so a stale map means every
+session that day starts with a wrong picture of what exists. The gather
+compares the first-level docs under `second_brain.map.roots` with the links in
+the map, for free, and prints `[]` when they agree or when no map is
+configured. A `probe_failed` element fires it too: a monitor that cannot run
+must say so rather than report all clear.
+
+Opt-in. Setup (map doc, roots, hook registration):
+`chassis/docs/second-brain-map.md`. Then uncomment the block.
+
+Issue: scrollinondubs/behalfbot#208.
+
+```yaml
+# schedule: daily 08:00
+# gather: state/chassis-root/scripts/gather-second-brain-map-drift.sh
+# condition: threshold count > 0
+# prompt: state/chassis-root/scheduled-tasks/second-brain-map-refresh-prompt.md
+# model: sonnet
+# budget: 1
+# criticality: normal
+# max_fires_per_day: 1
+```
+
+---
+
 ## credential-expiry (chassis-shipped, default-on)
 
 Hourly check that the credentials this install depends on are not about to

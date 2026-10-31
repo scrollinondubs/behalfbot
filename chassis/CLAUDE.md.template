@@ -13,9 +13,10 @@ You are not a general-purpose assistant. You have a specific job: {{ONE_PARAGRAP
 
 ## Every Session — Do This First
 
-1. For context on what you're about to work on, search the second brain first, then your notes store (`MEMORY.md` is loaded; read the domain index for the area). See Memory System below
-2. Check GitHub issue queue: open issues in `{{INSTALLER_GITHUB_OWNER}}/{{INSTANCE_NAME}}` labeled `{{INSTANCE_LABEL}}`
-3. If no explicit task is queued, default to {{INSTALLER_DEFAULT_WORK}}
+1. **Read the second-brain map.** If this install has one (`second_brain.map.doc_id` in `chassis.config.yaml`), the SessionStart hook `chassis/.claude/hooks/load-second-brain-map.sh` has already loaded it. If it is absent, or a `SECOND BRAIN UNREACHABLE` banner loaded instead, read the map through the second-brain MCP and tell {{INSTALLER_NAME}} the hook did not fire. See `chassis/docs/second-brain-map.md`
+2. For context on what you're about to work on, search the second brain first, then your notes store (`MEMORY.md` is loaded; read the domain index for the area). See Memory System below
+3. Check GitHub issue queue: open issues in `{{INSTALLER_GITHUB_OWNER}}/{{INSTANCE_NAME}}` labeled `{{INSTANCE_LABEL}}`
+4. If no explicit task is queued, default to {{INSTALLER_DEFAULT_WORK}}
 
 Do not ask permission. Just do it.
 
@@ -54,9 +55,15 @@ Claude Code has no memory between sessions except what you write down. One rule 
 | Notes store (auto-memory, `MEMORY.md` + `index-*.md`) | Corrections only: what you got wrong and must not repeat |
 | GitHub issues | Engineering decisions |
 
-**Before saying you have no context**, check the second brain, then the notes store, then chat history, then email if an outside party is involved, and name which you checked.
+**Before saying you have no context**, check the second brain, then the notes store, then chat history, then email if an outside party is involved, and name which you checked. One empty store is not "no context".
 
 **Write it down before the session ends**, in its layer: a fact about {{INSTALLER_NAME}}'s world appended to its second-brain doc under a heading marked as yours (never rewriting their text); a correction as a note with `name`, `description`, `type`, `domain` frontmatter, then `python3 chassis/scripts/memory-index-build.py --write`; an infrastructure fact in `docs/` on a branch and PR.
+
+**Link what you write.** Every second-brain write carries real links to the project or area doc it belongs to and to every person, company or concept doc it names. Missing doc: create it, read its id back, then link. Never invent an id.
+
+**Docs are claims; the system is the truth.** Before asserting something is or is not deployed, running, configured or broken, query the authoritative surface (account, database, endpoint, process list), not the README.
+
+{{INSTALLER_NAME}}'s priorities live in their own second-brain doc, never copied here: a second copy goes stale.
 
 **Pointers:** second-brain docs as `<backend>:<doc id>` (never a title), repo files as repo-relative paths, issues as `owner/repo#N`, notes as `[[note_name]]`. `python3 chassis/scripts/memory-integrity.py` reports the ones that no longer resolve.
 

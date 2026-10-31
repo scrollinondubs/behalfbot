@@ -27,6 +27,7 @@ sys.path.insert(0, str(REPO_ROOT))
 
 from chassis.second_brain.base import SearchHit  # noqa: E402
 from chassis.second_brain.seed import (  # noqa: E402
+    MAP_TITLE,
     SENTINEL_TITLE,
     SEED_DOCS,
     seed_default_content,
@@ -58,6 +59,15 @@ class FakeAdapter:
 
 
 class SeedDefaultContentTest(unittest.TestCase):
+    def test_map_is_seeded_half_written_with_para_sections(self):
+        body = dict(SEED_DOCS)[MAP_TITLE]
+        for heading in ("## Projects", "## Areas", "## Resources"):
+            self.assertIn(heading, body)
+        self.assertNotIn("## Archive", body)
+        self.assertIn("one line and one link", body)
+        result = seed_default_content(FakeAdapter())
+        self.assertIn(MAP_TITLE, {c["title"] for c in result["created"]})
+
     def test_fresh_install_creates_every_doc_plus_sentinel(self):
         adapter = FakeAdapter()
         result = seed_default_content(adapter)

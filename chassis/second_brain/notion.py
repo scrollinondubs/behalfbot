@@ -334,6 +334,31 @@ class NotionNotes(NotesAdapter):
         children = _request(self._token, "GET", f"/blocks/{doc_id}/children?page_size=100")
         return _blocks_to_markdown(children.get("results", []))
 
+    def read_doc_source(self, doc_id: str) -> str:
+        """`read_doc`, plus the page id of every page link.
+
+        `read_doc` keeps only `plain_text`, which drops the id a page mention or
+        a `link_to_page` block carries, so a caller checking which pages a doc
+        links to could only match titles. Here each link also renders as
+        `notion:<page id>`, the chassis pointer format.
+        """
+        children = _request(self._token, "GET", f"/blocks/{doc_id}/children?page_size=100")
+        blocks = children.get("results", [])
+        lines = [_blocks_to_markdown(blocks)]
+        for block in blocks:
+            if block.get("type") == "link_to_page":
+                page_id = (block.get("link_to_page") or {}).get("page_id")
+                if page_id:
+                    lines.append(f"notion:{page_id}")
+            for value in (block.get(block.get("type") or "") or {}).values():
+                if not isinstance(value, list):
+                    continue
+                for part in value:
+                    page = ((part or {}).get("mention") or {}).get("page") if isinstance(part, dict) else None
+                    if page and page.get("id"):
+                        lines.append(f"notion:{page['id']} {part.get('plain_text', '')}".rstrip())
+        return "\n".join(line for line in lines if line)
+
     def get_deeplink(self, doc_id: str) -> str:
         return f"https://www.notion.so/{doc_id.replace('-', '')}"
 

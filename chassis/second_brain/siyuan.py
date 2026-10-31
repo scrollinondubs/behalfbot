@@ -34,6 +34,7 @@ it moves, so it lives in .env, never in code.
 from __future__ import annotations
 
 import json
+import re
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -175,6 +176,24 @@ class SiYuanNotes(NotesAdapter):
         result = self._post("/api/export/exportMdContent", {"id": doc_id})
         return result.get("content", "") if isinstance(result, dict) else ""
 
+    def read_doc_source(self, doc_id: str) -> str:
+        """The doc as stored, block refs left as `((id 'Title'))` markers.
+
+        `read_doc` goes through exportMdContent, which resolves every block ref
+        and inlines the referenced document as a footnote - a 3KB index doc came
+        back as 51KB. getBlockKramdown keeps refs as refs. The `{: id=...}`
+        attribute lists kramdown puts on every block are stripped: they mean
+        something to SiYuan and nothing to a reader, and they roughly double
+        the payload.
+        """
+        result = self._post("/api/block/getBlockKramdown", {"id": doc_id})
+        text = (result or {}).get("kramdown", "") if isinstance(result, dict) else ""
+        if not text.strip():
+            raise SiYuanError(f"read_doc_source: doc {doc_id!r} is empty or does not exist")
+        text = re.sub(r"\{:[^}]*\}", "", text)
+        text = re.sub(r"[ \t]+$", "", text, flags=re.M)
+        return re.sub(r"\n{3,}", "\n\n", text).strip()
+
     def get_deeplink(self, doc_id: str) -> str:
         return f"{self._deeplink_template}{doc_id}"
 
@@ -223,7 +242,8 @@ class SiYuanNotes(NotesAdapter):
         """Docs directly under `parent`, ascending by hpath, code-point order.
 
         `parent` is an hpath (`/1 Projects`), a doc block id, or `""`/`"/"` for
-        the notebook root - the same forms `create_doc` accepts. It is resolved
+        the notebook root - the same forms `create_doc` accepts - or
+        `notebook:<id>` for the root of any notebook (PARA kept as notebooks). It is resolved
         first, and a parent that does not exist raises rather than returning an
         empty list, so a typo cannot masquerade as an empty container.
 
@@ -362,6 +382,8 @@ class SiYuanNotes(NotesAdapter):
             reject a question that had one correct answer.
         """
         raw = (parent or "").strip()
+        if raw.startswith("notebook:"):
+            return "/", self._notebook_root(raw.split(":", 1)[1])
         if raw in ("", "/"):
             if not self._notebook_id:
                 raise SiYuanError(
@@ -405,6 +427,22 @@ class SiYuanNotes(NotesAdapter):
                 "document sense and are rejected here too."
             )
         return rows[0].get("hpath") or "/", rows[0].get("box") or self._notebook_id
+
+    def _notebook_root(self, notebook_id: str) -> str:
+        """Validate `notebook:<id>` and return the id.
+
+        Many SiYuan installs lay PARA out as one NOTEBOOK per area rather than
+        one doc per area, so the first-level docs of "Projects" are notebook
+        roots, which no block id or hpath can name. A notebook that does not
+        exist raises, for the same not-found-is-not-empty reason as the other
+        parent forms.
+        """
+        notebook_id = notebook_id.strip()
+        result = self._post("/api/notebook/lsNotebooks", {})
+        notebooks = (result or {}).get("notebooks", []) if isinstance(result, dict) else []
+        if not any(nb.get("id") == notebook_id for nb in notebooks):
+            raise SiYuanError(f"list_children: no notebook with id {notebook_id!r}")
+        return notebook_id
 
     def _block_title(self, block_id: str) -> str:
         sql = f"SELECT content FROM blocks WHERE id = '{self._escape(block_id)}' LIMIT 1"

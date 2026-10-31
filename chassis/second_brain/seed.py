@@ -2,9 +2,9 @@
 
 new-jaxity#257: a fresh Behalf.bot install configures a second-brain backend
 (SiYuan, Notion or Obsidian) and gets an empty one. This seeds a small starter
-skeleton - PARA top-level docs, a Priorities doc, a Mental Models stub, and the
-Introspection pattern of Daily Log / Weekly Review / Long-Arc Review templates
-- so day one has somewhere to write instead of a blank slate.
+skeleton - PARA top-level docs, a `_MAP` table of contents, a Priorities doc, a
+Mental Models stub, and the Introspection pattern of Daily Log / Weekly Review /
+Long-Arc Review templates - so day one has somewhere to write instead of a blank slate.
 
 Written entirely against `NotesAdapter` (base.py). No backend-specific calls:
 the same content lands correctly whichever of the three backends is configured,
@@ -28,6 +28,9 @@ from chassis.second_brain.base import NotesAdapter
 
 SENTINEL_TITLE = "Second Brain Seed"
 SENTINEL_MARKER = "<!-- behalfbot-second-brain-seed-v1 -->"
+# The second-brain map (chassis/docs/second-brain-map.md). Its id goes in
+# second_brain.map.doc_id; main() prints it so the installer can copy it.
+MAP_TITLE = "_MAP"
 
 SEED_DOCS: list[tuple[str, str]] = [
     (
@@ -69,6 +72,23 @@ SEED_DOCS: list[tuple[str, str]] = [
         "clears._\n\n"
         "## Horizon\n\n"
         "_Worth doing eventually. Not scheduled, not forgotten._\n",
+    ),
+    (
+        MAP_TITLE,
+        "# _MAP\n\n"
+        "The table of contents for this second brain. One line and one link "
+        "per first-level doc in Projects, Areas and Resources - never sub-docs, "
+        "never Archive. The assistant keeps it current and loads it at the "
+        "start of every session; you own Priorities and your project docs.\n\n"
+        "Each line: a link to the doc, what it is, what state it is in, and any "
+        "nickname you use for it in conversation, so the assistant can match "
+        "the nickname to the doc.\n\n"
+        "## Projects\n\n"
+        "- _Your first project goes here: one line and one link._\n\n"
+        "## Areas\n\n"
+        "## Resources\n\n"
+        "- Priorities - what is urgent right now. Owned by you, not the "
+        "assistant.\n",
     ),
     (
         "Mental Models",
@@ -187,6 +207,12 @@ def main() -> int:
         return 0
 
     print(f"second-brain seed: created {len(result['created'])} doc(s).")
+    for doc in result["created"]:
+        if doc["title"] == MAP_TITLE and doc["id"]:
+            print(
+                f"second-brain seed: map doc id {doc['id']} - set second_brain.map.doc_id "
+                "to it to load the map into every session (chassis/docs/second-brain-map.md)."
+            )
     for failure in result.get("failed", []):
         print(f"second-brain seed: FAILED {failure['title']!r}: {failure['error']}")
     return 0
