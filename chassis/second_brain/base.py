@@ -56,6 +56,23 @@ class NotesAdapter(Protocol):
         """Return the doc's markdown body. Raise on not-found."""
         ...
 
+    def read_doc_source(self, doc_id: str) -> str:
+        """Return the doc with its links left as links. Raise on not-found.
+
+        `read_doc` is for reading a doc's content and may resolve links on the
+        way (SiYuan's export inlines every referenced doc). This is for reading
+        a doc whose links ARE the content - an index or table-of-contents doc
+        loaded into a prompt, or checked for which docs it points at.
+          - SiYuan: kramdown, refs kept as `((id 'Title'))`, block attributes
+            stripped.
+          - Obsidian: the file as-is, so `[[wikilinks]]` survive. Same as
+            `read_doc`.
+          - Notion: same as `read_doc`. Page mentions come back as their title
+            text without the page id, so a caller matching links on Notion has
+            to match on titles.
+        """
+        ...
+
     def get_deeplink(self, doc_id: str) -> str:
         """Return a URL that, when clicked, opens the doc in the user's app/device.
 
@@ -93,7 +110,9 @@ class NotesAdapter(Protocol):
 
         `parent` takes the same backend-specific identifier forms `create_doc`
         documents, and an empty string means the configured default root:
-          - SiYuan: hpath like `/1 Projects`, or a doc block id
+          - SiYuan: hpath like `/1 Projects`, a doc block id, or
+            `notebook:<id>` for the root of a notebook (installs that keep
+            each PARA area as its own notebook)
           - Notion: parent page id
           - Obsidian: vault-relative directory like `1 Projects/`
 

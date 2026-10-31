@@ -128,6 +128,9 @@ worth stating plainly because nothing surfaces it.
 }
 ```
 
+The opt-in second-brain map hook registers the same way, under `SessionStart`
+instead of `PreToolUse`: `chassis/docs/second-brain-map.md` has the block.
+
 An empty `matcher` runs on every tool call; a named one runs only for that tool.
 Keep `guardrails.sh` on the empty matcher - a safety hook that only fires for
 some tools is not a safety hook.
@@ -150,6 +153,7 @@ transcript looked healthy throughout.
 
 - `chassis/.claude/hooks/guardrails.sh` — the safety hook itself
 - `chassis/.claude/hooks/discord-reply-param-fix.sh` — the Discord reply param rewrite
+- `chassis/.claude/hooks/load-second-brain-map.sh` - the opt-in SessionStart map load (`chassis/docs/second-brain-map.md`)
 - `docs/architectural-anti-patterns.md` — pattern #4 + #13
 - `docs/LESSONS_FROM_V1.md` — full lesson list, especially #4, #6, #13, #27, #30
 - `docs/mcp-setup.md` — when adding a new MCP, also extend the HTTP allowlist

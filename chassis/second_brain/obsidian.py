@@ -312,6 +312,9 @@ class ObsidianNotes(NotesAdapter):
             )
         return target.read_text(encoding="utf-8")
 
+    def read_doc_source(self, doc_id: str) -> str:
+        return self.read_doc(doc_id)
+
     # -- daily notes ---------------------------------------------------------
 
     def daily_note_id(self, day: _date | None = None) -> str:

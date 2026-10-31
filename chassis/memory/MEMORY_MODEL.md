@@ -134,11 +134,35 @@ A generated index keeps everything above its first list item verbatim (title, in
 
 **When to read.** When a memory seems relevant, when the installer refers to earlier work, and always when they ask you to check, recall or remember. If they say to ignore memory, do not apply, cite or mention it.
 
-**Search order before saying "I have no context on this":** the second brain first (`mcp__secondbrain__search`, or the backend's own MCP in direct mode), then the notes store, then chat history, then email when an outside party is involved. An empty result from one store is evidence of one empty store. When you do report a blind spot, name the stores you checked.
+**Search order before saying "I have no context on this".** An empty result from one store is evidence of one empty store, not of no context. Work down the tiers, and when you do report a blind spot, name the tiers you actually checked:
 
-**Memories are claims with a date.** A note naming a file, function or flag says it existed when the note was written. Before recommending it, check that it still does. When the system you can query and a note disagree, the system wins.
+1. **The second brain** (`mcp__secondbrain__search`, or the backend's own MCP in direct mode). The installer writes there daily; it is almost always the hit. Start here, and use the map (below) to find the right doc.
+2. **The notes store.** Your own corrections on the same subject.
+3. **Chat history.** Discord's search API is not open to bots, so this means pulling and reading history: good for recent, expensive for old.
+4. **Email,** when an outside party is involved.
+
+The failure this order exists for: a session searched one store for a name, found nothing, and reported starting blind, while a long prep doc for a call the next day sat in the second brain, written the evening before. The instruction had named the wrong store.
+
+**Docs are claims; the system is the truth.** A README, an issue body, a comment or a note records what was true when it was written. The system records what is true now. Before asserting that something is or is not deployed, running, configured or broken, ask what the authoritative surface is - the account, the database, the live endpoint, the process list - and query it. A doc is a hint about where to look, never the answer. A note naming a file, function or flag says it existed when the note was written; check that it still does before recommending it. If verifying is genuinely expensive, say so and ask whether it is worth it rather than quietly falling back on the document. And if one doc turned out stale, assume others are too.
+
+The reference install learned this when a session concluded a component had never been deployed by reading its README, which described a deploy still awaiting approval. It had been live for two weeks; the account was one query away. The wrong conclusion then sat in the installer's task list for over a week.
 
 **Write as well as read.** When a session produces real work on a person, company or project, file it before the session ends, in its layer: a fact about the installer's world appended to its second-brain doc under a heading that marks it as yours (`## <assistant> - YYYY-MM-DD`), never rewriting the installer's own text; a correction as a note; an infrastructure fact in `docs/` on a branch and PR.
+
+**Link what you write.** Every second-brain write by the assistant carries real links to:
+
+- the project or area doc it belongs to, and
+- every person, company, place or concept doc it names.
+
+Use the backend's own link form (`((<block id> 'Title'))` on SiYuan, `[[Note]]` on Obsidian, a page mention on Notion), so the link resolves and backlinks work. If a named doc does not exist, create it in the same session with real content, read its id back from the backend, then link it. Never invent an id: a dead link looks exactly like a live one. Before reporting the write as done, check the links landed (on SiYuan, `SELECT count(*) FROM refs WHERE root_id = '<doc id>'`; 0 means the write is unlinked).
+
+Why: keyword search misses nicknames and synonyms, which is how the search failure above happened; a link is exact, and backlinks for any doc are one query away. On the reference install fewer than one doc in five linked to anything before this rule, because installers do not hand-link and nothing else did. Do not link for density: a few links in the right places beat many, because a session follows them one hop at a time.
+
+## The map: the second brain's table of contents (opt-in)
+
+`chassis/docs/second-brain-map.md`. One doc in the second brain, conventionally `_MAP`, with one line and one link per first-level doc in Projects, Areas and Resources - Archive excluded, sub-docs never listed. A SessionStart hook loads it into every session, uncached and loud when unreachable, and a daily gather-first heartbeat flags drift between the map and the real docs.
+
+Ownership is the point. The assistant owns the map ("what exists and where"); the installer owns their priorities doc ("what is urgent") and their project docs. Never keep a copy of priorities in the map or in `CLAUDE.md`: a second copy of a fact is a second thing to forget to update, and a priorities list in `CLAUDE.md` goes stale within weeks.
 
 ## Dream: nightly consolidation (opt-in)
 
