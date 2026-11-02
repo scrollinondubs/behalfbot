@@ -97,8 +97,10 @@ utilization_pct=$(echo "$total_tokens $SESSION_TOKEN_LIMIT" | awk '{printf "%.1f
 threshold_pct="$ENABLE_PCT"
 
 conservation_enabled="false"
+conservation_by=""
 if [[ -f "$CONSERVATION_FILE" ]]; then
     conservation_enabled=$(jq -r '.enabled // false' "$CONSERVATION_FILE")
+    conservation_by=$(jq -r '.enabled_by // ""' "$CONSERVATION_FILE")
 fi
 
 # Elapsed % of a nominal 5hr (300min) session window.
@@ -133,7 +135,10 @@ elif [[ $util_int -ge $ENABLE_PCT && $remaining_int -gt $REMAINING_MIN_FLOOR ]];
 fi
 
 # Auto-disable when a new billing block starts - old conservation state is stale.
-if [[ "$conservation_enabled" == "true" && "$new_block_detected" == "true" ]]; then
+# Only for the flag this monitor set. An operator's conservation mode (for
+# example until a weekly reset) outlasts a 5-hour block; it lifts by
+# auto_lift_after or by hand.
+if [[ "$conservation_enabled" == "true" && "$new_block_detected" == "true" && "$conservation_by" == "auto-threshold" ]]; then
     should_disable="true"
 fi
 
