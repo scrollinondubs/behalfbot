@@ -555,6 +555,32 @@ Opt-in because it needs billing keys. Setup: `chassis/docs/dashboard.md`
 
 ---
 
+## tripwires (chassis-shipped, default-on)
+
+Runs every due tripwire: short-term monitors held as data in
+`state/tripwires/`, added with `chassis/scripts/tripwire.py` or the dashboard's
+TripWires tab. Adding one never changes this file. Posts for itself through
+`chassis_alert`, so `count` stays 0 and no model runs; set
+`TRIPWIRE_CHANNEL_ID=<channel>` in front of the gather to send to one Discord
+channel instead of the install's alert route. `count` is 1 only when the
+heartbeat itself is broken. `critical` so conservation mode does not pause
+watches that spend nothing. See `chassis/docs/tripwires.md`.
+
+```yaml
+schedule: every 15m
+gather: state/chassis-root/scripts/gather-tripwires.py
+condition: threshold count > 0
+prompt: state/chassis-root/scheduled-tasks/tripwires-broken-prompt.md
+model: haiku
+budget: 0.05
+criticality: critical
+realert_after: 24h
+dedupe_key: .reason
+max_fires_per_day: 2
+```
+
+---
+
 ## Active heartbeats
 
 <!--

@@ -1,7 +1,7 @@
 # Dashboard
 
-Every install gets a web dashboard with a **Briefings** tab and a **DevOps**
-tab. **Projections** shows up once you list a paid service. Installed plugins
+Every install gets a web dashboard with **Briefings**, **DevOps** and
+**TripWires** tabs. **Projections** shows up once you list a paid service. Installed plugins
 add their own tabs, and you can add a tab of your own by dropping one Python
 file in a folder.
 
@@ -96,6 +96,20 @@ It scans `$HOME` plus `/opt /Applications /Library /private/var` on macOS or
 `/opt /srv /usr /var` on Linux, and reads capacity from `df -k $HOME`. Set
 `DISK_MAP_ROOTS=/path/a:/path/b` to scan something else. The script can also
 run from a heartbeat on its own.
+
+## TripWires
+
+Short-term monitors held as data: what is being watched, last result, next
+check and expiry, with cancel and archive buttons and a small add form. State
+changes are POST with an origin check. Mounted on every install; the page warns
+when tripwires are active but the `tripwires` heartbeat is not running. See
+[`tripwires.md`](tripwires.md).
+
+An install with its own dashboard app can mount the same tab:
+`chassis/dashboard/core/tripwires.py` exposes `build_router(render, store_dir)`
+and needs nothing from `tabs.py` when given a renderer. Add
+`chassis/dashboard/templates` to that app's Jinja search path. Its `base.html`
+needs `topbar` and `content` blocks and the shared CSS variables.
 
 ## Projections
 
