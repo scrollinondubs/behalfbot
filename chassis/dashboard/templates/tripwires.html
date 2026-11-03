@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}TripWires{% endblock %}
+
+{% block topbar %}
+<div class="topbar-inner">
+  <h1>TripWires</h1>
+  <span class="muted small">heartbeat last ran {{ last_run_label }}</span>
+  {% if archived_count %}
+  <a class="btn" href="{{ prefix }}{% if not show_archived %}?archived=1{% endif %}">{% if show_archived %}Hide archived{% else %}Show archived ({{ archived_count }}){% endif %}</a>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .tw-note { padding: 10px 12px; border: 1px solid var(--warn); border-radius: 6px; color: var(--warn); overflow-wrap: anywhere; }
+  .tw-note.bad { border-color: var(--danger); color: var(--danger); }
+  .tw-url { overflow-wrap: anywhere; font-size: 0.85em; color: var(--accent); }
+  .tw-ok { color: var(--accent-2); border-color: rgba(16,185,129,0.4); }
+  .tw-warn { color: var(--warn); border-color: rgba(249,115,22,0.4); }
+  .tw-result-bad { color: var(--warn); }
+  .tw-actions form { display: inline; }
+  .tw-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-width: 760px; }
+  .tw-form label { display: block; font-size: 0.85em; color: var(--muted); }
+  .tw-form input, .tw-form select, .tw-form textarea { width: 100%; margin-top: 4px; padding: 7px 9px; background: var(--bg-2); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+  .tw-wide { grid-column: 1 / -1; }
+  .tw-form .tw-check input { width: auto; margin-right: 6px; }
+  @media (max-width: 768px) {
+    .tw-table thead { display: none; }
+    .tw-table, .tw-table tbody, .tw-table tr, .tw-table td { display: block; width: 100%; }
+    .tw-table tr { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; padding: 6px 0; }
+    .tw-table td { border: 0; padding: 4px 12px; }
+    .tw-table td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 0.85em; }
+    .tw-actions .btn { padding: 9px 14px; }
+    .tw-form { grid-template-columns: minmax(0, 1fr); }
+    .tw-form input, .tw-form select, .tw-form textarea { font-size: 16px; }
+  }
+</style>
+
+{% if error %}<p class="tw-note bad" role="alert">{{ error }}</p>{% endif %}
+{% if store_error %}<p class="tw-note bad" role="alert">The tripwire store cannot be read: {{ store_error }}. Nothing is being checked.</p>{% endif %}
+{% if heartbeat_stale %}<p class="tw-note" role="alert">Active tripwires, but the <code>tripwires</code> heartbeat last ran {{ last_run_label }}. They are not being checked.</p>{% endif %}
+
+<section class="panel">
+  {% if rows %}
+  <table class="status-table tw-table">
+    <thead><tr><th>Tripwire</th><th>Status</th><th>Last checked</th><th>Last result</th><th>Next check</th><th>Expires</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr>
+        <td>
+          <strong>{{ r.name }}</strong>
+          <div class="muted small">{{ r.why }}</div>
+          <div class="small">{{ r.check_label }}{% if r.target %}: "{{ r.target }}"{% endif %}{% if r.keep_watching %} · keeps watching{% endif %}</div>
+          <a class="tw-url" href="{{ r.url }}" rel="noopener noreferrer" target="_blank">{{ r.url }}</a>
+        </td>
+        <td data-label="Status"><span class="pill {% if r.blind %}tw-warn{% elif r.active %}tw-ok{% endif %}">{% if r.blind %}blind{% else %}{{ r.status }}{% endif %}</span></td>
+        <td data-label="Last checked">{{ r.last_checked_label }}</td>
+        <td data-label="Last result"><span class="{% if r.blind %}tw-result-bad{% endif %}">{{ r.last_result or "not yet" }}</span>{% if r.consecutive_failures %}<div class="muted small">{{ r.consecutive_failures }} failed in a row</div>{% endif %}</td>
+        <td data-label="Next check">{{ r.next_check_label }}</td>
+        <td data-label="Expires"><span title="{{ r.expires_iso }}">{{ r.expires_label }}</span></td>
+        <td class="tw-actions">
+          {% if r.active %}<form method="post" action="{{ prefix }}/{{ r.id }}/cancel" onsubmit="return confirm('Cancel this tripwire?')"><button class="btn small-btn" type="submit">Cancel</button></form>{% endif %}
+          {% if r.archivable %}<form method="post" action="{{ prefix }}/{{ r.id }}/archive"><button class="btn small-btn subtle" type="submit">Archive</button></form>{% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% elif not store_error %}
+  <p class="muted">Nothing is being watched. Add one below, or ask in chat.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Add a tripwire</h2>
+  <form class="tw-form" method="post" action="{{ prefix }}/add">
+    <label>Name<input name="name" required maxlength="120" value="{{ form.name or '' }}"></label>
+    <label>Check
+      <select name="check">
+        {% for value, label in check_types.items() %}<option value="{{ value }}"{% if form.check == value %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="tw-wide">URL<input name="url" type="url" required maxlength="500" value="{{ form.url or '' }}"></label>
+    <label>Text (for the text checks)<input name="text" maxlength="300" value="{{ form.text or '' }}"></label>
+    <label>Status (for the HTTP check)<input name="status" inputmode="numeric" value="{{ form.status or '' }}"></label>
+    <label>Check every<input name="every" required value="{{ form.every or '1h' }}"></label>
+    <label>Expires (36h, 2d, or a date)<input name="expires" required value="{{ form.expires or '' }}"></label>
+    <label class="tw-wide">Why it exists<input name="why" required maxlength="500" value="{{ form.why or '' }}"></label>
+    <label class="tw-wide">Message to send when it fires<textarea name="message" required maxlength="1200" rows="2">{{ form.message or '' }}</textarea></label>
+    <label class="tw-wide tw-check"><input type="checkbox" name="keep_watching" value="1"{% if form.keep_watching %} checked{% endif %}>Keep watching after it fires</label>
+    <div class="tw-wide"><button class="btn" type="submit">Add</button></div>
+  </form>
+</section>
+{% endblock %}
