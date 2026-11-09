@@ -145,6 +145,12 @@ Semver:
   - **The registration in `HEARTBEATS.md.template` was wrong in a second, independent way.** Its `gather:`/`prompt:` convention is `${CHASSIS_HOME}/chassis/...` for chassis-shipped files. Gather lines are `eval`ed, so that expands - to a path no container has. Prompt paths are never variable-expanded; the dispatcher joins the raw string onto `$CHASSIS_HOME`, so the templated prompt becomes the literal `/app/customer/${CHASSIS_HOME}/chassis/...` and the heartbeat would have died with `prompt_missing` the first time it fired. Both legs of the memory-canary block now address the boot-time `state/chassis-root` symlink relative to `$CUSTOMER_HOME`, which resolves on both container layouts. The path-conventions section documents the container case and the host-install caveat; the other heartbeat blocks still carry the old idiom and are left for a follow-up.
   - Coverage: `test-memory-canary.sh` gains a chassis root that is not `$CHASSIS_HOME/chassis`, resolved via the state record, plus a stale state record that must still fire rather than pass; `test-bootstrap-audit-memory.sh` gains sibling and offset-root resolution cases for the audit gather. Three of the five discriminate: the two offset-root cases and the audit sibling case fail against the pre-fix scripts. The stale-record and quiet-on-missing cases pass either way by design - they pin behavior the fix had to preserve rather than behavior it introduces.
 
+## v0.6.1
+
+### Fixed
+
+- Quota monitor no longer lifts an operator's conservation mode when a new 5-hour billing block starts. Only the flag it set itself (`enabled_by: auto-threshold`) clears on a new block; anything else lifts through `auto_lift_after` or by hand. An install's quota prompt must pass `--by "auto-threshold"` when enabling.
+
 ## v0.5.0 - 2026-08-09
 
 Sixteen commits that had accumulated on `main` under an unchanged `VERSION`. That is not incidental to this release: because both `gather-chassis-update-check.sh` and `chassis-update.sh` gate on string equality between local and upstream `VERSION`, every one of these commits was structurally invisible to every install's update path until this bump. The reference install was nine commits behind an upstream that reported the same version number, including the fix for a bug that had been silently destroying its knowledge graph. See #147.
