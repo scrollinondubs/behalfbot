@@ -191,6 +191,9 @@ table.status-table tr.warn { background: rgba(249,115,22,0.06); }
 .ok { color: var(--accent-2); }
 .fail { color: var(--danger); }
 .warn { color: var(--warn); }
+.gauge-yellow { color: #fde047; }
+.gauge-orange { color: var(--warn); }
+.gauge-red { color: var(--danger); }
 
 .empty-state { color: var(--muted); padding: 40px; text-align: center; font-style: italic; }
 

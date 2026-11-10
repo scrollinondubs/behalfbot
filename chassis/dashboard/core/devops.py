@@ -18,6 +18,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 
 from core.disk import load_summary as load_disk_summary
+from core.disk import memory_dir_stat
 from core.disk import router as disk_router
 from tabs import current_registry, customer_home, page, run_panels
 
@@ -269,6 +270,7 @@ def build(cfg: dict, notes: list[str]) -> dict:
         "backups_stale_hours": float(cfg.get("backup_stale_hours") or DEFAULT_STALE_HOURS),
         "disk_enabled": cfg.get("disk_map", True) is not False,
         "disk": load_disk_summary(),
+        "memory": memory_dir_stat(),
         "panels": run_panels(reg),
         "load_errors": load_errors,
         "notes": notes,
