@@ -397,5 +397,31 @@ class DiskTree(unittest.TestCase):
             self.assertEqual(mod.default_roots(), ["/x", "/y"])
 
 
+@unittest.skipUnless(HAVE_FASTAPI, "fastapi not installed")
+class DiskGauges(unittest.TestCase):
+    def test_bands(self) -> None:
+        from core import disk
+        cases = {69.9: "", 70: "gauge-yellow", 79.9: "gauge-yellow", 80: "gauge-orange",
+                 89.9: "gauge-orange", 90: "gauge-red", 100: "gauge-red", 120: "gauge-red"}
+        for value, level in cases.items():
+            self.assertEqual(disk.gauge_level(value, 100), level, value)
+
+    def test_memory_stat_counts_subfolders_and_skips_git(self) -> None:
+        from core import disk
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.md").write_bytes(b"x" * 1048576)
+            (root / "sub").mkdir()
+            (root / "sub" / "b.md").write_bytes(b"x" * 524288)
+            (root / ".git").mkdir()
+            (root / ".git" / "HEAD").write_bytes(b"x" * 1048576)
+            stat = disk.memory_dir_stat(root)
+        self.assertEqual((stat["files"], stat["mb"]), (2, 1.5))
+
+    def test_memory_stat_missing_dir_is_none(self) -> None:
+        from core import disk
+        self.assertIsNone(disk.memory_dir_stat(Path("/nonexistent/memory")))
+
+
 if __name__ == "__main__":
     unittest.main()

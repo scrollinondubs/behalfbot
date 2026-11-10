@@ -75,13 +75,19 @@
 <section class="panel">
   <h2>Disk</h2>
   {% if disk %}
-  <p>
+  <p class="{{ disk.level }}">
     {{ disk.used_gb | round(1) }} GB used of {{ disk.total_gb | round(0) | int }} GB
-    ({{ disk.used_pct | round(0) | int }}%), <span class="{% if disk.free_gb < 50 %}fail{% else %}ok{% endif %}">{{ disk.free_gb | round(1) }} GB free</span>
+    ({{ disk.used_pct | round(0) | int }}%), {{ disk.free_gb | round(1) }} GB free
   </p>
   <p class="muted small">Scanned {{ disk.scanned_at[:16] | replace('T', ' ') }} UTC. {{ disk.unscanned_gb | round(1) }} GB sits outside the scanned folders.</p>
   {% else %}
   <p class="muted small">No scan yet.</p>
+  {% endif %}
+  {% if memory %}
+  <p>
+    Memory dir: <span class="{{ memory.mb_level }}">{{ "%.1f"|format(memory.mb) }} MB</span> of {{ memory.mb_limit }} MB limit,
+    <span class="{{ memory.files_level }}">{{ memory.files }} files</span> of {{ memory.files_limit }} limit
+  </p>
   {% endif %}
   <a href="/devops/disk" class="btn">Open disk map</a>
 </section>
