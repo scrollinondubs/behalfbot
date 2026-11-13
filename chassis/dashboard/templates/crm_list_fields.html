@@ -1,0 +1,3 @@
+<label>Name<input name="name" required maxlength="200" value="{{ form.name or '' }}"></label>
+<label>Date<input name="event_date" type="date" value="{{ form.event_date or '' }}"></label>
+<label class="crm-wide">Notes<textarea name="notes" rows="2" maxlength="4000">{{ form.notes or '' }}</textarea></label>

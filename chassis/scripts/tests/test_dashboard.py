@@ -119,7 +119,7 @@ class DashboardCase(unittest.TestCase):
 class TabLoading(DashboardCase):
     def test_core_tabs_and_no_projections_without_spend_config(self) -> None:
         c, reg = self.client()
-        self.assertEqual([t.label for t in reg.tabs], ["Briefings", "DevOps", "TripWires"])
+        self.assertEqual([t.label for t in reg.tabs], ["Briefings", "DevOps", "TripWires", "CRM"])
         self.assertEqual(c.get("/briefings").status_code, 200)
         self.assertEqual(c.get("/devops").status_code, 200)
         self.assertEqual(c.get("/projections").status_code, 404)
@@ -197,7 +197,7 @@ class TabLoading(DashboardCase):
         self.plugin("plain", None, {})
         _, reg = self.client()
         self.assertEqual([e.ident for e in reg.errors], ["junk"])
-        self.assertEqual([t.label for t in reg.tabs], ["Briefings", "DevOps", "TripWires"])
+        self.assertEqual([t.label for t in reg.tabs], ["Briefings", "DevOps", "TripWires", "CRM"])
 
     def test_duplicate_prefix_and_core_prefix_are_refused(self) -> None:
         for name in ("a", "b"):

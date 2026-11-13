@@ -1,0 +1,99 @@
+{% extends "crm_layout.html" %}
+{% block crm %}
+<p><a class="muted small" href="{{ prefix }}/lists">&larr; All lists</a></p>
+<section class="panel">
+  <h2>{{ list.name }}{% if list.event_date %} <small>{{ list.event_date }}</small>{% endif %}</h2>
+  {% if list.notes %}<p class="crm-sub">{{ list.notes }}</p>{% endif %}
+  <div class="stat-row crm-stats">
+    <a class="stat{% if not status_filter %} selected{% endif %}" href="{{ prefix }}/lists/{{ list.id }}"><div class="stat-num">{{ summary.total }}</div><div class="stat-label">On list</div></a>
+    {% for s in statuses %}
+    <a class="stat{% if status_filter == s %} selected{% endif %}" href="{{ prefix }}/lists/{{ list.id }}?status={{ s }}"><div class="stat-num">{{ summary.counts[s] }}</div><div class="stat-label">{{ s }}</div></a>
+    {% endfor %}
+    <div class="stat"><div class="stat-num">{{ summary.headcount_coming }}</div><div class="stat-label">Heads yes + maybe</div><div class="muted small">{{ summary.headcount_yes }} + {{ summary.headcount_maybe }}</div></div>
+  </div>
+</section>
+
+<section class="panel">
+  {% if members %}
+  {% if status_filter %}<p class="muted small">Showing {{ status_filter }} only. <a href="{{ prefix }}/lists/{{ list.id }}">Show everyone</a></p>{% endif %}
+  <table class="status-table crm-table">
+    <thead><tr><th>Name</th><th>Status</th><th>Heads</th><th>Channel</th><th>Last follow-up</th><th>Notes</th><th></th></tr></thead>
+    <tbody>
+    {% for m in members %}
+      {% set fid = "m-form-" ~ m.contact_id %}
+      <tr class="crm-row" id="m{{ m.contact_id }}">
+        <td>
+          <a href="{{ prefix }}/contacts/{{ m.contact_id }}"><strong>{{ m.name }}</strong></a>
+          <div class="crm-sub">{{ [m.email, m.phone, m.whatsapp]|select|join(" · ") }}</div>
+          {% if m.invited_on %}<div class="crm-sub">invited {{ m.invited_on }}</div>{% endif %}
+          {% if m.raw_source %}<div class="crm-sub" title="Imported from">{{ m.raw_source|truncate(120) }}</div>{% endif %}
+        </td>
+        <td data-label="Status">
+          <select name="status" form="{{ fid }}" aria-label="Status for {{ m.name }}">
+            {% for s in statuses %}<option value="{{ s }}"{% if m.status == s %} selected{% endif %}>{{ s }}</option>{% endfor %}
+          </select>
+        </td>
+        <td data-label="Heads"><input name="headcount" form="{{ fid }}" type="number" min="0" max="999" inputmode="numeric" value="{{ m.headcount }}" aria-label="Headcount for {{ m.name }}"></td>
+        <td data-label="Channel"><input name="channel" form="{{ fid }}" maxlength="60" value="{{ m.channel or '' }}" aria-label="Channel for {{ m.name }}"></td>
+        <td data-label="Last follow-up"><input name="last_followup_on" form="{{ fid }}" type="date" value="{{ m.last_followup_on or '' }}" aria-label="Last follow-up for {{ m.name }}"></td>
+        <td data-label="Notes"><input name="notes" form="{{ fid }}" maxlength="4000" value="{{ m.notes or '' }}" aria-label="Notes for {{ m.name }}"></td>
+        <td class="crm-actions">
+          <form id="{{ fid }}" method="post" action="{{ prefix }}/lists/{{ list.id }}/members/{{ m.contact_id }}">
+            <input type="hidden" name="back_status" value="{{ status_filter }}">
+            <button class="btn small-btn" type="submit">Save</button>
+          </form>
+          <form method="post" action="{{ prefix }}/lists/{{ list.id }}/members/{{ m.contact_id }}/remove"
+                onsubmit="return confirm('Remove from this list? The contact stays.')">
+            <button class="btn small-btn subtle" type="submit">Remove</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% elif status_filter %}
+  <p class="muted">Nobody is {{ status_filter }}. <a href="{{ prefix }}/lists/{{ list.id }}">Show everyone</a></p>
+  {% else %}
+  <p class="muted">Nobody on this list yet. Add a contact below.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Add a contact to this list</h2>
+  {% if candidates %}
+  <form class="crm-form" method="post" action="{{ prefix }}/lists/{{ list.id }}/members">
+    <label class="crm-wide">Contact
+      <select name="contact_id" required>
+        <option value="">Choose...</option>
+        {% for c in candidates %}<option value="{{ c.id }}">{{ c.name }}{% if c.email %} ({{ c.email }}){% endif %}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Status
+      <select name="status">{% for s in statuses %}<option value="{{ s }}">{{ s }}</option>{% endfor %}</select>
+    </label>
+    <label>Headcount<input name="headcount" type="number" min="0" max="999" inputmode="numeric" value="1"></label>
+    <label>Channel<input name="channel" maxlength="60" placeholder="email, whatsapp, in person"></label>
+    <label>Invited on<input name="invited_on" type="date"></label>
+    <div class="crm-wide"><button class="btn" type="submit">Add to list</button></div>
+  </form>
+  {% else %}
+  <p class="muted">Every contact is already on this list. <a href="{{ prefix }}">Add a new contact</a> first.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <details>
+    <summary>Edit or delete this list</summary>
+    {% with form = list_form %}
+    <form class="crm-form" method="post" action="{{ prefix }}/lists/{{ list.id }}" style="margin-top: 12px">
+      {% include "crm_list_fields.html" %}
+      <div class="crm-wide"><button class="btn" type="submit">Save list</button></div>
+    </form>
+    {% endwith %}
+    <form method="post" action="{{ prefix }}/lists/{{ list.id }}/delete" style="margin-top: 12px"
+          onsubmit="return confirm('Delete this list? Contacts stay; their status on this list is lost.')">
+      <button class="btn crm-danger" type="submit">Delete list</button>
+    </form>
+  </details>
+</section>
+{% endblock %}

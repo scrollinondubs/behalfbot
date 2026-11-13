@@ -1,0 +1,39 @@
+{% extends "crm_layout.html" %}
+{% block crm %}
+<p><a class="muted small" href="{{ prefix }}">&larr; All contacts</a></p>
+<section class="panel">
+  <h2>{{ contact.name }}</h2>
+  <form class="crm-form" method="post" action="{{ prefix }}/contacts/{{ contact.id }}">
+    {% include "crm_contact_fields.html" %}
+    <div class="crm-wide"><button class="btn" type="submit">Save</button></div>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>Lists</h2>
+  {% if memberships %}
+  <table class="status-table crm-table">
+    <thead><tr><th>List</th><th>Date</th><th>Status</th><th>Headcount</th></tr></thead>
+    <tbody>
+    {% for m in memberships %}
+      <tr>
+        <td><a href="{{ prefix }}/lists/{{ m.list_id }}#m{{ contact.id }}">{{ m.list_name }}</a></td>
+        <td data-label="Date">{{ m.event_date or "" }}</td>
+        <td data-label="Status"><span class="pill crm-{{ m.status }}">{{ m.status }}</span></td>
+        <td data-label="Headcount">{{ m.headcount }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Not on any list. Add them from a list's page.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <form method="post" action="{{ prefix }}/contacts/{{ contact.id }}/delete"
+        onsubmit="return confirm('Delete this contact and remove them from every list?')">
+    <button class="btn crm-danger" type="submit">Delete contact</button>
+  </form>
+</section>
+{% endblock %}

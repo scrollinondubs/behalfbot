@@ -1,0 +1,5 @@
+<label class="crm-wide">Name<input name="name" required maxlength="200" value="{{ form.name or '' }}"></label>
+<label>Email<input name="email" type="email" maxlength="200" value="{{ form.email or '' }}"></label>
+<label>Phone<input name="phone" type="tel" maxlength="60" value="{{ form.phone or '' }}"></label>
+<label>WhatsApp<input name="whatsapp" type="tel" maxlength="60" value="{{ form.whatsapp or '' }}"></label>
+<label class="crm-wide">Notes<textarea name="notes" rows="3" maxlength="4000">{{ form.notes or '' }}</textarea></label>

@@ -1,0 +1,37 @@
+{% extends "crm_layout.html" %}
+{% block crm %}
+<section class="panel">
+  <form class="crm-search" method="get" action="{{ prefix }}" role="search">
+    <input type="search" name="q" value="{{ q }}" placeholder="Search name, email, phone, notes" aria-label="Search contacts">
+    <button class="btn" type="submit">Search</button>
+    {% if q %}<a class="btn subtle" href="{{ prefix }}">Clear</a>{% endif %}
+  </form>
+  {% if contacts %}
+  <p class="muted small">{{ contacts|length }} contact{{ "" if contacts|length == 1 else "s" }}{% if q %} matching "{{ q }}"{% endif %}</p>
+  <table class="status-table crm-table">
+    <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>WhatsApp</th><th>Lists</th></tr></thead>
+    <tbody>
+    {% for c in contacts %}
+      <tr>
+        <td><a href="{{ prefix }}/contacts/{{ c.id }}"><strong>{{ c.name }}</strong></a>{% if c.notes %}<div class="crm-sub">{{ c.notes|truncate(90) }}</div>{% endif %}</td>
+        <td data-label="Email">{{ c.email or "" }}</td>
+        <td data-label="Phone">{{ c.phone or "" }}</td>
+        <td data-label="WhatsApp">{{ c.whatsapp or "" }}</td>
+        <td data-label="Lists">{{ c.list_count }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">{% if q %}No contacts match "{{ q }}".{% else %}No contacts yet. Add one below.{% endif %}</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>Add a contact</h2>
+  <form class="crm-form" method="post" action="{{ prefix }}/contacts">
+    {% include "crm_contact_fields.html" %}
+    <div class="crm-wide"><button class="btn" type="submit">Add</button></div>
+  </form>
+</section>
+{% endblock %}

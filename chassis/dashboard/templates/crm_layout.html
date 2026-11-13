@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block title %}CRM - {{ brand }}{% endblock %}
+
+{% block topbar %}
+<div class="topbar-inner">
+  <h1>CRM</h1>
+  <nav class="subnav" aria-label="CRM">
+    <a href="{{ prefix }}" class="{% if view in ('contacts', 'contact') %}active{% endif %}">Contacts</a>
+    <a href="{{ prefix }}/lists" class="{% if view in ('lists', 'list') %}active{% endif %}">Lists</a>
+  </nav>
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .crm-note { padding: 10px 12px; border: 1px solid var(--danger); border-radius: 6px; color: var(--danger); overflow-wrap: anywhere; }
+  .crm-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-width: 760px; }
+  .crm-form label, .crm-field { display: block; font-size: 0.85em; color: var(--muted); }
+  .crm-form input, .crm-form select, .crm-form textarea,
+  .crm-row input, .crm-row select, .crm-search input {
+    width: 100%; margin-top: 4px; padding: 7px 9px; background: var(--bg-2); color: var(--fg);
+    border: 1px solid var(--border); border-radius: 6px; font: inherit; box-sizing: border-box;
+  }
+  .crm-row input, .crm-row select { margin-top: 0; padding: 5px 7px; }
+  .crm-row input[name="headcount"] { width: 4.5em; }
+  .crm-wide { grid-column: 1 / -1; }
+  .crm-search { display: flex; gap: 8px; max-width: 520px; }
+  .crm-search input { margin-top: 0; }
+  .crm-table a { color: var(--fg); }
+  .crm-sub { color: var(--muted); font-size: 0.85em; overflow-wrap: anywhere; }
+  .crm-actions form { display: inline; }
+  .crm-danger { color: var(--danger); }
+  .crm-yes { color: var(--accent-2); border-color: rgba(16,185,129,0.4); }
+  .crm-maybe { color: var(--accent); border-color: rgba(245,158,11,0.4); }
+  .crm-no { color: var(--danger); border-color: rgba(239,68,68,0.4); }
+  .stat-row a.stat { color: var(--fg); text-decoration: none; }
+  .stat-row a.stat.selected { border-color: var(--accent); }
+  @media (max-width: 768px) {
+    .crm-table thead { display: none; }
+    .crm-table, .crm-table tbody, .crm-table tr, .crm-table td { display: block; width: 100%; box-sizing: border-box; }
+    .crm-table tr { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; padding: 6px 0; }
+    .crm-table td { border: 0; padding: 4px 12px; }
+    .crm-table td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-size: 0.85em; }
+    .crm-row input, .crm-row select { width: 100%; font-size: 16px; padding: 7px 9px; }
+    .crm-row input[name="headcount"] { width: 100%; }
+    .crm-form { grid-template-columns: minmax(0, 1fr); }
+    .crm-form input, .crm-form select, .crm-form textarea, .crm-search input { font-size: 16px; }
+    .crm-actions .btn { padding: 9px 14px; }
+    .crm-stats { gap: 8px; }
+    .crm-stats .stat { min-width: 0; flex: 1 1 26%; padding: 8px 6px; }
+    .crm-stats .stat-num { font-size: 1.4em; }
+  }
+</style>
+{% if error %}<p class="crm-note" role="alert">{{ error }}</p>{% endif %}
+{% block crm %}{% endblock %}
+{% endblock %}

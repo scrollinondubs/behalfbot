@@ -1,0 +1,9 @@
+{% extends "crm_layout.html" %}
+{% block crm %}
+<section class="panel">
+  <h2>{% if reason == "no_tables" %}CRM tables are missing{% elif reason == "unreachable" %}CRM cannot reach Postgres{% else %}CRM needs Postgres{% endif %}</h2>
+  <p>{{ hint }}</p>
+  {% if detail %}<p class="muted small" style="overflow-wrap: anywhere">{{ detail }}</p>{% endif %}
+  <p class="muted small">Contacts and lists live in the chassis Postgres (tables <code>crm_contacts</code>, <code>crm_lists</code>, <code>crm_memberships</code>). See the CRM section of <code>chassis/docs/dashboard.md</code>.</p>
+</section>
+{% endblock %}

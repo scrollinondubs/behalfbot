@@ -1,0 +1,30 @@
+{% extends "crm_layout.html" %}
+{% block crm %}
+<section class="panel">
+  {% if lists %}
+  <table class="status-table crm-table">
+    <thead><tr><th>List</th><th>Date</th><th>People</th><th>Coming (yes + maybe)</th></tr></thead>
+    <tbody>
+    {% for l in lists %}
+      <tr>
+        <td><a href="{{ prefix }}/lists/{{ l.id }}"><strong>{{ l.name }}</strong></a>{% if l.notes %}<div class="crm-sub">{{ l.notes|truncate(90) }}</div>{% endif %}</td>
+        <td data-label="Date">{{ l.event_date or "" }}</td>
+        <td data-label="People">{{ l.members }}</td>
+        <td data-label="Coming">{{ l.headcount_yes + l.headcount_maybe }} <span class="muted small">({{ l.headcount_yes }} + {{ l.headcount_maybe }})</span></td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No lists yet. A list can be an event, an outreach batch, anything you track people against.</p>
+  {% endif %}
+</section>
+
+<section class="panel">
+  <h2>New list</h2>
+  <form class="crm-form" method="post" action="{{ prefix }}/lists">
+    {% include "crm_list_fields.html" %}
+    <div class="crm-wide"><button class="btn" type="submit">Create</button></div>
+  </form>
+</section>
+{% endblock %}

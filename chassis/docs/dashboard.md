@@ -1,7 +1,7 @@
 # Dashboard
 
-Every install gets a web dashboard with **Briefings**, **DevOps** and
-**TripWires** tabs. **Projections** shows up once you list a paid service. Installed plugins
+Every install gets a web dashboard with **Briefings**, **DevOps**,
+**TripWires** and **CRM** tabs. **Projections** shows up once you list a paid service. Installed plugins
 add their own tabs, and you can add a tab of your own by dropping one Python
 file in a folder.
 
@@ -110,6 +110,59 @@ An install with its own dashboard app can mount the same tab:
 and needs nothing from `tabs.py` when given a renderer. Add
 `chassis/dashboard/templates` to that app's Jinja search path. Its `base.html`
 needs `topbar` and `content` blocks and the shared CSS variables.
+
+## CRM
+
+A small contact tracker. Contacts are entered once; a **list** is anything you
+track people against (an event, an outreach batch), and each membership holds
+that person's status on that list: `invited`, `yes`, `maybe`, `no` or
+`unknown`, a headcount, the channel you reached them on, invited and
+last follow-up dates, notes, and the raw line an importer read it from.
+
+- `/crm` lists contacts with a search box (name, email, phone, WhatsApp,
+  notes) and an add form. Each contact has an edit page showing the lists
+  they are on, and a delete button that also removes them from every list.
+- `/crm/lists` lists the lists, with how many people are on each and the
+  yes + maybe headcount.
+- `/crm/lists/<id>` shows counts per status (click one to filter), the total
+  headcount for yes and maybe, and one row per person with status, headcount,
+  channel, last follow-up and notes editable in place. Add an existing
+  contact from the form below it. Removing someone or deleting the list
+  keeps the contact.
+
+State changes are POST with the same origin check as TripWires. Mounted on
+every install.
+
+Data lives in the chassis Postgres, tables `crm_contacts`, `crm_lists` and
+`crm_memberships` (`chassis/db/migrations/003_crm.sql`). The dashboard runs on
+the host, so it needs a DSN that reaches Postgres from the host, through the
+same variables `chassis/db/connection.py` reads: `CHASSIS_PG_DSN`, then
+`BEHALFBOT_PG_DSN`, then `JAX_PG_DSN`. Inside the container the host is
+`postgres`; from the host it is `127.0.0.1` and the published port. Set it in
+the dashboard's environment (the launchd plist or systemd unit), install
+`psycopg[binary]` for the python that runs the dashboard, apply the migration
+once from the chassis checkout, then restart:
+
+```bash
+CHASSIS_PG_DSN=postgresql://USER:PASSWORD@127.0.0.1:5432/chassis python3 -m chassis.db.migrate
+```
+
+Until then the tab shows what is missing (no DSN, no driver, Postgres
+unreachable, or tables not created) instead of an error. The rest of the
+dashboard is unaffected.
+
+Scripts can use the same store: `chassis/scripts/_crm.py` has `Store` with
+add, update and delete for contacts, lists and memberships, plus the input
+cleaning the tab uses. An importer passes the source line as
+`add_member(..., raw_source=line)`; the web forms never set it. `add_member`
+skips a contact already on the list, but `add_contact` always inserts, so an
+importer that runs more than once must match existing contacts itself (by
+email, phone or name) before adding new ones.
+
+Like TripWires, `chassis/dashboard/core/crm.py` exposes
+`build_router(render, store)` for an install with its own dashboard app.
+`render(request, template, context, status_code)` gets one of the
+`crm_*.html` templates.
 
 ## Projections
 
