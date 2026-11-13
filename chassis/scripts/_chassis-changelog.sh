@@ -81,7 +81,10 @@ chassis_changelog_unreleased() {
 chassis_changelog_digest() {
     local text hash
     text="$(cat)"
-    if [[ -z "${text//[[:space:]]/}" ]]; then
+    # tr, not ${text//[[:space:]]/}: that expansion is quadratic in bash 3.2
+    # (macOS /bin/bash) and hung chassis-update.sh for minutes once the
+    # Unreleased section passed ~60KB.
+    if [[ -z "$(printf '%s' "$text" | tr -d '[:space:]')" ]]; then
         printf 'empty'
         return 0
     fi

@@ -107,6 +107,10 @@ Semver:
 
 ### Fixed
 
+- **`chassis-update.sh` no longer hangs on macOS, and the BREAKING gate no longer trips on prose.** Found applying the CRM and #264 merges to the reference install on 2026-11-13.
+  - **The unreleased-section digest hung for minutes under bash 3.2** (macOS `/bin/bash`). `chassis_changelog_digest` stripped whitespace with `${text//[[:space:]]/}`, which is quadratic in bash 3.2, and the `## Unreleased` section had grown past 60KB. It now uses `tr -d`. Regression test 35 digests a 2000-line section.
+  - **The gate matched the marker text anywhere in the window**, so a changelog bullet that only described the gate (quoting the marker in backticks) blocked a non-breaking update until `--force`. `chassis-update.sh` and `gather-chassis-update-check.sh` now count the marker only at the start of a line, as the format conventions require. Regression test 34 covers the prose case.
+
 - **`python3 -m chassis.second_brain.seed` could not have worked on any install.** It passed the two-surface adapter from `get_adapter()` to a function that needs its `.notes`, so the first `search` raised. It also read `$CHASSIS_HOME/chassis.config.yaml`, which on a host bootstrap is the chassis repo's template. It now takes `--config` (bootstrap passes the install's own file) and runs in `mode: direct` too, but there it seeds only a second brain where a search for Projects, Areas, Resources and `_MAP` finds nothing at all, so a long-running install is never handed a second set of top-level docs. Any hit counts, not just a title: SiYuan search is full-text and newest first, so a title match can hide past the result limit. When `second_brain.map.doc_id` is empty and a `_MAP` exists, its id is written into the config in place, comments kept.
 
 - **CLAUDE.md template script paths broke on container installs.** `${CHASSIS_HOME}/chassis/scripts/...` resolves to `/app/customer/chassis/scripts`, which does not exist. Voice-note, TTS, Loom and memory-script commands now use `${CHASSIS_ROOT:-{{CHASSIS_DIR}}}/scripts`.
