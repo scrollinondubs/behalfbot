@@ -1,7 +1,17 @@
 {% extends "base.html" %}
 {% block title %}CRM - {{ brand }}{% endblock %}
 
-{% block head %}
+{% block topbar %}
+<div class="topbar-inner">
+  <h1>CRM</h1>
+  <nav class="subnav" aria-label="CRM">
+    <a href="{{ prefix }}" class="{% if view in ('contacts', 'contact') %}active{% endif %}">Contacts</a>
+    <a href="{{ prefix }}/lists" class="{% if view in ('lists', 'list') %}active{% endif %}">Lists</a>
+  </nav>
+</div>
+{% endblock %}
+
+{% block content %}
 <style>
   .crm-note { padding: 10px 12px; border: 1px solid var(--danger); border-radius: 6px; color: var(--danger); overflow-wrap: anywhere; }
   .crm-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; max-width: 760px; }
@@ -41,19 +51,6 @@
     .crm-stats .stat-num { font-size: 1.4em; }
   }
 </style>
-{% endblock %}
-
-{% block topbar %}
-<div class="topbar-inner">
-  <h1>CRM</h1>
-  <nav class="subnav" aria-label="CRM">
-    <a href="{{ prefix }}" class="{% if view in ('contacts', 'contact') %}active{% endif %}">Contacts</a>
-    <a href="{{ prefix }}/lists" class="{% if view in ('lists', 'list') %}active{% endif %}">Lists</a>
-  </nav>
-</div>
-{% endblock %}
-
-{% block content %}
 {% if error %}<p class="crm-note" role="alert">{{ error }}</p>{% endif %}
 {% block crm %}{% endblock %}
 {% endblock %}

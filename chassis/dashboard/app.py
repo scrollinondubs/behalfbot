@@ -14,7 +14,8 @@ Env:
     CHASSIS_PLUGINS_ROOT  plugin root override
 
 Host dependencies: fastapi, uvicorn, jinja2 (pyyaml to read the DevOps
-config). See chassis/dashboard/requirements.txt and chassis/docs/dashboard.md.
+config, psycopg for the CRM tab). See chassis/dashboard/requirements.txt
+and chassis/docs/dashboard.md.
 """
 from __future__ import annotations
 

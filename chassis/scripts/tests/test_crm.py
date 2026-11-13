@@ -211,13 +211,13 @@ class MemoryStore(crm.Store):
 
     def members(self, list_id):
         return sorted(({"contact_id": cid, **{k: self.c[cid].get(k) for k in ("name", "email", "phone", "whatsapp")},
-                        "raw_source": None, **m} for (lid, cid), m in self.m.items() if lid == list_id),
+                        **m} for (lid, cid), m in self.m.items() if lid == list_id),
                       key=lambda r: r["name"].lower())
 
-    def add_member(self, list_id, contact_id, fields=None):
+    def add_member(self, list_id, contact_id, fields=None, raw_source=None):
         if (list_id, contact_id) in self.m:
             return False
-        self.m[(list_id, contact_id)] = dict(fields or crm.clean_member({}))
+        self.m[(list_id, contact_id)] = {**crm.clean_member({}), **(fields or {}), "raw_source": raw_source}
         return True
 
     def update_member(self, list_id, contact_id, fields):
@@ -431,13 +431,24 @@ class Postgres(TabBase):
         s = self.store
         cid = s.add_contact(crm.clean_contact({"name": "Ana", "email": "a@example.com"}))
         lid = s.add_list(crm.clean_list({"name": "Picnic", "event_date": "2026-05-01"}))
-        self.assertTrue(s.add_member(lid, cid, crm.clean_member({"status": "yes", "headcount": "2"})))
+        self.assertTrue(s.add_member(lid, cid, crm.clean_member({"status": "yes", "headcount": "2"}),
+                                     raw_source="Ana +1 yes"))
         self.assertFalse(s.add_member(lid, cid))
+        self.assertEqual(s.members(lid)[0]["raw_source"], "Ana +1 yes")
+        self.assertTrue(s.update_member(lid, cid, {"raw_source": "Ana +1 (yes)"}))
+        self.assertEqual(s.members(lid)[0]["raw_source"], "Ana +1 (yes)")
+        self.assertTrue(s.update_contact(cid, crm.clean_contact({"name": "Ana B", "whatsapp": "+1 555 0100"})))
+        self.assertEqual((s.contact(cid)["name"], s.contact(cid)["email"], s.contact(cid)["whatsapp"]),
+                         ("Ana B", None, "+1 555 0100"))
+        self.assertEqual(s.memberships_of(cid)[0]["list_name"], "Picnic")
+        self.assertTrue(s.update_list(lid, crm.clean_list({"name": "Picnic 2", "event_date": ""})))
+        self.assertEqual((s.get_list(lid)["name"], s.get_list(lid)["event_date"]), ("Picnic 2", None))
+        self.assertFalse(s.update_contact(999999, crm.clean_contact({"name": "X"})))
         self.assertTrue(s.update_member(lid, cid, crm.clean_member({"last_followup_on": "2026-04-20"}, partial=True)))
         m = s.members(lid)[0]
         self.assertEqual((m["status"], m["headcount"], m["last_followup_on"]), ("yes", 2, date(2026, 4, 20)))
         self.assertEqual(s.lists()[0]["headcount_yes"], 2)
-        self.assertEqual(s.contacts("a@exa")[0]["list_count"], 1)
+        self.assertEqual(s.contacts("+1 555")[0]["list_count"], 1)
         with self.assertRaises(crm.CrmError):
             s.update_member(lid, cid, {"status": "attending"})
         with self.assertRaises(crm.CrmError):
@@ -453,8 +464,13 @@ class Postgres(TabBase):
                                                                  "status": "maybe"}).status_code, 303)
         self.assertIn('<div class="stat-num">3</div><div class="stat-label">Heads yes + maybe</div>',
                       self.client.get(f"/crm/lists/{lid}").text)
-        self.post(f"/crm/contacts/{cid}/delete", {})
-        self.post(f"/crm/lists/{lid}/delete", {})
+        self.assertEqual(self.post(f"/crm/contacts/{cid}", {"name": "Bo Edited", "email": "bo@example.com"}).status_code, 303)
+        self.assertIn("Dinner", self.client.get(f"/crm/contacts/{cid}").text)
+        self.assertEqual(self.post(f"/crm/lists/{lid}", {"name": "Dinner moved", "event_date": "2026-06-01"}).status_code, 303)
+        self.assertIn("Bo Edited", self.client.get(f"/crm/lists/{lid}").text)
+        self.assertIn("2026-06-01", self.client.get("/crm/lists").text)
+        self.assertEqual(self.post(f"/crm/contacts/{cid}/delete", {}).status_code, 303)
+        self.assertEqual(self.post(f"/crm/lists/{lid}/delete", {}).status_code, 303)
 
 
 if __name__ == "__main__":

@@ -153,9 +153,11 @@ dashboard is unaffected.
 
 Scripts can use the same store: `chassis/scripts/_crm.py` has `Store` with
 add, update and delete for contacts, lists and memberships, plus the input
-cleaning the tab uses. An importer should keep the source line in
-`raw_source` and use `add_member`, which skips a contact already on the list,
-so a re-run adds nothing twice.
+cleaning the tab uses. An importer passes the source line as
+`add_member(..., raw_source=line)`; the web forms never set it. `add_member`
+skips a contact already on the list, but `add_contact` always inserts, so an
+importer that runs more than once must match existing contacts itself (by
+email, phone or name) before adding new ones.
 
 Like TripWires, `chassis/dashboard/core/crm.py` exposes
 `build_router(render, store)` for an install with its own dashboard app.

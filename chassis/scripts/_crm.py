@@ -289,22 +289,25 @@ class Store:
             return cur.fetchall()
         return self._run(go)
 
-    def add_member(self, list_id: int, contact_id: int, fields: dict | None = None) -> bool:
-        """False when the contact is already on the list."""
-        f = fields or clean_member({})
+    def add_member(self, list_id: int, contact_id: int, fields: dict | None = None,
+                   raw_source: str | None = None) -> bool:
+        """False when the contact is already on the list. raw_source is for
+        importers; the web forms never set it."""
+        f = {**clean_member({}), **(fields or {})}
 
         def go(cur):
             cur.execute(
                 "INSERT INTO crm_memberships (list_id, contact_id, status, headcount, channel, "
-                "invited_on, last_followup_on, notes) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                "invited_on, last_followup_on, notes, raw_source) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
                 "ON CONFLICT (list_id, contact_id) DO NOTHING",
-                (list_id, contact_id, *(f.get(k) for k in MEMBER_FIELDS)))
+                (list_id, contact_id, *(f.get(k) for k in MEMBER_FIELDS), raw_source))
             return cur.rowcount > 0
         return self._run(go)
 
     def update_member(self, list_id: int, contact_id: int, fields: dict) -> bool:
         """Changes only the fields given, so a form that leaves one out keeps it."""
-        cols = [k for k in MEMBER_FIELDS if k in fields]
+        cols = [k for k in (*MEMBER_FIELDS, "raw_source") if k in fields]
         if not cols:
             raise CrmError("nothing to change")
 
