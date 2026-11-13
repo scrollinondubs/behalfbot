@@ -295,7 +295,7 @@ if [[ $CHANGELOG_FETCHED -eq 1 ]]; then
         $0 ~ "^"local_v { capture = 0 }
         capture { print }
     ' "$CHANGELOG_PATH")
-    if printf '%s\n' "$WINDOW" | grep -q "BREAKING CHANGES:"; then
+    if printf '%s\n' "$WINDOW" | grep -qE '^[[:space:]]*(\*\*)?BREAKING CHANGES:'; then
         BREAKING="true"
     fi
 fi

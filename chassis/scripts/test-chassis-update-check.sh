@@ -556,5 +556,46 @@ set_last_offered "$h" 0.4.0 "$(ago $HOUR)"
 assert_result "a pre-#147 last-offered.json does not suppress a drift offer" \
     "$(run_gather "$h")" 1
 
+# --- 34. a prose mention of the marker is not the marker --------------------
+# 2026-11-13: the gate tripped on a changelog bullet that described the gate
+# ("The `BREAKING CHANGES:` window now includes ..."). The marker has to start
+# its own line to count.
+PROSE_UPSTREAM="$TMP/upstream-prose-marker"
+mkdir -p "$PROSE_UPSTREAM/chassis"
+printf '0.4.0\n' > "$PROSE_UPSTREAM/chassis/VERSION"
+cat > "$PROSE_UPSTREAM/chassis/CHANGELOG.md" <<'EOF'
+# Chassis Changelog
+
+## v0.4.0 - 2026-07-28
+
+### Changed
+
+  - **The `BREAKING CHANGES:` window now includes `## Unreleased`**, for version offers too.
+
+## v0.3.0 - 2026-07-14
+
+### Added
+
+- Earlier work.
+EOF
+h="$(make_install prose-marker 0.3.0)"
+out="$(run_gather "$h" "file://${PROSE_UPSTREAM}")"
+assert_result "prose mention still offers" "$out" 1
+assert_equals "prose mention does not set the breaking flag" \
+    "$(printf '%s' "$out" | jq -r '.breaking')" "false"
+
+# --- 35. the digest stays fast on a large unreleased section ----------------
+# bash 3.2's ${var//pattern/} is quadratic; a ~60KB section hung the updater.
+big="$TMP/big-changelog.md"
+{ printf '## Unreleased\n\n'; for i in $(seq 1 2000); do printf -- '- entry %s with some padding text here\n' "$i"; done; printf '\n## v0.1.0\n'; } > "$big"
+start=$SECONDS
+digest="$(bash -c "source '$SCRIPT_DIR/_chassis-changelog.sh'; chassis_unreleased_digest '$big'")"
+elapsed=$(( SECONDS - start ))
+if [[ ${#digest} -eq 16 && $elapsed -lt 10 ]]; then
+    pass=$((pass + 1)); printf '  ok   large unreleased section digests (%ss)\n' "$elapsed"
+else
+    fail=$((fail + 1)); printf '  FAIL large unreleased section digest (%s, %ss)\n' "$digest" "$elapsed"
+fi
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]] || exit 1

@@ -532,7 +532,7 @@ if [[ $CHANGELOG_FETCHED -eq 1 ]]; then
         $0 ~ "^"local_v { capture = 0 }
         capture { print }
     ' "$CHANGELOG_PATH")
-    if printf '%s\n' "$WINDOW" | grep -q "BREAKING CHANGES:"; then
+    if printf '%s\n' "$WINDOW" | grep -qE '^[[:space:]]*(\*\*)?BREAKING CHANGES:'; then
         if [[ $FORCE -ne 1 ]]; then
             cat <<EOF >&2
 BREAKING CHANGES detected in what this update would deliver (v$CURRENT_VERSION to v$UPSTREAM_VERSION, unreleased section included).
