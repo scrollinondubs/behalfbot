@@ -47,7 +47,8 @@ The principal presses **Respond**, then **Copy response**, and pastes it back.
 `/html-plan` not resolving means the plugin did not install. From the install root:
 
 ```bash
-claude plugin install html-plan --marketplace anthropics/claude-plugins-community --scope project
+claude plugin marketplace add anthropics/claude-plugins-community --scope project
+claude plugin install html-plan@claude-community --scope project
 ```
 
 It needs `node` to pack a page. No other dependencies.

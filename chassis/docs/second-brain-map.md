@@ -15,7 +15,7 @@ One doc in the second brain, conventionally titled `_MAP`, holding one line and 
 - **Each line carries aliases.** If the installer calls a project by an abbreviation or a nickname, the line says so, because a session that only sees the full name has nothing to match the nickname against.
 - **The assistant owns it; the installer owns their priorities doc.** The map answers "what exists and where", priorities answer "what is urgent". Different clocks, different owners, never merged. A second copy of priorities inside the map, or inside `CLAUDE.md`, goes stale - that has happened on the reference install, twice in six weeks.
 
-A fresh install gets a half-written `_MAP` from the second-brain seed (`python3 -m chassis.second_brain.seed --config <install>/chassis.config.yaml`), which writes its id into `second_brain.map.doc_id` when that is empty. The seed runs in either `second_brain.mode`; in `direct` mode it only seeds a second brain with no PARA top level and no `_MAP` yet, but it still fills `doc_id` from an existing `_MAP`. An existing install without one creates the doc by hand in its Resources area.
+A fresh install gets a half-written `_MAP` from the second-brain seed (`python3 -m chassis.second_brain.seed --config <install>/chassis.config.yaml`), which writes its id into `second_brain.map.doc_id` when that is empty. The seed runs in either `second_brain.mode`; in `direct` mode it only seeds a second brain where a search for Projects, Areas, Resources and `_MAP` finds nothing, but it still fills `doc_id` from an existing `_MAP`. An existing install without one creates the doc by hand in its Resources area.
 
 ## Three parts
 

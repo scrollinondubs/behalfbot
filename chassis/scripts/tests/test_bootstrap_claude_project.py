@@ -115,6 +115,37 @@ class FreshInstallTest(Base):
         self.assertTrue((self.store / "MEMORY.md").read_text().startswith("# Assistant Memory"))
 
 
+class ExistingStoreTest(Base):
+    """Seeding must go through _memory_store.resolve_store. A store derived
+    beside an existing one would be near-empty, and resolve_store would then
+    prefer it for every memory script."""
+
+    def run_without_memory_dir(self) -> str:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = bcp.main(["--customer-home", str(self.home)])
+        self.assertEqual(rc, 0)
+        return buf.getvalue()
+
+    def test_legacy_customer_home_store_is_not_shadowed(self):
+        fake_home = Path(self.tmp.name) / "userhome"
+        (self.home / "memory").mkdir()
+        (self.home / "memory" / "MEMORY.md").write_text("# legacy\n")
+        with mock.patch.dict(os.environ, {"HOME": str(fake_home)}):
+            out = self.run_without_memory_dir()
+        self.assertIn("already has MEMORY.md", out)
+        self.assertFalse((fake_home / ".claude" / "projects").exists())
+        self.assertEqual((self.home / "memory" / "MEMORY.md").read_text(), "# legacy\n")
+
+    def test_env_store_is_used(self):
+        fake_home = Path(self.tmp.name) / "userhome"
+        env_store = Path(self.tmp.name) / "envstore"
+        with mock.patch.dict(os.environ, {"HOME": str(fake_home), "CLAUDE_AUTO_MEMORY_DIR": str(env_store)}):
+            self.run_without_memory_dir()
+        self.assertTrue((env_store / "MEMORY.md").is_file())
+        self.assertFalse((fake_home / ".claude" / "projects").exists())
+
+
 class RerunTest(Base):
     def test_rerun_changes_nothing_and_keeps_edits(self):
         self.run_wirer()

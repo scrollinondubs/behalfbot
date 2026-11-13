@@ -132,8 +132,11 @@ class ExistingParaTest(unittest.TestCase):
         self.assertTrue(has_existing_para(FakeAdapter(preexisting={"1 Projects": "x"})))
         self.assertTrue(has_existing_para(FakeAdapter(preexisting={MAP_TITLE: "x"})))
 
-    def test_unrelated_titles_do_not(self):
-        self.assertFalse(has_existing_para(FakeAdapter(preexisting={"Projects backlog notes": "x"})))
+    def test_any_mention_counts_and_only_empty_is_empty(self):
+        # Over-cautious on purpose: SiYuan search is full-text and newest
+        # first, so a title match can hide past the result limit.
+        self.assertTrue(has_existing_para(FakeAdapter(preexisting={"Projects backlog notes": "x"})))
+        self.assertFalse(has_existing_para(FakeAdapter(preexisting={"Groceries": "x"})))
         self.assertFalse(has_existing_para(FakeAdapter()))
 
 

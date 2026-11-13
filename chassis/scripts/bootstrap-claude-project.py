@@ -47,7 +47,7 @@ CHASSIS_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS = CHASSIS_DIR / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from _memory_store import mangle  # noqa: E402
+from _memory_store import mangle, resolve_store  # noqa: E402
 
 HTML_PLAN_PLUGIN = "html-plan@claude-community"
 MAP_HOOK_MARKER = "load-second-brain-map"
@@ -205,19 +205,34 @@ def install_core_files(run: Run, home: Path) -> None:
         run.done(f"installed: {rel}")
 
 
-def memory_dir(home: Path, explicit: str | None) -> Path:
+def memory_dir(home: Path, explicit: str | None) -> tuple[Path, bool]:
+    """(store to seed, whether it already holds a notes store).
+
+    Goes through _memory_store.resolve_store first, the same resolution every
+    memory script uses. Deriving a path here instead would seed a second,
+    near-empty store beside an existing one (a legacy $CUSTOMER_HOME/memory, or
+    one named by CLAUDE_AUTO_MEMORY_DIR), and resolve_store would then prefer
+    the new empty one for every script after.
+    """
     if explicit:
-        return Path(explicit).expanduser()
+        store = Path(explicit).expanduser()
+        return store, (store / "MEMORY.md").is_file()
+    os.environ["CUSTOMER_HOME"] = str(home)
+    found, _, _ = resolve_store(None)
+    if found is not None and (found / "MEMORY.md").is_file():
+        return found, True
     env = os.environ.get("CLAUDE_AUTO_MEMORY_DIR")
     if env:
-        return Path(env).expanduser()
-    return Path.home() / ".claude" / "projects" / mangle(str(home)) / "memory"
+        return Path(env).expanduser(), False
+    return Path.home() / ".claude" / "projects" / mangle(str(home)) / "memory", False
 
 
-def seed_memory(run: Run, store: Path, instance: str, installer: str) -> None:
-    if (store / "MEMORY.md").is_file():
+def seed_memory(run: Run, store: Path, exists: bool, instance: str, installer: str) -> None:
+    if exists:
         run.say(f"notes store already has MEMORY.md: {store}")
         return
+    run.say(f"notes store: {store} (Claude Code reads it only for sessions opened at "
+            "this install path; set CLAUDE_AUTO_MEMORY_DIR when sessions run elsewhere)")
     values = {"INSTANCE_NAME": instance, "INSTALLER_NAME": installer}
     memory_src = CHASSIS_DIR / "memory"
     run.write(store / "MEMORY.md", render((memory_src / "MEMORY.md.template").read_text(), values))
@@ -246,18 +261,24 @@ def install_html_plan_plugin(run: Run, home: Path) -> None:
     if run.dry_run:
         run.say("[dry-run] would install the html-plan plugin at project scope")
         return
-    cmd = [claude, "plugin", "install", "html-plan",
-           "--marketplace", "anthropics/claude-plugins-community", "--scope", "project"]
-    try:
-        result = subprocess.run(cmd, cwd=home, capture_output=True, text=True, timeout=300)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        run.say(f"WARN: html-plan plugin install did not finish ({exc}); not fatal")
-        return
-    if result.returncode == 0:
-        run.say("html-plan plugin installed (project scope)")
-    else:
-        tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or [""]
-        run.say(f"WARN: html-plan plugin install exited {result.returncode}: {tail[0]} - not fatal")
+    # Two steps, both at project scope. `plugin install --marketplace` is one
+    # step on current CLIs but unknown to older ones, and an image can lag;
+    # project scope keeps the marketplace out of the user settings, which on
+    # a container install is the host's bind-mounted ~/.claude.
+    for step in (
+        ["plugin", "marketplace", "add", "anthropics/claude-plugins-community", "--scope", "project"],
+        ["plugin", "install", HTML_PLAN_PLUGIN, "--scope", "project"],
+    ):
+        try:
+            result = subprocess.run([claude, *step], cwd=home, capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            run.say(f"WARN: `claude {' '.join(step[:2])}` did not finish ({exc}); not fatal")
+            return
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout).strip().splitlines()[-1:] or [""]
+            run.say(f"WARN: `claude {' '.join(step[:3])}` exited {result.returncode}: {tail[0]} - not fatal")
+            return
+    run.say(f"{HTML_PLAN_PLUGIN} installed (project scope)")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -283,7 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     install_hook_shim(run, home)
     install_settings(run, home)
     install_core_files(run, home)
-    seed_memory(run, memory_dir(home, args.memory_dir), instance, installer)
+    store, exists = memory_dir(home, args.memory_dir)
+    seed_memory(run, store, exists, instance, installer)
     if not (args.skip_plugin_install or os.environ.get("BOOTSTRAP_SKIP_PLUGIN_INSTALL") == "1"):
         install_html_plan_plugin(run, home)
     return 0

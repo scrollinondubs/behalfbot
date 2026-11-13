@@ -176,24 +176,24 @@ def seed_default_content(adapter: NotesAdapter, root_parent: str = "") -> dict:
 PARA_TITLES = ("Projects", "Areas", "Resources")
 
 
-def _title_matches(title: str, word: str) -> bool:
-    """`Projects`, `1 Projects` and `1. Projects` all count as the Projects doc."""
-    t = title.strip().lower()
-    return t == word.lower() or t.endswith(" " + word.lower())
-
-
 def has_existing_para(adapter: NotesAdapter) -> bool:
-    """True when the second brain already has a PARA top level or a map.
+    """True when the second brain may already have a PARA layout or a map.
 
     Direct mode is how installs that predate the seeder run, and their second
     brains are not empty. Seeding into one would add ten docs beside the
     installer's own Projects / Areas / Resources, so any sign of an existing
     layout means hands off.
+
+    Deliberately over-cautious: ANY search hit for one of the words counts,
+    not only a title match. SiYuan's search is a substring match over every
+    block, newest first, so in a populated notebook the "1 Projects" doc can
+    sit past any result limit behind body text that mentions projects. A
+    false "not empty" costs a skipped seed on a fresh install; a false
+    "empty" writes eleven docs into someone's real second brain.
     """
     for word in PARA_TITLES + (MAP_TITLE,):
-        for hit in adapter.search(word, limit=20):
-            if _title_matches(hit.title, word):
-                return True
+        if adapter.search(word, limit=5):
+            return True
     return False
 
 
@@ -268,7 +268,8 @@ def main(argv: list[str] | None = None) -> int:
 
     - `adapter` mode: seed unless the sentinel says it already ran.
     - `direct` mode: seed only when `second_brain.scaffold_para_if_missing` is
-      not false AND the second brain has no PARA top level or map yet, so a
+      not false AND nothing in the second brain mentions Projects, Areas,
+      Resources or _MAP (see has_existing_para), so a
       long-running install is never handed a second set of top-level docs.
 
     Either way, when `second_brain.map.doc_id` is empty and a `_MAP` doc exists
@@ -304,8 +305,8 @@ def main(argv: list[str] | None = None) -> int:
     if mode == "direct" and sb_config.get("scaffold_para_if_missing") is False:
         print("second-brain seed: scaffold_para_if_missing is false; not seeding.")
     elif mode == "direct" and has_existing_para(adapter):
-        print("second-brain seed: direct mode and the second brain already has a PARA "
-              "layout or a _MAP; not seeding.")
+        print("second-brain seed: direct mode and the second brain already mentions "
+              "Projects, Areas, Resources or _MAP; not seeding.")
     else:
         result = seed_default_content(adapter)
         if not result["seeded"]:
