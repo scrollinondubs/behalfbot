@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behalf.bot dashboard: Briefings, DevOps, TripWires and Projections, plus tabs from
+"""Behalf.bot dashboard: Briefings, DevOps, TripWires, CRM and Projections, plus tabs from
 installed plugins and from $CUSTOMER_HOME/dashboard/tabs/.
 
 Run:
@@ -40,11 +40,12 @@ log = logging.getLogger("dashboard")
 
 
 def load_core(reg: Registry) -> None:
-    from core import briefings, devops, projections, tripwires
+    from core import briefings, crm, devops, projections, tripwires
 
     reg.add(Tab("Briefings", "/briefings", briefings.router, "core", order=10))
     reg.add(Tab("DevOps", "/devops", devops.router, "core", order=20))
     reg.add(Tab("TripWires", "/tripwires", tripwires.router, "core", order=25))
+    reg.add(Tab("CRM", "/crm", crm.router, "core", order=27))
     if _spend.has_services():
         reg.add(Tab("Projections", "/projections", projections.router, "core", order=30))
 

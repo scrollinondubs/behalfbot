@@ -2,7 +2,7 @@
 
 Three kinds of tab share one contract:
 
-  core      shipped here (Briefings, DevOps, TripWires, Projections)
+  core      shipped here (Briefings, DevOps, TripWires, CRM, Projections)
   plugins   declared in a plugin's openclaw.plugin.json under
             contracts.dashboard, imported from the resolved plugin root
   custom    any *.py in $CUSTOMER_HOME/dashboard/tabs/ defining TAB + router
