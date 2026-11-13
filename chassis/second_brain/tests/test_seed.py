@@ -18,8 +18,11 @@ Run:
 """
 from __future__ import annotations
 
+import io
 import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -30,7 +33,10 @@ from chassis.second_brain.seed import (  # noqa: E402
     MAP_TITLE,
     SENTINEL_TITLE,
     SEED_DOCS,
+    has_existing_para,
+    main as seed_main,
     seed_default_content,
+    set_map_doc_id,
 )
 
 
@@ -119,6 +125,106 @@ class SeedDefaultContentTest(unittest.TestCase):
         self.assertTrue(hasattr(adapter, "create_doc"))
         self.assertTrue(hasattr(adapter, "search"))
         seed_default_content(adapter)  # must not raise AttributeError for anything else
+
+
+class ExistingParaTest(unittest.TestCase):
+    def test_numbered_para_titles_count(self):
+        self.assertTrue(has_existing_para(FakeAdapter(preexisting={"1 Projects": "x"})))
+        self.assertTrue(has_existing_para(FakeAdapter(preexisting={MAP_TITLE: "x"})))
+
+    def test_any_mention_counts_and_only_empty_is_empty(self):
+        # Over-cautious on purpose: SiYuan search is full-text and newest
+        # first, so a title match can hide past the result limit.
+        self.assertTrue(has_existing_para(FakeAdapter(preexisting={"Projects backlog notes": "x"})))
+        self.assertFalse(has_existing_para(FakeAdapter(preexisting={"Groceries": "x"})))
+        self.assertFalse(has_existing_para(FakeAdapter()))
+
+
+CONFIG = """second_brain:
+  backend: obsidian                         # notion | siyuan | obsidian
+  mode: direct
+  map:
+    doc_id: ""                              # Map doc id. Env SECOND_BRAIN_MAP_DOC overrides.
+                                            # Loaded into every session
+    roots: {}
+  obsidian:
+    vault_path: VAULT
+"""
+
+
+class SetMapDocIdTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name) / "chassis.config.yaml"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_fills_empty_value_and_keeps_comments(self):
+        self.path.write_text(CONFIG)
+        self.assertEqual(set_map_doc_id(self.path, "abc-123"), "set")
+        lines = self.path.read_text().splitlines()
+        line = next(l for l in lines if "doc_id:" in l)
+        self.assertTrue(line.startswith('    doc_id: "abc-123"'))
+        self.assertEqual(line.index("#"), CONFIG.splitlines()[4].index("#"))
+        self.assertIn("# Loaded into every session", self.path.read_text())
+        self.assertEqual(len(lines), len(CONFIG.splitlines()))
+
+    def test_never_overwrites_a_set_value(self):
+        self.path.write_text(CONFIG.replace('doc_id: ""', 'doc_id: "keep-me"'))
+        self.assertEqual(set_map_doc_id(self.path, "abc"), "already_set")
+        self.assertIn("keep-me", self.path.read_text())
+
+    def test_missing_key_writes_nothing(self):
+        text = 'second_brain:\n  backend: obsidian\nmap:\n  doc_id: ""\n'
+        self.path.write_text(text)
+        self.assertEqual(set_map_doc_id(self.path, "abc"), "no_key")
+        self.assertEqual(self.path.read_text(), text)
+
+
+class DirectModeMainTest(unittest.TestCase):
+    """End to end through the real Obsidian adapter, no network."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        base = Path(self.tmp.name)
+        self.vault = base / "vault"
+        self.vault.mkdir()
+        self.config = base / "chassis.config.yaml"
+        self.config.write_text(CONFIG.replace("VAULT", str(self.vault)))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_main(self) -> str:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            self.assertEqual(seed_main(["--config", str(self.config)]), 0)
+        return buf.getvalue()
+
+    def test_empty_vault_is_seeded_and_map_id_written(self):
+        out = self.run_main()
+        self.assertIn("created", out)
+        self.assertTrue((self.vault / "_MAP.md").is_file())
+        self.assertIn('doc_id: "_MAP.md"', self.config.read_text())
+        before = sorted(p.name for p in self.vault.iterdir())
+        out = self.run_main()
+        self.assertIn("not seeding", out)
+        self.assertEqual(sorted(p.name for p in self.vault.iterdir()), before)
+
+    def test_existing_para_is_left_alone_but_map_id_is_found(self):
+        (self.vault / "1 Projects.md").write_text("# mine\n")
+        (self.vault / "_MAP.md").write_text("# _MAP\n")
+        out = self.run_main()
+        self.assertIn("not seeding", out)
+        self.assertEqual(sorted(p.name for p in self.vault.iterdir()), ["1 Projects.md", "_MAP.md"])
+        self.assertIn('doc_id: "_MAP.md"', self.config.read_text())
+
+    def test_scaffold_off_means_no_seed(self):
+        self.config.write_text(self.config.read_text().replace(
+            "  mode: direct\n", "  mode: direct\n  scaffold_para_if_missing: false\n"))
+        self.run_main()
+        self.assertEqual(list(self.vault.iterdir()), [])
 
 
 if __name__ == "__main__":

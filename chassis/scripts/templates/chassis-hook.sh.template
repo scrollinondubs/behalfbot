@@ -1,0 +1,51 @@
+#!/bin/bash
+# chassis-hook.sh - run a chassis hook from this install's .claude/settings.json.
+#
+# Rendered by chassis/scripts/bootstrap-claude-project.py. Do not edit; re-run
+# that script instead.
+#
+# The chassis tree sits at a different path per session: the image or the
+# mounted clone inside the container, the clone on the host. settings.json
+# cannot know which, so every hook command goes through this file, which
+# looks in each place and runs the first copy it finds.
+#
+# Usage: chassis-hook.sh <hook file name>   e.g. guardrails.sh
+
+set -uo pipefail
+
+NAME="${1:-}"
+PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+export CUSTOMER_HOME="${CUSTOMER_HOME:-$PROJECT}"
+export CHASSIS_HOME="${CHASSIS_HOME:-$PROJECT}"
+
+if [[ ! "$NAME" =~ ^[A-Za-z0-9._-]+\.sh$ ]]; then
+    echo "chassis-hook.sh: bad hook name '$NAME'" >&2
+    exit 1
+fi
+
+for root in \
+    "${CHASSIS_ROOT:-}" \
+    "$PROJECT/state/chassis-root" \
+    "$PROJECT/chassis/chassis" \
+    /app/chassis \
+    "@HOST_CHASSIS_DIR@" \
+    "$HOME/behalfbot/chassis"; do
+    if [[ -n "$root" && -f "$root/.claude/hooks/$NAME" ]]; then
+        exec bash "$root/.claude/hooks/$NAME"
+    fi
+done
+
+# Not found. A missing safety hook must not read as "allowed", and a missing
+# map hook must not read as "nothing to load".
+case "$NAME" in
+    guardrails.sh)
+        printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Blocked: the chassis guardrails hook was not found (looked under CHASSIS_ROOT, state/chassis-root, chassis/chassis, /app/chassis and the host clone). Re-run chassis/scripts/bootstrap-claude-project.py or fix the chassis path."}}'
+        ;;
+    load-second-brain-map.sh)
+        printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SECOND BRAIN UNREACHABLE. The second-brain map hook could not run: the chassis copy of load-second-brain-map.sh was not found. Tell the principal in your first message and read the map through the second-brain MCP."}}'
+        ;;
+    *)
+        echo "chassis-hook.sh: $NAME not found in any chassis tree" >&2
+        ;;
+esac
+exit 0

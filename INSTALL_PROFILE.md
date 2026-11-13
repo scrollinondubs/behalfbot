@@ -92,6 +92,8 @@ For V1 case studies we hand-author the artifacts directly from an interview. Onc
 | `dealflow` | no | V2 candidate |
 | `banking` | no | explicit trust-line opt-in required |
 
+Plugins from `behalfbot-plugins` are offered from `python3 chassis/scripts/plugin-registry.py list` after the first fetch, not from memory of the registry. That list leaves out DORMANT entries (a plugin whose supplier is gone stays in the registry so old pins resolve, but cannot work on a new install).
+
 ---
 
 ## 7. Second-brain backend

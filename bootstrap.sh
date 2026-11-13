@@ -31,7 +31,7 @@
 #       git archive --format=tar.gz --prefix=behalfbot/ origin/main | ssh user@host "tar xz -C ~/"
 #     Re-init .git later once the bot account is provisioned (see LESSONS_FROM_V1.md #32).
 #   - Linux box (Ubuntu 22.04+ recommended) or macOS (Mac Mini reference)
-#   - Tailscale installed + node shared with Sean+${ASSISTANT_NAME} (per docs/installer-homework.md)
+#   - Tailscale installed + node shared with the operator (per docs/installer-homework.md)
 #   - SSH key handoff done (per docs/installer-homework.md)
 #   - Agent-side accounts provisioned (GitHub, Google Workspace, Discord, Notion, optional Telegram)
 #   - Credentials pre-staged in installer's password manager
@@ -47,6 +47,8 @@
 #   8. Render customer-side scripts (restart/watchdog) from chassis templates
 #   9. Activate enabled plugins (per chassis.config.yaml.modules)
 #  10. Seed memory entries from INSTALL_PROFILE.md (no fabrication)
+#  10b. Wire the Claude Code project: settings.json hooks, core skills, the
+#      software-engineering sub-agent, MEMORY.md in the notes store
 #  11. Install OS-level deps (Python 3.12+, Node 20+, ffmpeg, sqlite3, jq, curl, Claude Code)
 #  12. Set up launchd plist (macOS) or systemd unit (Linux) for the dispatcher
 #  13. Run smoke tests (each plugin's basic functionality)
@@ -387,6 +389,7 @@ hydrate_claude_md() {
     log "    {{MACHINE_DESCRIPTION}}, {{INSTALLER_PRIMARY_FOCUS}}"
     log "    {{PRIMARY_CHANNEL}}, {{OPS_CHANNEL}}, {{BRIEFINGS_CHANNEL}}"
     log "    {{SECOND_BRAIN_BACKEND}}, {{INSTALLER_GITHUB_OWNER}}, etc."
+    log "    {{CHASSIS_DIR}}: /app/chassis on a container install, \$CHASSIS_HOME/chassis on a host install"
     log "  Append per-plugin '## Plugin: <name>' sections from each enabled plugin's CLAUDE-section template"
     log "  Write hydrated CLAUDE.md at \$CUSTOMER_HOME/CLAUDE.md"
 }
@@ -543,6 +546,20 @@ activate_plugins() {
     log "  - Writes merged registry to \$CUSTOMER_HOME/triggers.yaml"
     log "  - Read by chassis/scripts/dispatch-trigger.sh on every inbound message"
     log "  - Re-run any time a plugin is enabled/disabled or its manifest changes"
+    log ""
+    log "Plugins to offer the installer: python3 chassis/scripts/plugin-registry.py list"
+    log "  (DORMANT registry entries are left out; --all shows them, marked)"
+
+    # behalfbot#264 item 2. Fetched plugin skills sit under vendored-plugins/,
+    # where no session looks. The entrypoint relinks after every fetch; this
+    # covers host installs and a bootstrap run before the first container boot.
+    local linker="$CHASSIS_HOME/chassis/scripts/plugin-registry.py"
+    local link_args=(link-skills)
+    [[ "$DRY_RUN" == "true" ]] && link_args+=(--dry-run)
+    if [[ -f "$linker" ]]; then
+        CUSTOMER_HOME="$CUSTOMER_HOME" python3 "$linker" "${link_args[@]}" 2>&1 | tee -a "$TRANSCRIPT" || \
+            log "  WARN: plugin skill linking failed - re-run: python3 $linker link-skills"
+    fi
 }
 
 # ============================================================
@@ -573,6 +590,28 @@ seed_memory() {
 
 
 # ============================================================
+# 10b. Wire the Claude Code project (behalfbot#264)
+# ============================================================
+
+wire_claude_project() {
+    step "10b/15" "Wire the Claude Code project: hooks, core skills, sub-agent, notes store"
+
+    # The CLAUDE.md template promises all of these; without this step the
+    # files ship in the chassis and nothing puts them where Claude Code looks.
+    # Idempotent and never overwrites installer-written files.
+    local wirer="$CHASSIS_HOME/chassis/scripts/bootstrap-claude-project.py"
+    local config_src
+    config_src="$(first_existing "$CUSTOMER_HOME/chassis.config.yaml" "$CHASSIS_HOME/chassis.config.yaml")"
+    local args=(--customer-home "$CUSTOMER_HOME")
+    [[ -n "$config_src" ]] && args+=(--config "$config_src")
+    [[ "$DRY_RUN" == "true" ]] && args+=(--dry-run)
+    if ! python3 "$wirer" "${args[@]}" 2>&1 | tee -a "$TRANSCRIPT"; then
+        log "  WARN: bootstrap-claude-project.py failed - re-run it by hand:"
+        log "    python3 $wirer ${args[*]}"
+    fi
+}
+
+# ============================================================
 # 11. Seed second-brain starter content
 # ============================================================
 
@@ -591,14 +630,27 @@ seed_second_brain_content() {
     # by construction (chassis/second_brain/seed.py) - safe to re-run on a
     # re-install, a no-op if the sentinel doc from a prior run is still there.
     #
-    # Not fatal on failure: an install with second_brain.mode != adapter, or
-    # no backend configured yet, has nothing for this to write into. The
-    # module itself logs why and exits 0 rather than raising - this step
-    # mirrors that by not aborting the rest of bootstrap over it either.
-    if ! (cd "$CHASSIS_HOME" && python3 -m chassis.second_brain.seed); then
+    # Runs in both second_brain modes. In direct mode it seeds only an empty
+    # second brain (no PARA top level, no _MAP yet), so a long-running install
+    # is never handed a second set of top-level docs. Either way it writes the
+    # _MAP id into second_brain.map.doc_id when that is empty, which is what
+    # switches on the SessionStart map hook.
+    #
+    # Not fatal on failure: with no backend configured yet there is nothing to
+    # write into. The module logs why and exits 0; this step does not abort
+    # the rest of bootstrap over it either.
+    #
+    # Only the install's own config, never the chassis repo's template: the
+    # seeder writes the map id back into the file it was given.
+    local config="$CUSTOMER_HOME/chassis.config.yaml"
+    if [[ ! -f "$config" ]]; then
+        log "  $config missing - skipping the seed (it writes the map id back into that file)"
+        return 0
+    fi
+    if ! (cd "$CHASSIS_HOME" && python3 -m chassis.second_brain.seed --config "$config"); then
         log "  second-brain seed step reported a non-zero exit - check the output above."
         log "  Not fatal to bootstrap; re-run manually once the second brain is configured:"
-        log "    cd $CHASSIS_HOME && python3 -m chassis.second_brain.seed"
+        log "    cd $CHASSIS_HOME && python3 -m chassis.second_brain.seed --config $config"
     fi
 }
 
@@ -885,7 +937,7 @@ report_status() {
     log "  Daily-briefing message lands in the installer's briefings channel"
     log "  for 3 consecutive mornings, built from a stubbed gather of recent activity."
     log ""
-    log "Until that 3-day clean run completes, leave Sean+${ASSISTANT_NAME} SSH access in place."
+    log "Until that 3-day clean run completes, leave the operator's SSH access in place."
     log "Per the V1 ownership-transfer pattern, transfer happens AFTER the soak."
 }
 
@@ -912,6 +964,7 @@ main() {
     preflight_bot_identity
     activate_plugins
     seed_memory
+    wire_claude_project
     seed_second_brain_content
     install_os_deps
     setup_dispatcher_unit

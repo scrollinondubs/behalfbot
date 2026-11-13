@@ -131,6 +131,14 @@ worth stating plainly because nothing surfaces it.
 The opt-in second-brain map hook registers the same way, under `SessionStart`
 instead of `PreToolUse`: `chassis/docs/second-brain-map.md` has the block.
 
+On a fresh install `chassis/scripts/bootstrap-claude-project.py` writes the
+install's `.claude/settings.json` from `chassis/claude-settings.json.template`
+with all three hooks registered, each through `.claude/hooks/chassis-hook.sh`.
+That shim finds the chassis tree wherever the session runs, and if it cannot
+find `guardrails.sh` it denies the call rather than letting it through. It
+never rewrites an existing `settings.json`; it warns when one registers no
+guardrails hook.
+
 An empty `matcher` runs on every tool call; a named one runs only for that tool.
 Keep `guardrails.sh` on the empty matcher - a safety hook that only fires for
 some tools is not a safety hook.
