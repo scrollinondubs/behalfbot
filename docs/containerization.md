@@ -129,6 +129,11 @@ Installs that still carry the pre-#136 vendored subtree keep working: the wrappe
 
 > **Writing an override:** compose resolves relative paths inside a compose file against the **project directory**, which is the directory of the first `-f` file - the chassis repo, not `$CUSTOMER_HOME`. An override saying `env_file: [.env.baked]` therefore looks for it next to `docker-compose.yml` in the chassis repo and dies with `env file ... not found`. Always use absolute or interpolated paths: `env_file: [{path: ${HOME}/.behalfbot/.env.baked, required: true}]`.
 
+## Environment and Python packages inside the container
+
+- **Keys:** the base `docker-compose.yml` loads `${CUSTOMER_HOME}/.env.baked` with `env_file` (`required: false`), so a `docker exec` shell or a plugin's `validate.sh` run by hand sees the same keys the entrypoint sources. It never loads the raw `.env`: compose cannot parse a Vaultwarden hydration block and refuses to start the stack. An install whose `.env` is literal `KEY=value` lines and that never bakes can set `CHASSIS_ENV_FILE=<path to that .env>` in the compose `.env`; keep `ANTHROPIC_API_KEY` out of that file.
+- **Plugin pip installs:** compose sets `PYTHONUSERBASE=/app/customer/state/pyuser`, so a plugin's `setup.sh` that pip-installs as the runtime user writes to customer state and the packages survive `run --rm` and recreates. The entrypoint creates the directory and appends its `bin/` to `PATH`. Never set it in the customer `.env`: host-side Python would then load the container's Linux wheels.
+
 ## Chassis root resolution - the live tree wins
 
 The image bakes a chassis tree at `/app/chassis`, but that copy is only a fallback. At boot, `docker/entrypoint.sh` runs `chassis/scripts/resolve-chassis-root.sh`, which resolves the EFFECTIVE `CHASSIS_ROOT`:

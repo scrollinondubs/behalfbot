@@ -24,6 +24,9 @@ so one already-there doc can't abort the rest of the batch.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from chassis.second_brain.base import NotesAdapter
 
 SENTINEL_TITLE = "Second Brain Seed"
@@ -170,51 +173,166 @@ def seed_default_content(adapter: NotesAdapter, root_parent: str = "") -> dict:
     return result
 
 
-def main() -> int:
-    """CLI entry point - `python3 -m chassis.second_brain.seed`.
+PARA_TITLES = ("Projects", "Areas", "Resources")
+
+
+def _title_matches(title: str, word: str) -> bool:
+    """`Projects`, `1 Projects` and `1. Projects` all count as the Projects doc."""
+    t = title.strip().lower()
+    return t == word.lower() or t.endswith(" " + word.lower())
+
+
+def has_existing_para(adapter: NotesAdapter) -> bool:
+    """True when the second brain already has a PARA top level or a map.
+
+    Direct mode is how installs that predate the seeder run, and their second
+    brains are not empty. Seeding into one would add ten docs beside the
+    installer's own Projects / Areas / Resources, so any sign of an existing
+    layout means hands off.
+    """
+    for word in PARA_TITLES + (MAP_TITLE,):
+        for hit in adapter.search(word, limit=20):
+            if _title_matches(hit.title, word):
+                return True
+    return False
+
+
+def find_map_id(adapter: NotesAdapter) -> str:
+    for hit in adapter.search(MAP_TITLE, limit=20):
+        if hit.title.strip() == MAP_TITLE and hit.id:
+            return hit.id
+    return ""
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _is_key(line: str, key: str) -> bool:
+    body = line.strip()
+    return not body.startswith("#") and body.split(":", 1)[0].strip() == key and ":" in body
+
+
+def _block(lines: list[str], header: int) -> range:
+    """Line indexes inside the mapping whose `key:` header is at `header`."""
+    base = _indent(lines[header])
+    end = header + 1
+    while end < len(lines):
+        body = lines[end].strip()
+        if body and not body.startswith("#") and _indent(lines[end]) <= base:
+            break
+        end += 1
+    return range(header + 1, end)
+
+
+def set_map_doc_id(config_path: Path, doc_id: str) -> str:
+    """Write `second_brain.map.doc_id` in place, only when it is empty.
+
+    A line edit, not a YAML round-trip, so the file's comments survive.
+    Returns "set", "already_set" (a value is there; left alone) or
+    "no_key" (no `second_brain.map.doc_id` line to fill; nothing written).
+    """
+    lines = config_path.read_text().split("\n")
+    sb = next((i for i, l in enumerate(lines) if _indent(l) == 0 and _is_key(l, "second_brain")), -1)
+    if sb < 0:
+        return "no_key"
+    mp = next((i for i in _block(lines, sb) if _is_key(lines[i], "map")), -1)
+    if mp < 0:
+        return "no_key"
+    di = next((i for i in _block(lines, mp) if _is_key(lines[i], "doc_id")), -1)
+    if di < 0:
+        return "no_key"
+    line = lines[di]
+    head, _, rest = line.partition(":")
+    value, hashpos = rest, rest.find("#")
+    comment = ""
+    if hashpos >= 0:
+        value, comment = rest[:hashpos], rest[hashpos:]
+    if value.strip() not in ("", '""', "''", "~", "null"):
+        return "already_set"
+    new = f'{head}: "{doc_id}"'
+    if comment:
+        col = len(head) + 1 + hashpos
+        new = new + " " * max(1, col - len(new)) + comment
+    lines[di] = new
+    config_path.write_text("\n".join(lines))
+    return "set"
+
+
+def main(argv: list[str] | None = None) -> int:
+    """CLI entry point - `python3 -m chassis.second_brain.seed [--config FILE]`.
 
     Resolves the configured adapter the same way the MCP server does
-    (`factory.get_adapter`). A backend that isn't configured, or a
-    `second_brain.mode` other than `adapter`, isn't a failure here - it just
-    means this install has nothing for the seeder to write into yet, and the
-    step logs that plainly instead of raising.
+    (`factory.get_adapter`). The adapter is a library, so it works in either
+    `second_brain.mode`; the mode only decides which MCP server a session sees.
+
+    - `adapter` mode: seed unless the sentinel says it already ran.
+    - `direct` mode: seed only when `second_brain.scaffold_para_if_missing` is
+      not false AND the second brain has no PARA top level or map yet, so a
+      long-running install is never handed a second set of top-level docs.
+
+    Either way, when `second_brain.map.doc_id` is empty and a `_MAP` doc exists
+    (just seeded, or found), its id is written into the config, which is what
+    switches on the SessionStart map hook. A backend that is not configured
+    is not a failure here: the step says so and exits 0.
     """
-    import sys
+    import argparse
 
     from chassis.second_brain import factory
 
-    try:
-        mode = factory.get_mode()
-    except Exception as exc:  # noqa: BLE001
-        print(f"second-brain seed: could not read second_brain.mode ({exc}); skipping.")
-        return 0
-    if mode != "adapter":
-        print(
-            f"second-brain seed: second_brain.mode={mode!r}, not 'adapter'; "
-            "skipping (nothing to seed through)."
-        )
-        return 0
+    ap = argparse.ArgumentParser(prog="python3 -m chassis.second_brain.seed")
+    ap.add_argument("--config", help="chassis.config.yaml (default: $CHASSIS_HOME/chassis.config.yaml)")
+    args = ap.parse_args(argv)
+    config_path = Path(args.config) if args.config else None
 
     try:
-        adapter = factory.get_adapter()
+        mode = factory.get_mode(config_path)
+        config = factory._load_config(config_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"second-brain seed: could not read second_brain config ({exc}); skipping.")
+        return 0
+    sb_config = config.get("second_brain") or {}
+
+    try:
+        # get_adapter returns the two-surface adapter; the seeder writes notes.
+        adapter = factory.get_adapter(config_path).notes
     except Exception as exc:  # noqa: BLE001
         print(f"second-brain seed: could not construct adapter ({exc}); skipping.")
         return 0
 
-    result = seed_default_content(adapter)
-    if not result["seeded"]:
-        print(f"second-brain seed: already seeded ({result['reason']}), no-op.")
-        return 0
+    map_id = ""
+    if mode == "direct" and sb_config.get("scaffold_para_if_missing") is False:
+        print("second-brain seed: scaffold_para_if_missing is false; not seeding.")
+    elif mode == "direct" and has_existing_para(adapter):
+        print("second-brain seed: direct mode and the second brain already has a PARA "
+              "layout or a _MAP; not seeding.")
+    else:
+        result = seed_default_content(adapter)
+        if not result["seeded"]:
+            print(f"second-brain seed: already seeded ({result['reason']}), no-op.")
+        else:
+            print(f"second-brain seed: created {len(result['created'])} doc(s).")
+            for doc in result["created"]:
+                if doc["title"] == MAP_TITLE and doc["id"]:
+                    map_id = doc["id"]
+            for failure in result.get("failed", []):
+                print(f"second-brain seed: FAILED {failure['title']!r}: {failure['error']}")
 
-    print(f"second-brain seed: created {len(result['created'])} doc(s).")
-    for doc in result["created"]:
-        if doc["title"] == MAP_TITLE and doc["id"]:
-            print(
-                f"second-brain seed: map doc id {doc['id']} - set second_brain.map.doc_id "
-                "to it to load the map into every session (chassis/docs/second-brain-map.md)."
-            )
-    for failure in result.get("failed", []):
-        print(f"second-brain seed: FAILED {failure['title']!r}: {failure['error']}")
+    current = (sb_config.get("map") or {}).get("doc_id") if isinstance(sb_config.get("map"), dict) else None
+    if current:
+        return 0
+    map_id = map_id or find_map_id(adapter)
+    if not map_id:
+        print("second-brain seed: no _MAP doc found; second_brain.map.doc_id stays empty "
+              "(chassis/docs/second-brain-map.md).")
+        return 0
+    target = config_path or Path(os.environ.get("CHASSIS_HOME", ".")) / "chassis.config.yaml"
+    outcome = set_map_doc_id(target, map_id)
+    if outcome == "set":
+        print(f"second-brain seed: map doc id {map_id} written to second_brain.map.doc_id in {target}.")
+    else:
+        print(f"second-brain seed: map doc id {map_id} - set second_brain.map.doc_id to it "
+              f"in {target} to load the map into every session ({outcome}).")
     return 0
 
 

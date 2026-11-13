@@ -100,6 +100,16 @@ ensure_customer_layout() {
     # Use CUSTOMER_HOME (which equals CHASSIS_HOME in the container) so the
     # naming matches the new issue #6 semantics.
     mkdir -p "$CUSTOMER_HOME"/{briefings,logs/scheduled,scheduled-tasks,state,data,memory,plugins,temp,scripts}
+    # Plugin pip installs land here when compose sets PYTHONUSERBASE (it does
+    # by default, behalfbot#264), so they survive `run --rm` and recreates.
+    # Its bin/ goes on PATH for console scripts those installs add.
+    if [[ -n "${PYTHONUSERBASE:-}" ]]; then
+        mkdir -p "$PYTHONUSERBASE" 2>/dev/null || true
+        case ":$PATH:" in
+            *":$PYTHONUSERBASE/bin:"*) ;;
+            *) export PATH="$PATH:$PYTHONUSERBASE/bin" ;;
+        esac
+    fi
 }
 
 source_env() {
@@ -282,7 +292,24 @@ run_plugin_fetch() {
         4) log "WARN: plugin fetch produced a corrupt tree - previous tree kept" ;;
         *) log "WARN: plugin fetch failed (rc=$rc) - continuing on the previous/baked tree" ;;
     esac
+    link_plugin_skills
     return 0
+}
+
+link_plugin_skills() {
+    # behalfbot#264. A fetched plugin's skill lands at
+    # vendored-plugins/<p>/skills/<s>/SKILL.md, where no Claude Code session
+    # looks. Relink .claude/skills/<s> after every fetch attempt, not only a
+    # successful one: fetch-plugins.sh exits early when the tree is already
+    # current, and an install that predates the linker still needs backfill.
+    # Separate from the fetcher on purpose - that file must stay byte-identical
+    # to its canonical copy in behalfbot-plugins.
+    local linker="$CHASSIS_ROOT/scripts/plugin-registry.py"
+    if [[ ! -f "$linker" ]]; then
+        log "WARN: $linker missing - plugin skills not linked into .claude/skills"
+        return 0
+    fi
+    python3 "$linker" link-skills || log "WARN: plugin skill linking failed (non-fatal)"
 }
 
 run_chassis_migrations() {

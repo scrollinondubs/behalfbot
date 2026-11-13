@@ -1,0 +1,35 @@
+{
+  "_comment": "Rendered into $CUSTOMER_HOME/.claude/settings.json by chassis/scripts/bootstrap-claude-project.py, only when that file does not exist. On an existing file the script adds the SessionStart map hook and the html-plan plugin and leaves everything else alone. Every hook goes through .claude/hooks/chassis-hook.sh, which finds the chassis tree on the host and in the container.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/chassis-hook.sh guardrails.sh", "timeout": 10 }
+        ]
+      },
+      {
+        "matcher": "mcp__plugin_discord_discord__reply",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/chassis-hook.sh discord-reply-param-fix.sh", "timeout": 5 }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/chassis-hook.sh load-second-brain-map.sh", "timeout": 20 }
+        ]
+      }
+    ]
+  },
+  "extraKnownMarketplaces": {
+    "claude-community": {
+      "source": { "source": "github", "repo": "anthropics/claude-plugins-community" }
+    }
+  },
+  "enabledPlugins": {
+    "html-plan@claude-community": true
+  }
+}

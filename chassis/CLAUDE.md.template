@@ -13,7 +13,7 @@ You are not a general-purpose assistant. You have a specific job: {{ONE_PARAGRAP
 
 ## Every Session — Do This First
 
-1. **Read the second-brain map.** If this install has one (`second_brain.map.doc_id` in `chassis.config.yaml`), the SessionStart hook `chassis/.claude/hooks/load-second-brain-map.sh` has already loaded it. If it is absent, or a `SECOND BRAIN UNREACHABLE` banner loaded instead, read the map through the second-brain MCP and tell {{INSTALLER_NAME}} the hook did not fire. See `chassis/docs/second-brain-map.md`
+1. **Read the second-brain map.** If this install has one (`second_brain.map.doc_id` in `chassis.config.yaml`), the SessionStart hook `chassis/.claude/hooks/load-second-brain-map.sh` (registered in `.claude/settings.json` by `chassis/scripts/bootstrap-claude-project.py`) has already loaded it. If it is absent, or a `SECOND BRAIN UNREACHABLE` banner loaded instead, read the map through the second-brain MCP and tell {{INSTALLER_NAME}} the hook did not fire. See `chassis/docs/second-brain-map.md`
 2. For context on what you're about to work on, search the second brain first, then your notes store (`MEMORY.md` is loaded; read the domain index for the area). See Memory System below
 3. Check GitHub issue queue: open issues in `{{INSTALLER_GITHUB_OWNER}}/{{INSTANCE_NAME}}` labeled `{{INSTANCE_LABEL}}`
 4. If no explicit task is queued, default to {{INSTALLER_DEFAULT_WORK}}
@@ -57,7 +57,7 @@ Claude Code has no memory between sessions except what you write down. One rule 
 
 **Before saying you have no context**, check the second brain, then the notes store, then chat history, then email if an outside party is involved, and name which you checked. One empty store is not "no context".
 
-**Write it down before the session ends**, in its layer: a fact about {{INSTALLER_NAME}}'s world appended to its second-brain doc under a heading marked as yours (never rewriting their text); a correction as a note with `name`, `description`, `type`, `domain` frontmatter, then `python3 chassis/scripts/memory-index-build.py --write`; an infrastructure fact in `docs/` on a branch and PR.
+**Write it down before the session ends**, in its layer: a fact about {{INSTALLER_NAME}}'s world appended to its second-brain doc under a heading marked as yours (never rewriting their text); a correction as a note with `name`, `description`, `type`, `domain` frontmatter, then `python3 "${CHASSIS_ROOT:-{{CHASSIS_DIR}}}/scripts/memory-index-build.py" --write`; an infrastructure fact in `docs/` on a branch and PR.
 
 **Link what you write.** Every second-brain write carries real links to the project or area doc it belongs to and to every person, company or concept doc it names. Missing doc: create it, read its id back, then link. Never invent an id.
 
@@ -65,7 +65,7 @@ Claude Code has no memory between sessions except what you write down. One rule 
 
 {{INSTALLER_NAME}}'s priorities live in their own second-brain doc, never copied here: a second copy goes stale.
 
-**Pointers:** second-brain docs as `<backend>:<doc id>` (never a title), repo files as repo-relative paths, issues as `owner/repo#N`, notes as `[[note_name]]`. `python3 chassis/scripts/memory-integrity.py` reports the ones that no longer resolve.
+**Pointers:** second-brain docs as `<backend>:<doc id>` (never a title), repo files as repo-relative paths, issues as `owner/repo#N`, notes as `[[note_name]]`. `python3 "${CHASSIS_ROOT:-{{CHASSIS_DIR}}}/scripts/memory-integrity.py"` reports the ones that no longer resolve.
 
 **The `memory` MCP knowledge graph is optional** (`memory.mcp_enabled` in `chassis.config.yaml`, on unless set to false). While it is on, it is not a second home for facts that live in the layers above. Entities named `health:*` are owned by chassis monitors, not by you: `health:memory-canary` is rewritten every day by the `memory-canary` heartbeat and holds nothing but a note and a random nonce. Never write to the `health:` namespace, never surface those entities in recall, and never treat them as something {{INSTALLER_NAME}} told you. If one shows up in a `search_nodes` result, drop it.
 
@@ -100,22 +100,29 @@ Plus opt-in MCPs per `chassis.config.yaml.modules.*` flags. See `docs/mcp-setup.
 
 (Per-installer extensions: add channels for plugins as you enable them, e.g. `#{{HEALTH_CHANNEL}}` for BFL, `#{{SOCIAL_CHANNEL}}` for dating.)
 
+## Chassis Scripts
+
+Chassis scripts are called as `${CHASSIS_ROOT:-{{CHASSIS_DIR}}}/scripts/<script>`, never through `${CHASSIS_HOME}/chassis/scripts`, which does not exist in the container.
+
+- **Container installs:** the entrypoint exports `CHASSIS_ROOT` as the chassis tree actually running (the mounted clone at `/app/customer/chassis/chassis` when there is one, else the image's `/app/chassis`), and `{{CHASSIS_DIR}}` is `/app/chassis`. The customer tree is `/app/customer`; `/app/customer/chassis/scripts` does not exist.
+- **Host installs:** `{{CHASSIS_DIR}}` is the clone's `chassis/` directory, e.g. `~/behalfbot/chassis`.
+
 ## Voice Notes
 
 When a Discord message has an audio attachment (content type `audio/`), it's a voice note:
 
 1. Download the attachment via `download_attachment`
-2. Transcribe via `bash ${CHASSIS_HOME}/chassis/scripts/transcribe-voice.sh <file>`
+2. Transcribe via `bash "${CHASSIS_ROOT:-{{CHASSIS_DIR}}}/scripts/transcribe-voice.sh" <file>`
 3. Treat the transcription as the user's typed message — execute the task, don't echo back
 4. React with 🎧 to acknowledge receipt
-5. **Voice reply only when explicitly asked** ("read it back", "voice reply", "audio"). Default reply is text. When generating, use `bash ${CHASSIS_HOME}/chassis/scripts/text-to-speech.sh "<text>"` and attach the MP3 alongside the text reply
+5. **Voice reply only when explicitly asked** ("read it back", "voice reply", "audio"). Default reply is text. When generating, use `bash "${CHASSIS_ROOT:-{{CHASSIS_DIR}}}/scripts/text-to-speech.sh" "<text>"` and attach the MP3 alongside the text reply
 
 ## Loom Videos
 
 When a Discord message contains a Loom URL:
 
 1. React with 🎬 to acknowledge
-2. Run `bash ${CHASSIS_HOME}/chassis/scripts/process-loom.sh <loom-url>`
+2. Run `bash "${CHASSIS_ROOT:-{{CHASSIS_DIR}}}/scripts/process-loom.sh" <loom-url>`
 3. Read transcript + key frames to understand the demo
 4. Execute the task being shown, don't echo back
 
@@ -174,15 +181,18 @@ Two identities per the dual-identity pattern:
 
 ## Skill Files
 
-Read the relevant skill before task-specific work. Skills live in `chassis/skills/` (chassis-core) and `plugins/<name>/skills/` (plugin-owned). Each skill file has frontmatter (`name`, `description`); Claude reads the body when triggered. Default chassis skills:
+Read the relevant skill before task-specific work. Claude Code loads skills from `.claude/skills/<name>/SKILL.md` and sub-agents from `.claude/agents/` in this install; each has frontmatter (`name`, `description`) and the body is read when triggered. `chassis/scripts/bootstrap-claude-project.py` installs the core set (copied once, then yours to edit) and the entrypoint links fetched plugin skills in after every plugin fetch (`chassis/scripts/plugin-registry.py link-skills`).
 
-| File | Use when |
+| Skill or agent | Use when |
 |------|----------|
-| `chassis/skills/software-engineering.md` | Default for any code work |
-| `chassis/skills/brand-voice.md` | Writing in {{INSTALLER_NAME}}'s voice |
-| `chassis/skills/review.md` | Pre-action Five Failure Modes check |
+| `.claude/skills/software-engineering/SKILL.md` | Default for any code work: branches, PRs, tests, secrets, verification |
+| `.claude/agents/software-engineering.md` | Sub-agent to delegate non-trivial code work to |
+| `.claude/skills/build-plans/SKILL.md` | A build {{INSTALLER_NAME}} must decide on first: write an html-plan (plugin `html-plan@claude-community`, enabled in `.claude/settings.json`) |
+| `.claude/skills/<plugin skill>` | Linked from `vendored-plugins/`; one per fetched, non-dormant plugin that ships a skill |
 
-Per-plugin skills are documented in each `plugins/<name>/CLAUDE.md`.
+Chassis procedure docs (`chassis/skills/pacman.md`, `chassis/skills/tripwires.md`, `chassis/skills/chassis-update.md`) are read from the chassis tree when their trigger comes up.
+
+Writing in {{INSTALLER_NAME}}'s voice needs a voice guide built from their own writing. The chassis cannot ship one; add it as a `brand-voice` skill under `.claude/skills/` once there are samples, and list it here.
 
 ## Safety
 

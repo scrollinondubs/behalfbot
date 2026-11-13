@@ -50,6 +50,24 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    # behalfbot#264: put the install's keys in the container's process env, so
+    # anything that never passes through the entrypoint's source_env (docker
+    # exec, `run --entrypoint`, a plugin's validate.sh run by hand) still sees
+    # OPENAI_API_KEY and friends. `environment:` below wins over this file for
+    # any key both set, which keeps CUSTOMER_HOME and the CHASSIS_PG_* values
+    # container-correct.
+    #
+    # .env.baked, not .env: .env may carry the Vaultwarden hydration block,
+    # which is shell, and compose refuses to parse it (the whole stack fails
+    # to start). bake-env.sh writes the literal-only .env.baked and strips the
+    # keys that must never reach the container env. An install with no
+    # .env.baked is unaffected (required: false). An install whose .env is
+    # literal KEY=value lines only, with no bake step, can point
+    # CHASSIS_ENV_FILE at it in the compose .env instead - but bake-env.sh
+    # strips ANTHROPIC_API_KEY for a reason, so keep that key out of the file.
+    env_file:
+      - path: ${CHASSIS_ENV_FILE:-${CUSTOMER_HOME}/.env.baked}
+        required: false
     environment:
       # Issue #6: hard-split between chassis-disposable code and customer
       # state. CUSTOMER_HOME is the canonical name for the customer-state
@@ -84,6 +102,13 @@ services:
       CHASSIS_PG_USER: chassis
       CHASSIS_PG_DB: chassis
       USE_PG: "true"
+      # behalfbot#264: plugin setup scripts (flight-search and others) pip
+      # install as the non-root runtime user, which lands in the user site.
+      # By default that is /home/chassis/.local, inside the container layer,
+      # so every `run --rm` and every recreate lost the packages. Pointing the
+      # user base at customer state keeps them. Set here, never in the
+      # customer .env: a host-side Python would then load Linux wheels.
+      PYTHONUSERBASE: /app/customer/state/pyuser
     volumes:
       - ${CUSTOMER_HOME:?set CUSTOMER_HOME in .env (host path to per-customer behalfbot dir)}:/app/customer
       - ${CUSTOMER_CLAUDE_DIR:?set CUSTOMER_CLAUDE_DIR in .env (host path to ~/.claude for OAuth credentials)}:/home/chassis/.claude
