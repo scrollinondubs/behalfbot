@@ -12,5 +12,8 @@
     { "id": "key", "do": "Credentials: create API key, restrict to Places API (New)" },
     { "id": "save", "save_secret": "Behalf.bot - Google Places API key (Kit)" }
   ],
-  "accept": "GET places:searchText with the vault key returns 200 from Kit's server"
+  "accept": "GET Place Details for a known place id (https://places.googleapis.com/v1/places/ChIJj61dQgK6j4AR4GeTYWZsKWw with headers X-Goog-Api-Key: <vault key> and X-Goog-FieldMask: id,displayName) returns 200 from Kit's server. Use a GET: the guardrail hook on the Mac blocks POST to places.googleapis.com, so searchText is out.",
+  "notes": [
+    "When restricting the key by IP address, add both the server's IPv4 and its IPv6 /64. Kit's box reached Google over IPv6, so an IPv4-only restriction returned 403."
+  ]
 }
