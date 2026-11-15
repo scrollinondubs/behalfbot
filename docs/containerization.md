@@ -83,6 +83,7 @@ The interactive `claude --channels` process (bidirectional Discord intake) is **
 
 - It requires a PTY. `script -q -c '...' /dev/null` wraps fine, but supervising it inside the dispatcher container conflicts with the dispatcher's clean SIGTERM semantics.
 - V1 install uses a host tmux session pointing at the chassis dir. V2 containerized installs will follow the same pattern initially.
+  On Linux, supervise that host session with the systemd units in `chassis/systemd/discord-*.template` (see `chassis/systemd/INSTALL.md`), or with your own unit; either way it needs `KillMode=process`.
 - Containerizing channels is its own design problem (PR follow-up). The MVP for May 19 demo doesn't depend on it - webhook-based Discord posts cover briefing delivery and ops alerts.
 
 Once `claude --channels` lands inside a container, it ships as a second Compose service (`chassis-discord`) sharing the same bind-mounts, with `tty: true` and `stdin_open: true`.
