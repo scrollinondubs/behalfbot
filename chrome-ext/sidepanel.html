@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Autopilot log</title><link rel="stylesheet" href="style.css">
+<style>body { padding: 12px; }</style></head>
+<body>
+  <div style="display:flex;justify-content:space-between;align-items:center">
+    <h3 style="margin:0">Autopilot log</h3>
+    <span id="status" class="pill off">Off</span>
+  </div>
+  <p id="task" class="muted"></p>
+  <div id="turn" class="turn" hidden>
+    <b>Your turn</b>
+    <div id="turntext"></div>
+    <button id="done" class="pri">Done</button>
+  </div>
+  <ul id="log" class="log"></ul>
+  <p style="margin-top:14px"><button id="disconnect" class="danger">Disconnect</button></p>
+  <p class="muted">Every action shows here and in your install journal. Disconnect, Cancel on Chrome's bar, or closing the tab ends the session.</p>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

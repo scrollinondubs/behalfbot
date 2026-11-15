@@ -1,0 +1,66 @@
+// behalfbot-installer: managed installs on Cloudflare (behalfbot#265).
+//
+// First deployed 2026-11-15 with Sean's approval. Further `wrangler deploy` or
+// `wrangler secret put` still needs his explicit approval. Deploy with ./deploy.sh. Auth: wrangler reads
+// CLOUDFLARE_API_TOKEN from the environment (account-owned token
+// "behalfbot-fable-cf-containers", stored in Vaultwarden). The token is
+// never written to this repo or baked into any file. Confirm
+// `wrangler whoami` shows account 8a119b24123c444dddea567ffde1a405 before
+// deploying; the account_id pin below forces the correct account anyway.
+//
+// Separate Worker from behalfbot-executor on purpose: it holds the
+// installer bot token and per-install SSH keys, and the executor's closed
+// secret set stays closed.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "behalfbot-installer",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  // sean@grid7.com's account (NOT the AllBets account).
+  "account_id": "8a119b24123c444dddea567ffde1a405",
+  "containers": [
+    {
+      // ssh / ssh-keyscan only. One instance per install, named by
+      // install_id; the cap is how many installs can be talking to their
+      // boxes at once.
+      "class_name": "SshBox",
+      "image": "./Dockerfile",
+      "max_instances": 10,
+      // The SSH client needs almost nothing; the spike ran on lite.
+      "instance_type": "lite"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      { "name": "INSTALL_DO", "class_name": "InstallDO" },
+      { "name": "INSTALL_REGISTRY", "class_name": "InstallRegistry" },
+      { "name": "SSH_BOX", "class_name": "SshBox" },
+      // Browser autopilot relay (src/autopilot.ts), one instance "relay".
+      { "name": "AUTOPILOT", "class_name": "AutopilotDO" }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["InstallDO", "InstallRegistry", "SshBox"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["AutopilotDO"]
+    }
+  ],
+  "observability": {
+    "enabled": true
+  }
+  // Secrets (set via `wrangler secret put <NAME>`, never in this file). The
+  // set is closed; customer secrets are per-install DO storage, never here.
+  //   DISCORD_INSTALLER_BOT_TOKEN    - installer bot, creates install channels
+  //   DISCORD_GUILD_ID               - guild the install channels live in
+  //   DISCORD_ESCALATION_CHANNEL_ID  - #installer-escalations
+  //   ANTHROPIC_API_KEY              - installer-only key so spend is visible
+  //                                    (used by the runbook agent, not yet)
+  //   INSTALLER_SITE_SECRET          - bearer for POST/PATCH /installs, shared
+  //                                    with the Behalfbot-site Vercel app
+  //   INSTALLER_ADMIN_SECRET         - bearer for the admin routes and the
+  //                                    journal link in escalations
+}

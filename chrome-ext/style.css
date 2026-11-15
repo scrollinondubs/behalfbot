@@ -1,0 +1,27 @@
+:root { --fg: #1f2328; --muted: #59636e; --line: #d0d7de; --bg: #fff; --soft: #f6f8fa; --ok: #1a7f37; --err: #cf222e; --pri: #0969da; --warn: #fff8c5; --warnline: #d4a72c; }
+* { box-sizing: border-box; }
+body { margin: 0; font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--fg); background: var(--bg); }
+h3 { margin: 0 0 10px; font-size: 14px; }
+.row { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+.row span:first-child { color: var(--muted); }
+.pill { border-radius: 999px; padding: 1px 8px; font-size: 12px; background: var(--soft); border: 1px solid var(--line); }
+.pill.connected { background: #dafbe1; border-color: #4ac26b; color: var(--ok); }
+.pill.connecting { background: var(--warn); border-color: var(--warnline); }
+.pill.off { color: var(--muted); }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--soft); cursor: pointer; }
+button.pri { background: var(--pri); color: #fff; border-color: var(--pri); }
+button.danger { color: var(--err); }
+input.code { width: 100%; font: 600 20px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 3px; text-align: center; padding: 10px; border: 1px solid var(--line); border-radius: 6px; text-transform: uppercase; margin: 6px 0 10px; }
+.err { color: var(--err); }
+.muted { color: var(--muted); }
+.log { list-style: none; margin: 0; padding: 0; }
+.log li { padding: 4px 0; border-bottom: 1px solid var(--soft); }
+.log li.ok::before { content: "\2713  "; color: var(--ok); }
+.log li.err::before { content: "\2717  "; color: var(--err); }
+.log li.handoff::before { content: "\25B8  "; color: var(--pri); }
+.log li.off::before { content: "\25CB  "; color: var(--muted); }
+.log li.now { font-weight: 600; }
+.log li.now::before { content: "\25B8  "; color: var(--pri); }
+.turn { margin: 10px 0; padding: 10px; border: 1px solid var(--warnline); background: var(--warn); border-radius: 8px; }
+.turn b { display: block; margin-bottom: 4px; }
+.turn button { margin-top: 8px; }

@@ -1,0 +1,19 @@
+{
+  "id": "google-places",
+  "task": "Google Cloud: turn on Places API (New) and save a restricted key to the vault",
+  "allow": ["console.cloud.google.com"],
+  "start_url": "https://console.cloud.google.com/",
+  "project": "kit-assistant-514520",
+  "steps": [
+    { "id": "project", "do": "open the project picker, select kit-assistant-514520" },
+    { "id": "billing", "human": "Link a billing account and add a card. Press Done when the page shows \"Billing account linked\"." },
+    { "id": "budget", "do": "Billing > Budgets & alerts: $5, email alerts at 50/90/100%" },
+    { "id": "enable", "do": "APIs & Services > Library: enable Places API (New)" },
+    { "id": "key", "do": "Credentials: create API key, restrict to Places API (New)" },
+    { "id": "save", "save_secret": "Behalf.bot - Google Places API key (Kit)" }
+  ],
+  "accept": "GET Place Details for a known place id (https://places.googleapis.com/v1/places/ChIJj61dQgK6j4AR4GeTYWZsKWw with headers X-Goog-Api-Key: <vault key> and X-Goog-FieldMask: id,displayName) returns 200 from Kit's server. Use a GET: the guardrail hook on the Mac blocks POST to places.googleapis.com, so searchText is out.",
+  "notes": [
+    "When restricting the key by IP address, add both the server's IPv4 and its IPv6 /64. Kit's box reached Google over IPv6, so an IPv4-only restriction returned 403."
+  ]
+}
