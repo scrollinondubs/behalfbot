@@ -50,6 +50,9 @@ on:
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
       - 'chassis/scripts/test-discord-reply-param-fix.sh'
+      - 'chassis/scripts/patch-discord-plugin.sh'
+      - 'chassis/scripts/test-patch-discord-plugin.sh'
+      - 'chassis/patches/discord-forwarded-messages.patch'
       - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
       - 'chassis/scheduled-tasks/tests/test_fire_caps.sh'
       - 'chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh'
@@ -109,6 +112,9 @@ on:
       - 'chassis/scripts/test-chassis-update-mode.sh'
       - 'chassis/.claude/hooks/discord-reply-param-fix.sh'
       - 'chassis/scripts/test-discord-reply-param-fix.sh'
+      - 'chassis/scripts/patch-discord-plugin.sh'
+      - 'chassis/scripts/test-patch-discord-plugin.sh'
+      - 'chassis/patches/discord-forwarded-messages.patch'
       - 'chassis/scheduled-tasks/heartbeat-dispatcher.sh'
       - 'chassis/scheduled-tasks/tests/test_fire_caps.sh'
       - 'chassis/scheduled-tasks/tests/test_fire_caps_e2e.sh'
@@ -299,6 +305,18 @@ jobs:
       # 0 rather than blocking - a hook that mutes the channel on bad input
       # defeats its own purpose. No docker, no network.
       - run: bash chassis/scripts/test-discord-reply-param-fix.sh
+
+  patch-discord-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The forwarded-messages patch to the official Discord plugin. Proves the
+      # applier patches a known-pristine server.ts, keeps a .orig, is a no-op
+      # on re-run, and leaves an unknown or non-applying file untouched while
+      # exiting 0 - it runs ahead of every Discord session start, so it must
+      # never be the reason the session does not come up. Also checks the
+      # shipped patch file for its marker, headers and absence of logging.
+      - run: bash chassis/scripts/test-patch-discord-plugin.sh
 
   heartbeat-fire-caps:
     runs-on: ubuntu-latest
@@ -530,6 +548,7 @@ jobs:
           bash:chassis/scripts/test-chassis-update-check.sh
           bash:chassis/scripts/test-chassis-update-mode.sh
           bash:chassis/scripts/test-discord-reply-param-fix.sh
+          bash:chassis/scripts/test-patch-discord-plugin.sh
           bash:chassis/scripts/test-colima-ensure.sh
           bash:chassis/scripts/test-control-flags.sh
           bash:chassis/scripts/test-credential-expiry.sh

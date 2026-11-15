@@ -145,6 +145,18 @@ else
     log "WARN: preseed-claude-trust.sh not found at ${CHASSIS_HOME}/chassis/scripts/; skipping trust pre-seed"
 fi
 
+# Patch the Discord plugin in the Claude Code plugin cache so forwarded
+# messages are not delivered empty (chassis/patches/README.md). Runs here,
+# before claude starts, because the plugin server is loaded at launch. Only
+# known-pristine files are touched and the script always exits 0, so a plugin
+# update can at worst leave forwards empty again, never stop the session.
+if [[ -f "${CHASSIS_HOME}/chassis/scripts/patch-discord-plugin.sh" ]]; then
+    bash "${CHASSIS_HOME}/chassis/scripts/patch-discord-plugin.sh" >> "$LOG_FILE" 2>&1 || \
+        log "WARN: patch-discord-plugin.sh failed; forwarded messages may arrive empty"
+else
+    log "WARN: patch-discord-plugin.sh not found at ${CHASSIS_HOME}/chassis/scripts/; skipping Discord plugin patch"
+fi
+
 # Start new session.
 #
 # Working dir is CUSTOMER_HOME so claude resolves the install's CLAUDE.md, .env,
