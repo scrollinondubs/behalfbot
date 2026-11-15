@@ -6,9 +6,14 @@ start at the confirmed slot, and a 14-day garbage collector that closes the
 channel and removes our SSH key from the customer's box.
 
 **Deployed 2026-11-15** at `https://behalfbot-installer.sean-8a1.workers.dev`
-(Sean-approved, from PR 271), with all six secrets set. The live end-to-end run
-against a real Hetzner box has not happened yet. Redeploys and secret changes
-still need Sean's explicit approval.
+(Sean-approved, from PR 271), with all six secrets set. Redeploys and secret
+changes still need Sean's explicit approval.
+
+First live end-to-end run, 2026-11-15: an admin install opened a private
+channel, created a cx23 in a test Hetzner project, and key-auth SSH with the
+cloud-init pinned host key worked on the first probe (`true`, `uname -a`). Close
+removed our key; a rescue-mode boot confirmed `authorized_keys` no longer held
+it. The server was then deleted by hand through the Hetzner API.
 
 The two bearers are in Vaultwarden as `behalfbot-installer-site-secret` and
 `behalfbot-installer-admin-secret`.
@@ -118,6 +123,8 @@ done
 curl -s https://behalfbot-installer.<subdomain>.workers.dev/healthz
 ```
 
-First end-to-end check after deploy: a throwaway Hetzner box. Pin it with
-`POST /installs/:id/server`, then run `ssh <box> true` through the transport.
-SPIKE.md lists that as not yet proven.
+End-to-end check after a deploy: create an admin install, `PUT` a test
+project's Hetzner token, `POST /installs/:id/hetzner-server`, then
+`POST /installs/:id/probe` with `true` and `uname`. Close with
+`POST /installs/:id/close` and delete the test server through the Hetzner API
+yourself: the Worker never deletes servers.
