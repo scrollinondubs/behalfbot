@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test container/*.test.mjs test/*.test.mjs",
+    "test": "node --test container/*.test.mjs test/*.test.mjs ../../chrome-ext/test/*.test.mjs",
     "deploy": "bash deploy.sh"
   },
   "dependencies": {

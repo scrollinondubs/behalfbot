@@ -78,6 +78,38 @@ Both bearers use a constant-time compare, and an unset secret matches nothing.
 - **Server create.** Uses the customer's own token, in their own project: `cx23`, `nbg1`, `ubuntu-24.04`, IPv4 and IPv6. Our per-install public key goes in through a project SSH key object, which also stops Hetzner emailing a root password, and that object is deleted right after create. The host key is an ed25519 pair generated in the Worker and installed by cloud-init (`ssh_keys`), so `host_key_fp` is pinned before the box first answers: verified by construction, not trust on first use. The host private key goes only to Hetzner's user_data; it is not stored or journaled. The token stays in DO storage until close (TODO: move it to the box vault once that exists).
 - **Host pinning.** `server_ip` must be a literal IP and `host_key_fp` a `SHA256:` fingerprint. The container keyscans the host and refuses unless its ed25519 key matches the pin. It then connects with that key as the only known host and `StrictHostKeyChecking=yes`. The Worker also refuses any answer that does not confirm the pinned fingerprint.
 
+## Browser autopilot (`src/autopilot.ts`)
+
+Relay between the Behalf.bot Autopilot Chrome extension (`chrome-ext/` at the
+repo root) and a driver (Jax's `autopilot` MCP today). One `AutopilotDO`
+instance named `relay` holds every code and session, with hibernatable
+WebSockets. Runbooks live in `runbooks/` at the repo root and fix each
+session's site allowlist; `local-test` only pairs when the Worker runs with
+`AUTOPILOT_DEV_RUNBOOKS=1`.
+
+| Route | Auth | What |
+|---|---|---|
+| `POST /installs/:id/autopilot/code` | admin | `{"runbook"}` (default `google-places`). Returns a single-use `XXX-XXX` code, 10 minutes. |
+| `GET /installs/:id/autopilot` | admin | Sessions for the install: id, connected, allowlist, tab URL. |
+| `POST /autopilot/pair` | the code | `{"code"}` returns the session token and allowlist. Over 20 failed attempts in a minute returns 429. |
+| `GET /autopilot/ws?token=` | the token | The extension's socket. One per session. |
+| `POST /autopilot/:session/cmd` | admin | A `RelayCommand` plus `wait_ms` (max 25000). Returns the reply, or `202 {"pending"}` to poll. |
+| `GET /autopilot/:session/cmd/:id?wait_ms=` | admin | Polls a pending reply (a "Your turn" step). |
+| `POST /autopilot/:session/secret` | admin | `{"item"}` returns a captured value once, as `text/plain`, then deletes it. |
+| `DELETE /autopilot/:session` | admin | Ends the session now. |
+
+- **Secrets.** A `save_secret` reply's value is held in the DO's storage for at
+  most 5 minutes and leaves only through the secret route, once. The cmd reply
+  says `captured`. Every other reply passes the redactor, which includes held
+  values and Google API key shapes, so a snapshot of a page showing the key
+  does not carry it.
+- **Journal.** Every labelled command, pairing, connect, disconnect and secret
+  capture is a `note` row with `step_name = autopilot` in that install's
+  journal, through `InstallDO.autopilotNote`.
+- **Teardown.** Socket close or error deletes the session, its token hash,
+  held secrets and pending commands. Pairings whose socket never opens are
+  swept after 10 minutes.
+
 ## Not built yet (TODO stubs in the code)
 
 - **Runbook agent** (build step 5): per-step `claude -p` runs with `exec` as the only tool. `startRun` currently escalates to a human, and `chargeSpend` / `finish` are ready for it.

@@ -34,13 +34,19 @@
     "bindings": [
       { "name": "INSTALL_DO", "class_name": "InstallDO" },
       { "name": "INSTALL_REGISTRY", "class_name": "InstallRegistry" },
-      { "name": "SSH_BOX", "class_name": "SshBox" }
+      { "name": "SSH_BOX", "class_name": "SshBox" },
+      // Browser autopilot relay (src/autopilot.ts), one instance "relay".
+      { "name": "AUTOPILOT", "class_name": "AutopilotDO" }
     ]
   },
   "migrations": [
     {
       "tag": "v1",
       "new_sqlite_classes": ["InstallDO", "InstallRegistry", "SshBox"]
+    },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["AutopilotDO"]
     }
   ],
   "observability": {

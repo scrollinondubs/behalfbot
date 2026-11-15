@@ -6,6 +6,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { InstallCore } from '../src/install.ts'
 import { RegistryCore } from '../src/registry.ts'
 import { handle } from '../src/router.ts'
+import { AutopilotCore } from '../src/autopilot.ts'
 
 export const ENV = {
   DISCORD_INSTALLER_BOT_TOKEN: 'test-bot-token-not-real',
@@ -129,12 +130,15 @@ export function makeWorld({ clock = new Clock(), discord = fakeDiscord(), box = 
     }
     return installs.get(id)
   }
+  const autopilot = fakeRelay({ clock, install })
   const deps = {
     env: ENV,
     reserve: async (p) => registry.reserve(p),
     exists: async (id) => registry.exists(id),
     list: async (f) => registry.list(f),
     install,
+    autopilot: () => autopilot.api,
+    autopilotSocket: async (req) => autopilot.connect(req),
   }
   const request = (method, path, { body, token } = {}) =>
     handle(
@@ -145,7 +149,78 @@ export function makeWorld({ clock = new Clock(), discord = fakeDiscord(), box = 
       }),
       deps,
     )
-  return { clock, discord, box, registry, install, stores, alarms, request }
+  return { clock, discord, box, registry, install, stores, alarms, request, autopilot }
+}
+
+// A fake extension socket. `answer` turns each RelayCommand into the reply
+// the extension would send; null means stay silent (a human step in flight).
+export class FakeSocket {
+  constructor() {
+    this.sent = []
+    this.closed = null
+    this.answer = null
+    this.core = null
+  }
+  send(data) {
+    this.sent.push(data)
+    if (data === 'pong' || !this.answer) return
+    const cmd = JSON.parse(data)
+    const reply = this.answer(cmd)
+    if (reply) queueMicrotask(() => this.core.onMessage(this, JSON.stringify({ type: 'reply', id: cmd.id, ...reply })))
+  }
+  close(code, reason) {
+    this.closed = { code, reason }
+  }
+  commands() {
+    return this.sent.filter((d) => d !== 'pong').map((d) => JSON.parse(d))
+  }
+}
+
+// AutopilotCore wired the way AutopilotDO wires it, with sockets held in a
+// Map instead of the hibernation API.
+export function fakeRelay({ clock, install }) {
+  const socks = new Map()
+  const att = new WeakMap()
+  let alarm = null
+  const core = new AutopilotCore({
+    sql: sqlite(),
+    now: clock.now,
+    setAlarm: async (at) => { alarm = at },
+    getAlarm: async () => alarm,
+    accept: (ws, sessionId) => {
+      socks.set(sessionId, [...(socks.get(sessionId) ?? []), ws])
+      att.set(ws, { session_id: sessionId })
+    },
+    sockets: (sessionId) => socks.get(sessionId) ?? [],
+    attachment: (ws) => att.get(ws) ?? null,
+    journal: async (installId, line) => { await install(installId).autopilotNote(line) },
+  })
+  const api = {
+    createCode: (id, rb) => core.createCode(id, rb, true),
+    pair: (c) => core.pair(c),
+    listSessions: (id) => core.listSessions(id),
+    forward: (s, c, w) => core.forward(s, c, w),
+    poll: (s, i, w) => core.poll(s, i, w),
+    takeSecret: (s, i) => core.takeSecret(s, i),
+    end: (s, why) => core.end(s, why),
+  }
+  // What the runtime does on a socket close: drop it, then tell the core.
+  const disconnect = async (ws) => {
+    for (const [k, v] of socks) socks.set(k, v.filter((x) => x !== ws))
+    await core.onClose(ws)
+  }
+  // Returns { status, ws } instead of a 101 so tests can hold the socket.
+  const connect = async (req) => {
+    const s = await core.sessionForToken(new URL(req.url).searchParams.get('token'))
+    if (!s) return new Response('unauthorized', { status: 401 })
+    const ws = new FakeSocket()
+    ws.core = core
+    await core.accept(ws, s)
+    const res = new Response('switching', { status: 200 })
+    res.ws = ws
+    return res
+  }
+  return { core, api, connect, disconnect, alarm: () => alarm }
 }
 
 export const STRIPE = {

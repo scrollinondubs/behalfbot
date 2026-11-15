@@ -462,6 +462,13 @@ export class InstallCore {
     return { status: 200, body: { install_id: after.install_id, status: after.status } }
   }
 
+  // One line from the browser autopilot relay (autopilot.ts).
+  async autopilotNote(line: string): Promise<Reply> {
+    if (!this.row()) return { status: 404, body: { error: 'not_found' } }
+    await this.appendJournal('note', line.slice(0, 500), { stepName: 'autopilot' })
+    return { status: 200, body: { ok: true } }
+  }
+
   journalView(): Reply {
     const r = this.row()
     if (!r) return { status: 404, body: { error: 'not_found' } }

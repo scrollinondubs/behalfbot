@@ -19,6 +19,8 @@ const PATTERNS: RegExp[] = [
   /\bya29\.[A-Za-z0-9_-]{20,}/g,
   /\b1\/\/[A-Za-z0-9_-]{30,}/g,
   /\bGOCSPX-[A-Za-z0-9_-]{20,}/g,
+  // Google API keys (the browser autopilot's Places key).
+  /\bAIza[0-9A-Za-z_-]{35}/g,
   // Discord bot tokens: base64 user id . timestamp . hmac
   /\b[A-Za-z0-9_-]{23,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,40}\b/g,
   // Hetzner Cloud API tokens are 64 alphanumerics. Also eats sha256 hex

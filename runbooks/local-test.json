@@ -1,0 +1,15 @@
+{
+  "id": "local-test",
+  "task": "Local test page: walk the fake console and save its fake key",
+  "allow": ["localhost"],
+  "start_url": "http://localhost:8100/",
+  "dev_only": true,
+  "steps": [
+    { "id": "project", "do": "select the project in the picker" },
+    { "id": "billing", "human": "Press the fake billing button, then Done" },
+    { "id": "enable", "do": "click Enable" },
+    { "id": "key", "do": "click Create API key" },
+    { "id": "save", "save_secret": "Behalf.bot - Local test key" }
+  ],
+  "accept": "the vault stub receives the key on stdin"
+}

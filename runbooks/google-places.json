@@ -1,0 +1,16 @@
+{
+  "id": "google-places",
+  "task": "Google Cloud: turn on Places API (New) and save a restricted key to the vault",
+  "allow": ["console.cloud.google.com"],
+  "start_url": "https://console.cloud.google.com/",
+  "project": "kit-assistant-514520",
+  "steps": [
+    { "id": "project", "do": "open the project picker, select kit-assistant-514520" },
+    { "id": "billing", "human": "Link a billing account and add a card. Press Done when the page shows \"Billing account linked\"." },
+    { "id": "budget", "do": "Billing > Budgets & alerts: $5, email alerts at 50/90/100%" },
+    { "id": "enable", "do": "APIs & Services > Library: enable Places API (New)" },
+    { "id": "key", "do": "Credentials: create API key, restrict to Places API (New)" },
+    { "id": "save", "save_secret": "Behalf.bot - Google Places API key (Kit)" }
+  ],
+  "accept": "GET places:searchText with the vault key returns 200 from Kit's server"
+}
