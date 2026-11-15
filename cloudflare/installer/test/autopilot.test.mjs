@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { ENV, makeWorld, createInstall } from './helpers.mjs'
-import { CODE_TTL_MS, SECRET_TTL_MS, PAIR_FAILS_PER_MIN, UNCONNECTED_TTL_MS } from '../src/autopilot.ts'
+import { CODE_TTL_MS, SECRET_TTL_MS, PAIR_FAILS_PER_MIN, UNCONNECTED_TTL_MS, toRef } from '../src/autopilot.ts'
 
 const admin = { token: ENV.INSTALLER_ADMIN_SECRET }
 
@@ -251,6 +251,122 @@ test('dev runbook: refused unless the Worker allows dev runbooks', async () => {
   const { body } = await createInstall(w)
   const r = await w.autopilot.core.createCode(body.install_id, 'local-test', false)
   assert.equal(r.status, 400)
+})
+
+test('refs: a ref sent as "2378" or "[2378]" reaches the extension as the number 2378', async () => {
+  const { w, session } = await pairedSession()
+  session.ws.answer = () => ({ ok: true, result: null })
+  for (const ref of [2378, '2378', '[2378]', ' 2378 ']) {
+    const r = await cmd(w, session.id, { op: 'cdp', method: 'DOM.focus', params: { backendNodeId: ref }, label: '' })
+    assert.equal(r.status, 200, JSON.stringify(ref))
+  }
+  session.ws.answer = (c) => (c.op === 'save_secret' ? { ok: true, secret: true, value: fakeGoogleKey() } : null)
+  await cmd(w, session.id, { op: 'save_secret', ref: '2378', secretTarget: 'k', label: '' })
+  const sent = session.ws.commands()
+  for (const c of sent.slice(0, 4)) assert.strictEqual(c.params.backendNodeId, 2378)
+  assert.strictEqual(sent[4].ref, 2378)
+})
+
+test('refs: anything that is not a positive int32 is refused before the browser', async () => {
+  const { w, session } = await pairedSession()
+  for (const ref of ['12abc', '1.5', 1.5, 0, -3, '', 'abc', 2 ** 31, null, [12], '99999999999']) {
+    const r = await cmd(w, session.id, { op: 'cdp', method: 'DOM.focus', params: { backendNodeId: ref }, label: '' })
+    assert.equal(r.status, 400, JSON.stringify(ref))
+    const s = await cmd(w, session.id, { op: 'save_secret', ref, secretTarget: 'k', label: '' })
+    assert.equal(s.status, 400, JSON.stringify(ref))
+  }
+  assert.equal(session.ws.commands().length, 0)
+  assert.equal(toRef('[ 7 ]'), 7)
+  assert.equal(toRef(2 ** 31 - 1), 2 ** 31 - 1)
+})
+
+// Autopilot-only customers: already installed, they need a browser session
+// and nothing else.
+async function customerSetup(customer = 'Chelsea') {
+  const w = makeWorld()
+  const res = await w.request('POST', '/autopilot/sessions', { ...admin, body: { customer } })
+  return { w, res, body: await res.json() }
+}
+
+async function customerJournal(w, customer) {
+  const r = await w.request('GET', `/autopilot/sessions?customer=${encodeURIComponent(customer)}`, admin)
+  return { status: r.status, body: await r.json() }
+}
+
+test('customer session: no install, no registry row, and not one Discord call', async () => {
+  const { w, res, body } = await customerSetup()
+  assert.equal(res.status, 201)
+  assert.match(body.customer_id, /^apcu_/)
+  assert.equal(body.customer, 'Chelsea')
+  assert.match(body.code, /^[A-Z2-9]{3}-[A-Z2-9]{3}$/)
+  assert.deepEqual(body.allow, ['console.cloud.google.com'])
+
+  const p = await (await w.request('POST', '/autopilot/pair', { body: { code: body.code } })).json()
+  assert.match(p.session, /^aps_/)
+  const conn = await ws(w, p.token)
+  assert.ok(conn.ws)
+  conn.ws.answer = () => ({ ok: true, result: [] })
+  const r = await cmd(w, p.session, { op: 'cdp', method: 'Accessibility.getFullAXTree', label: 'Read the page' })
+  assert.equal(r.status, 200)
+  await w.request('DELETE', `/autopilot/${p.session}`, admin)
+
+  assert.equal(w.discord.calls.length, 0)
+  assert.equal(w.registry.list('all').length, 0)
+  const installs = await w.request('GET', '/installs?status=all', { token: ENV.INSTALLER_SITE_SECRET })
+  assert.deepEqual((await installs.json()).installs, [])
+  assert.equal(w.alarms.size, 0)
+})
+
+test('customer session: the journal lands in the relay and reads back by name', async () => {
+  const { w, body } = await customerSetup('  Chelsea   Example ')
+  assert.equal(body.customer, 'Chelsea Example')
+  const p = await (await w.request('POST', '/autopilot/pair', { body: { code: body.code } })).json()
+  const conn = await ws(w, p.token)
+  const key = fakeGoogleKey()
+  conn.ws.answer = (c) => (c.op === 'save_secret' ? { ok: true, secret: true, value: key } : { ok: true, result: null })
+  await cmd(w, p.session, { op: 'note', label: 'Open the credentials page' })
+  await cmd(w, p.session, { op: 'save_secret', ref: '9', secretTarget: 'Places key', label: '' })
+
+  const v = await customerJournal(w, 'chelsea example')
+  assert.equal(v.status, 200)
+  assert.equal(v.body.customer_id, body.customer_id)
+  assert.equal(v.body.sessions.length, 1)
+  assert.equal(v.body.sessions[0].connected, true)
+  const lines = v.body.journal.map((j) => j.line).join('\n')
+  assert.match(lines, /pairing code issued/)
+  assert.match(lines, /browser paired/)
+  assert.match(lines, /browser connected/)
+  assert.match(lines, /autopilot: Open the credentials page/)
+  assert.match(lines, /secret captured for vault item "Places key"/)
+  assert.ok(!lines.includes(key))
+
+  const take = await w.request('POST', `/autopilot/${p.session}/secret`, { ...admin, body: { item: 'Places key' } })
+  assert.equal(await take.text(), key)
+})
+
+test('customer session: same name reuses the customer; admin only; bad input refused', async () => {
+  const { w, body } = await customerSetup()
+  const again = await (await w.request('POST', '/autopilot/sessions', { ...admin, body: { customer: 'chelsea' } })).json()
+  assert.equal(again.customer_id, body.customer_id)
+  assert.notEqual(again.code, body.code)
+
+  assert.equal((await w.request('POST', '/autopilot/sessions', { body: { customer: 'X' } })).status, 401)
+  assert.equal((await w.request('GET', '/autopilot/sessions?customer=Chelsea')).status, 401)
+  for (const bad of [{}, { customer: '' }, { customer: '   ' }, { customer: 7 }, { customer: 'x'.repeat(101) }, { customer: 'Y', runbook: 'nope' }, { customer: 'Y', runbook: 3 }]) {
+    const r = await w.request('POST', '/autopilot/sessions', { ...admin, body: bad })
+    assert.equal(r.status, 400, JSON.stringify(bad))
+  }
+  assert.equal((await customerJournal(w, 'Nobody')).status, 404)
+  assert.equal((await w.request('PUT', '/autopilot/sessions', { ...admin, body: {} })).status, 405)
+  // A customer id is not an install id, so the install routes never take it.
+  assert.equal((await w.request('POST', `/installs/${body.customer_id}/autopilot/code`, { ...admin, body: {} })).status, 404)
+  assert.equal(w.discord.calls.length, 0)
+})
+
+test('customer session: an install still journals to its own InstallDO, not the relay', async () => {
+  const { w, id } = await setup()
+  assert.equal(w.autopilot.core['rows']('SELECT * FROM ap_journal').length, 0)
+  assert.match(await journalText(w, id), /pairing code issued/)
 })
 
 async function pairedSession() {

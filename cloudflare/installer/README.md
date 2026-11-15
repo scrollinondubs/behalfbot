@@ -91,6 +91,8 @@ session's site allowlist; `local-test` only pairs when the Worker runs with
 |---|---|---|
 | `POST /installs/:id/autopilot/code` | admin | `{"runbook"}` (default `google-places`). Returns a single-use `XXX-XXX` code, 10 minutes. |
 | `GET /installs/:id/autopilot` | admin | Sessions for the install: id, connected, allowlist, tab URL. |
+| `POST /autopilot/sessions` | admin | `{"customer", "runbook"}`. A code for an autopilot-only customer (see below). Returns `customer_id` (`apcu_...`) plus the same fields as the install route. |
+| `GET /autopilot/sessions?customer=` | admin | That customer's sessions and journal, by name (case and spacing ignored). |
 | `POST /autopilot/pair` | the code | `{"code"}` returns the session token and allowlist. Over 20 failed attempts in a minute returns 429. |
 | `GET /autopilot/ws?token=` | the token | The extension's socket. One per session. |
 | `POST /autopilot/:session/cmd` | admin | A `RelayCommand` plus `wait_ms` (max 25000). Returns the reply, or `202 {"pending"}` to poll. |
@@ -105,7 +107,20 @@ session's site allowlist; `local-test` only pairs when the Worker runs with
   does not carry it.
 - **Journal.** Every labelled command, pairing, connect, disconnect and secret
   capture is a `note` row with `step_name = autopilot` in that install's
-  journal, through `InstallDO.autopilotNote`.
+  journal, through `InstallDO.autopilotNote`. For an autopilot-only customer
+  the same lines go to the relay's `ap_journal` table (last 1000 kept) and
+  read back through `GET /autopilot/sessions?customer=`.
+- **Autopilot-only customers.** For someone already installed who needs a
+  browser session (a Google Cloud key, say), use `POST /autopilot/sessions`,
+  not `POST /installs`. It creates no InstallDO, no registry row, no Discord
+  channel, homework or alarms: the relay has no Discord client, so it cannot
+  post. The customer is a row in `ap_customer` keyed by name; asking again for
+  the same name reuses it. Its `apcu_` id sits where an install id would in
+  `ap_code` and `ap_session`, and never matches the install routes.
+- **Refs.** A `backendNodeId` in cdp params, and a `save_secret` `ref`, may
+  arrive as `2378`, `"2378"` or `"[2378]"`; the relay forwards the integer.
+  Anything that is not a positive int32 is refused with 400, and the
+  extension refuses a non-integer again.
 - **Teardown.** Socket close or error deletes the session, its token hash,
   held secrets and pending commands. Pairings whose socket never opens are
   swept after 10 minutes.

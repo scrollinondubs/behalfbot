@@ -16,6 +16,8 @@
 // Browser autopilot (autopilot.ts):
 //   POST   /installs/:id/autopilot/code  admin bearer  {runbook?} -> pairing code XXX-XXX
 //   GET    /installs/:id/autopilot       admin bearer  sessions for that install
+//   POST   /autopilot/sessions           admin bearer  {customer, runbook?} -> code for an autopilot-only customer
+//   GET    /autopilot/sessions?customer= admin bearer  that customer's sessions and journal
 //   POST   /autopilot/pair               the code is the credential; failures are capped
 //   GET    /autopilot/ws?token=          extension socket (upgrade)
 //   POST   /autopilot/:session/cmd       admin bearer  RelayCommand + wait_ms -> reply or 202 pending
@@ -46,6 +48,8 @@ export interface InstallApi {
 
 export interface AutopilotApi {
   createCode(installId: string, runbookId: string): Promise<Out>
+  createCustomerCode(customer: unknown, runbookId: string): Promise<Out>
+  customerView(customer: string): Promise<Out> | Out
   pair(code: unknown): Promise<Out>
   listSessions(installId: string): Promise<Out> | Out
   forward(sessionId: string, cmd: Record<string, unknown>, waitMs?: number): Promise<Out>
@@ -226,6 +230,26 @@ async function autopilotRoute(req: Request, url: URL, deps: RouterDeps, admin: (
       return json(r.body, r.status)
     }
     return json({ error: 'not_found' }, 404)
+  }
+
+  // Autopilot-only customers: no InstallDO, no registry row, no Discord.
+  if (p === '/autopilot/sessions') {
+    if (req.method === 'GET') {
+      const r = await ap.customerView(url.searchParams.get('customer') ?? '')
+      return json(r.body, r.status)
+    }
+    if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405)
+    let raw: unknown
+    try {
+      raw = await readJson(req)
+    } catch {
+      return json({ error: 'invalid JSON body' }, 400)
+    }
+    const b = (raw ?? {}) as Record<string, unknown>
+    const rb = b.runbook ?? 'google-places'
+    if (typeof rb !== 'string') return json({ error: 'runbook must be a string' }, 400)
+    const r = await ap.createCustomerCode(b.customer, rb)
+    return json(r.body, r.status)
   }
 
   const m = /^\/autopilot\/([^/]+)(\/cmd(?:\/([^/]+))?|\/secret)?$/.exec(p)

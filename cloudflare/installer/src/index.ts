@@ -147,6 +147,7 @@ export class AutopilotDO extends DurableObject<Env> implements AutopilotApi {
       },
       sockets: (sessionId) => ctx.getWebSockets(sessionId),
       attachment: (ws) => ((ws as WebSocket).deserializeAttachment() as { session_id: string } | null) ?? null,
+      // Only install owners reach here; the core keeps customer lines itself.
       journal: async (installId, line) => {
         await env.INSTALL_DO.get(env.INSTALL_DO.idFromName(installId)).autopilotNote(line)
       },
@@ -177,6 +178,12 @@ export class AutopilotDO extends DurableObject<Env> implements AutopilotApi {
 
   createCode(installId: string, runbookId: string): Promise<Out> {
     return this.core.createCode(installId, runbookId, this.env.AUTOPILOT_DEV_RUNBOOKS === '1')
+  }
+  createCustomerCode(customer: unknown, runbookId: string): Promise<Out> {
+    return this.core.createCustomerCode(customer, runbookId, this.env.AUTOPILOT_DEV_RUNBOOKS === '1')
+  }
+  customerView(customer: string): Out {
+    return this.core.customerView(customer)
   }
   pair(code: unknown): Promise<Out> {
     return this.core.pair(code)
