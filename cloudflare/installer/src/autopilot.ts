@@ -42,10 +42,7 @@ export type RelayOp = (typeof RELAY_OPS)[number]
 // refuses early so a bad command never reaches the browser.
 export const RELAY_METHODS = [
   'Accessibility.getFullAXTree',
-  'DOM.getDocument',
-  'DOM.describeNode',
   'DOM.getBoxModel',
-  'DOM.getContentQuads',
   'DOM.scrollIntoViewIfNeeded',
   'DOM.focus',
   'Input.dispatchMouseEvent',
@@ -111,7 +108,7 @@ export const AUTOPILOT_DDL = [
   // goes once the driver has the answer.
   `CREATE TABLE IF NOT EXISTS ap_cmd (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL, op TEXT NOT NULL, label TEXT NOT NULL,
-    secret_target TEXT, body TEXT, created_at INTEGER NOT NULL)`,
+    method TEXT, secret_target TEXT, body TEXT, created_at INTEGER NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS ap_secret (
     session_id TEXT NOT NULL, item TEXT NOT NULL, value TEXT NOT NULL, expires_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, item))`,
@@ -308,8 +305,8 @@ export class AutopilotCore {
       return
     }
     if (m.type !== 'reply' || typeof m.id !== 'string') return
-    const [cmd] = this.rows<{ op: string; label: string; secret_target: string | null; body: string | null }>(
-      'SELECT op, label, secret_target, body FROM ap_cmd WHERE id = ? AND session_id = ?',
+    const [cmd] = this.rows<{ op: string; method: string | null; label: string; secret_target: string | null; body: string | null }>(
+      'SELECT op, method, label, secret_target, body FROM ap_cmd WHERE id = ? AND session_id = ?',
       m.id,
       s.session_id,
     )
@@ -341,7 +338,9 @@ export class AutopilotCore {
       if (m.ok === true) body.result = m.result ?? null
       else body.error = typeof m.error === 'string' ? m.error.slice(0, 300) : 'failed'
     }
-    if (body.ok !== true && cmd.label) await this.journal(s.install_id, `${cmd.label}: failed (${String(body.error)})`)
+    if (body.ok !== true) {
+      await this.journal(s.install_id, `${cmd.label || cmd.method || cmd.op}: failed (${String(body.error)})`)
+    }
     // Belt and braces: a snapshot taken while the key is on screen must not
     // carry it to the driver.
     const text = this.redactor(s.session_id).redact(JSON.stringify(body))
@@ -411,10 +410,11 @@ export class AutopilotCore {
     }
     if (cmd.op === 'scroll') cmd.dy = raw.dy as number
     this.d.sql.exec(
-      'INSERT INTO ap_cmd (id, session_id, op, label, secret_target, body, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)',
+      'INSERT INTO ap_cmd (id, session_id, op, method, label, secret_target, body, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)',
       cmd.id,
       sessionId,
       cmd.op,
+      cmd.method ?? null,
       cmd.label,
       cmd.secretTarget ?? null,
       this.d.now(),

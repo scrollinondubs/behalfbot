@@ -102,6 +102,7 @@ test('cmd: admin only; a method off the list never reaches the browser', async (
     { op: 'cdp', method: 'Runtime.evaluate', params: { expression: 'document.cookie' }, label: 'x' },
     { op: 'cdp', method: 'Network.getAllCookies', label: 'x' },
     { op: 'raw', label: 'x' },
+    { op: 'cdp', method: 'DOM.getDocument', label: 'x' },
   ]) {
     const r = await cmd(w, session.id, bad)
     assert.equal(r.status, 400, JSON.stringify(bad))
@@ -112,9 +113,9 @@ test('cmd: admin only; a method off the list never reaches the browser', async (
 test('cmd: forwards to the extension, returns its reply, journals the label', async () => {
   const { w, id, session } = await pairedSession()
   session.ws.answer = (c) => ({ ok: true, result: { echoed: c.method } })
-  const r = await cmd(w, session.id, { op: 'cdp', method: 'DOM.getDocument', params: {}, label: 'Read the page' })
+  const r = await cmd(w, session.id, { op: 'cdp', method: 'DOM.getBoxModel', params: { backendNodeId: 4 }, label: 'Read the page' })
   assert.equal(r.status, 200)
-  assert.deepEqual(r.body.result, { echoed: 'DOM.getDocument' })
+  assert.deepEqual(r.body.result, { echoed: 'DOM.getBoxModel' })
   const sent = session.ws.commands()[0]
   assert.match(sent.id, /^apc_/)
   assert.equal(sent.tabId, undefined)
@@ -128,6 +129,13 @@ test('allowlist: a refusal from the extension comes back as an error and is jour
   assert.equal(r.body.ok, false)
   assert.equal(r.body.error, 'tab not allowed')
   assert.match(await journalText(w, id), /Open evil: failed \(tab not allowed\)/)
+})
+
+test('allowlist: an unlabelled refusal is journaled too', async () => {
+  const { w, id, session } = await pairedSession()
+  session.ws.answer = () => ({ ok: false, error: 'tab not allowed' })
+  await cmd(w, session.id, { op: 'cdp', method: 'Accessibility.getFullAXTree', label: '' })
+  assert.match(await journalText(w, id), /Accessibility.getFullAXTree: failed \(tab not allowed\)/)
 })
 
 test('secret: the value never appears in a cmd reply or the journal, and is fetchable exactly once', async () => {
@@ -171,7 +179,7 @@ test('secret: a value sent on a non-save_secret command is dropped', async () =>
   const { w, session } = await pairedSession()
   const key = 'not-a-google-shape-' + randomBytes(12).toString('hex')
   session.ws.answer = () => ({ ok: true, secret: true, value: key })
-  const r = await cmd(w, session.id, { op: 'cdp', method: 'DOM.getDocument', label: '' })
+  const r = await cmd(w, session.id, { op: 'cdp', method: 'DOM.getBoxModel', params: { backendNodeId: 4 }, label: '' })
   assert.equal(r.body.ok, false)
   assert.ok(!JSON.stringify(r.body).includes(key))
   assert.equal(w.autopilot.core['rows']('SELECT * FROM ap_secret').length, 0)

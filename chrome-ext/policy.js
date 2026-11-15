@@ -7,10 +7,7 @@
 // (scroll, and the save_secret field read) from fixed templates.
 export const ALLOWED_METHODS = new Set([
   'Accessibility.getFullAXTree',
-  'DOM.getDocument',
-  'DOM.describeNode',
   'DOM.getBoxModel',
-  'DOM.getContentQuads',
   'DOM.scrollIntoViewIfNeeded',
   'DOM.focus',
   'Input.dispatchMouseEvent',
@@ -124,7 +121,9 @@ export function compactAX(result, limit = 1500) {
   }
   for (const r of roots) walk(r, 0)
   // StaticText that only repeats its parent's name adds nothing.
-  return out.filter((row, i) => !(row.role === 'StaticText' && i > 0 && out[i - 1].name === row.name))
+  const rows = out.filter((row, i) => !(row.role === 'StaticText' && i > 0 && out[i - 1].name === row.name))
+  if (out.length >= limit) rows.push({ ref: 0, role: 'truncated', name: `stopped at ${limit} nodes; scroll or narrow the page`, depth: 0 })
+  return rows
 }
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789'

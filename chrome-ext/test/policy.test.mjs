@@ -74,6 +74,17 @@ test('compactAX: keeps refs, roles and names, drops field values', () => {
   assert.ok(!JSON.stringify(out).includes('SECRET-VALUE'))
 })
 
+test('compactAX: says when it stopped early', () => {
+  const nodes = [{ nodeId: 'r', role: { value: 'RootWebArea' }, name: { value: 'p' }, childIds: [], backendDOMNodeId: 1 }]
+  for (let i = 0; i < 10; i++) {
+    nodes[0].childIds.push(`b${i}`)
+    nodes.push({ nodeId: `b${i}`, parentId: 'r', role: { value: 'button' }, name: { value: `B${i}` }, backendDOMNodeId: 10 + i })
+  }
+  const out = compactAX({ nodes }, 5)
+  assert.equal(out.at(-1).role, 'truncated')
+  assert.equal(compactAX({ nodes }).at(-1).role, 'button')
+})
+
 test('pairing codes normalise and reject look-alikes', () => {
   assert.equal(normalizeCode(' k7q 4m2 '), 'K7Q-4M2')
   assert.equal(normalizeCode('K7Q-4M'), null)
