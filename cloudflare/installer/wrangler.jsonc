@@ -1,7 +1,7 @@
 // behalfbot-installer: managed installs on Cloudflare (behalfbot#265).
 //
-// DO NOT `wrangler deploy` or `wrangler secret put` without Sean's explicit
-// approval. Deploy with ./deploy.sh. Auth: wrangler reads
+// First deployed 2026-11-15 with Sean's approval. Further `wrangler deploy` or
+// `wrangler secret put` still needs his explicit approval. Deploy with ./deploy.sh. Auth: wrangler reads
 // CLOUDFLARE_API_TOKEN from the environment (account-owned token
 // "behalfbot-fable-cf-containers", stored in Vaultwarden). The token is
 // never written to this repo or baked into any file. Confirm

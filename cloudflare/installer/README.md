@@ -5,8 +5,13 @@ or admin-started install gets a private Discord channel, a homework list, a
 start at the confirmed slot, and a 14-day garbage collector that closes the
 channel and removes our SSH key from the customer's box.
 
-**Not deployed.** Nothing here has been deployed. Do not run `wrangler deploy`
-or `wrangler secret put` without Sean's explicit approval.
+**Deployed 2026-11-15** at `https://behalfbot-installer.sean-8a1.workers.dev`
+(Sean-approved, from PR 271), with all six secrets set. The live end-to-end run
+against a real Hetzner box has not happened yet. Redeploys and secret changes
+still need Sean's explicit approval.
+
+The two bearers are in Vaultwarden as `behalfbot-installer-site-secret` and
+`behalfbot-installer-admin-secret`.
 
 The spec is `CONTRACT.md` in the managed-installs plan (new-jaxity
 `drafts/behalfbot/executor-managed-installs/`). SSH from a Cloudflare container
