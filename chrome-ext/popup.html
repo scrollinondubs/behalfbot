@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Behalf.bot Autopilot</title><link rel="stylesheet" href="style.css">
+<style>body { width: 300px; padding: 14px; }</style></head>
+<body>
+  <h3>Behalf.bot Autopilot</h3>
+  <div id="pairing">
+    <label for="code" class="muted">Paste the code from your install channel:</label>
+    <input id="code" class="code" maxlength="7" placeholder="XXX-XXX" autocomplete="off" spellcheck="false">
+    <button id="connect" class="pri">Connect</button>
+    <p id="error" class="err"></p>
+  </div>
+  <div class="row"><span>Status</span><span id="status" class="pill off">Off</span></div>
+  <div class="row" id="taskrow" hidden><span>Task</span><span id="task"></span></div>
+  <div class="row"><span>Allowed sites</span><span id="allow" class="muted">None</span></div>
+  <div class="row"><span>Last session</span><span id="last" class="muted">None</span></div>
+  <div id="live" hidden style="margin-top:10px;display:flex;gap:8px">
+    <button id="openlog">Open log</button>
+    <button id="disconnect" class="danger">Disconnect</button>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Behalf.bot Autopilot",
+  "version": "0.1.0",
+  "description": "Lets your Behalf.bot installer do one setup task in one tab while you watch. Off means off.",
+  "minimum_chrome_version": "116",
+  "permissions": ["debugger", "tabs", "storage", "sidePanel"],
+  "host_permissions": ["https://behalfbot-installer.sean-8a1.workers.dev/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html", "default_title": "Behalf.bot Autopilot" },
+  "side_panel": { "default_path": "sidepanel.html" }
+}
