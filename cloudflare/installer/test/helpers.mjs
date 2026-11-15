@@ -51,11 +51,12 @@ export class Clock {
 // Fake Discord. Records every request; customerMessages drives the GC poll.
 export function fakeDiscord() {
   const calls = []
-  const state = { channelSeq: 0, customerMessages: [], failCreate: 0, failRead: false }
+  const state = { channelSeq: 0, customerMessages: [], failCreate: 0, failRead: false, hetzner: null }
   const fetch = async (req) => {
     const url = new URL(req.url)
     const body = req.method === 'GET' || req.method === 'DELETE' ? null : await req.text()
-    calls.push({ method: req.method, path: url.pathname + url.search, body, headers: Object.fromEntries(req.headers) })
+    calls.push({ host: url.hostname, method: req.method, path: url.pathname + url.search, body, headers: Object.fromEntries(req.headers) })
+    if (url.hostname === 'api.hetzner.cloud' && state.hetzner) return state.hetzner(req.method, url.pathname, body ? JSON.parse(body) : null)
     if (url.hostname !== 'discord.com') throw new Error(`unexpected host ${url.hostname}`)
     const p = url.pathname.replace('/api/v10', '')
     if (req.method === 'GET' && p === '/users/@me') return Response.json({ id: BOT_ID })
@@ -78,8 +79,8 @@ export function fakeDiscord() {
     return new Response('unhandled', { status: 404 })
   }
   const posts = (channelId) =>
-    calls.filter((c) => c.method === 'POST' && c.path.endsWith(`/channels/${channelId}/messages`)).map((c) => JSON.parse(c.body).content)
-  const channelCreates = () => calls.filter((c) => c.method === 'POST' && /\/guilds\/\d+\/channels$/.test(c.path))
+    calls.filter((c) => c.host === 'discord.com' && c.method === 'POST' && c.path.endsWith(`/channels/${channelId}/messages`)).map((c) => JSON.parse(c.body).content)
+  const channelCreates = () => calls.filter((c) => c.host === 'discord.com' && c.method === 'POST' && /\/guilds\/\d+\/channels$/.test(c.path))
   return { fetch, calls, state, posts, channelCreates }
 }
 

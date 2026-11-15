@@ -8,7 +8,7 @@
 
 import { DurableObject } from 'cloudflare:workers'
 import { Container, getContainer } from '@cloudflare/containers'
-import { InstallCore } from './install.ts'
+import { InstallCore, type Probe } from './install.ts'
 import { RegistryCore } from './registry.ts'
 import { handle, type InstallApi } from './router.ts'
 import type { CreatePayload } from './payload.ts'
@@ -96,6 +96,18 @@ export class InstallDO extends DurableObject<Env> implements InstallApi {
   }
   finishByAdmin(status: 'done' | 'failed'): Promise<Reply> {
     return this.core.finishByAdmin(status)
+  }
+  setHetznerToken(token: string): Promise<Reply> {
+    return this.core.setHetznerToken(token)
+  }
+  createServer(): Promise<Reply> {
+    return this.core.createServer()
+  }
+  probe(check: Probe): Promise<Reply> {
+    return this.core.probe(check)
+  }
+  closeByAdmin(): Promise<Reply> {
+    return this.core.closeByAdmin()
   }
   journalView(): Reply {
     return this.core.journalView()

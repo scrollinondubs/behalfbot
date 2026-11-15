@@ -47,7 +47,11 @@ Behalfbot-site (Vercel)
 | `PATCH /installs/:id` | site | `{"scheduled_at": <unix>}` sets the slot. |
 | `GET /installs/:id/journal` | admin | Install row, homework and the full journal. Linked from escalations. |
 | `POST /installs/:id/homework` | admin | `{"item", "state": "pending" or "green"}`. Stand-in until the key form exists. |
-| `POST /installs/:id/server` | admin | `{"server_ip", "host_key_fp"}` pins the box. Stand-in until Hetzner server create exists. |
+| `PUT /installs/:id/hetzner-token` | admin | `{"token"}` saves the customer's Hetzner project token in this install's DO storage and turns that homework item green. Stand-in until the key form exists. |
+| `POST /installs/:id/hetzner-server` | admin | Creates the customer's server in their project (see below) and pins it. |
+| `POST /installs/:id/server` | admin | `{"server_ip", "host_key_fp"}` pins a box created some other way. |
+| `POST /installs/:id/probe` | admin | `{"check": "true" or "uname" or "installer_key_present"}` runs one fixed command on the pinned box. There is no route for arbitrary commands. |
+| `POST /installs/:id/close` | admin | Closes now: what GC does at day 14. |
 | `POST /installs/:id/finish` | admin | `{"status": "done" or "failed"}` starts the GC clock. Stand-in until the runbook agent exists. |
 
 Both bearers use a constant-time compare, and an unset secret matches nothing.
@@ -61,13 +65,13 @@ Both bearers use a constant-time compare, and an unset secret matches nothing.
 - **GC.** This only applies once an install is `done` or `failed`. The bot warns at day 11 and closes at day 14 after the later of the finish time and the customer's last message. Any message from the customer resets the clock. If the channel cannot be read, nothing closes and it retries in an hour.
 - **Close.** Removes every `authorized_keys` line carrying our key blob over the transport, and fails if the blob is still there afterwards. Deletes the private key and any Hetzner token from DO storage, even if the removal failed, and in that case tells ops. Then deletes the channel. There is no Hetzner API call anywhere in this Worker, so a close can never touch the customer's server.
 - **Secrets.** A secret only goes to the box as `run(cmd, { stdin })`. A command whose text contains a known secret is refused. Output is redacted before it is journaled or returned. All journal rows and Discord posts pass through the same redactor: exact stdin values in raw, base64 and URL-encoded form, plus common token shapes.
+- **Server create.** Uses the customer's own token, in their own project: `cx23`, `nbg1`, `ubuntu-24.04`, IPv4 and IPv6. Our per-install public key goes in through a project SSH key object, which also stops Hetzner emailing a root password, and that object is deleted right after create. The host key is an ed25519 pair generated in the Worker and installed by cloud-init (`ssh_keys`), so `host_key_fp` is pinned before the box first answers: verified by construction, not trust on first use. The host private key goes only to Hetzner's user_data; it is not stored or journaled. The token stays in DO storage until close (TODO: move it to the box vault once that exists).
 - **Host pinning.** `server_ip` must be a literal IP and `host_key_fp` a `SHA256:` fingerprint. The container keyscans the host and refuses unless its ed25519 key matches the pin. It then connects with that key as the only known host and `StrictHostKeyChecking=yes`. The Worker also refuses any answer that does not confirm the pinned fingerprint.
 
 ## Not built yet (TODO stubs in the code)
 
 - **Runbook agent** (build step 5): per-step `claude -p` runs with `exec` as the only tool. `startRun` currently escalates to a human, and `chargeSpend` / `finish` are ready for it.
 - **Key form** (build step 4): the per-install page that writes secrets through to the box vault and turns homework green. Until then, use `POST /installs/:id/homework`.
-- **Hetzner server create**: until then, `POST /installs/:id/server` takes `server_ip` and `host_key_fp` as given, and returns the install's public key to put on the box.
 - **Stripe installs with no Discord id**: the channel is created bot-only if `discord_username` does not resolve. Adding the customer later is not wired yet.
 
 ## Secrets

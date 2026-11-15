@@ -72,10 +72,23 @@ export function keyComment(installId: string): string {
 }
 
 export async function generateInstallKey(installId: string): Promise<InstallKey> {
+  return generateEd25519(keyComment(installId))
+}
+
+// "SHA256:<unpadded base64 of sha256(key blob)>", the string `ssh-keygen -lf`
+// prints, from an authorized_keys-style public key line.
+export async function fingerprintOf(publicKeyLine: string): Promise<string> {
+  const blob = publicKeyLine.trim().split(/\s+/)[1] ?? ''
+  const bytes = Uint8Array.from(atob(blob), (c) => c.charCodeAt(0))
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
+  return `SHA256:${b64(digest).replace(/=+$/, '')}`
+}
+
+export async function generateEd25519(comment: string): Promise<InstallKey> {
   const kp = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])) as CryptoKeyPair
   const pub = new Uint8Array((await crypto.subtle.exportKey('raw', kp.publicKey)) as ArrayBuffer)
   const pkcs8 = new Uint8Array((await crypto.subtle.exportKey('pkcs8', kp.privateKey)) as ArrayBuffer)
   const seed = pkcs8.slice(pkcs8.length - 32)
   const check = new DataView(crypto.getRandomValues(new Uint8Array(4)).buffer).getUint32(0)
-  return encodeOpensshEd25519(seed, pub, keyComment(installId), check)
+  return encodeOpensshEd25519(seed, pub, comment, check)
 }

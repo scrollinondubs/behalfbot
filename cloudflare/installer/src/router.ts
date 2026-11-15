@@ -8,10 +8,15 @@
 //   POST  /installs/:id/homework        admin bearer  {item, state}  until the key form exists
 //   POST  /installs/:id/server          admin bearer  {server_ip, host_key_fp}  until Hetzner create exists
 //   POST  /installs/:id/finish          admin bearer  {status: done|failed}  until the runbook agent exists
+//   PUT   /installs/:id/hetzner-token   admin bearer  {token}  until the key form exists
+//   POST  /installs/:id/hetzner-server  admin bearer  creates the box in the customer's project
+//   POST  /installs/:id/probe           admin bearer  {check: true|uname|installer_key_present}
+//   POST  /installs/:id/close           admin bearer  close now (what GC does at day 14)
 
 import { bearerMatches } from './auth.ts'
 import { INSTALL_ID_RE } from './ids.ts'
 import { parseCreate, parsePatch, type CreatePayload } from './payload.ts'
+import { PROBES, type Probe } from './install.ts'
 import { INSTALL_STATUSES, type InstallListing, type InstallStatus } from './schema.ts'
 import type { InstallerSecrets, Reply } from './types.ts'
 
@@ -21,6 +26,10 @@ export interface InstallApi {
   setHomework(item: string, state: 'pending' | 'green'): Promise<Reply>
   pinServer(serverIp: string, hostKeyFp: string): Promise<Reply>
   finishByAdmin(status: 'done' | 'failed'): Promise<Reply>
+  setHetznerToken(token: string): Promise<Reply>
+  createServer(): Promise<Reply>
+  probe(check: Probe): Promise<Reply>
+  closeByAdmin(): Promise<Reply>
   journalView(): Promise<Reply> | Reply
 }
 
@@ -76,13 +85,14 @@ export async function handle(req: Request, deps: RouterDeps): Promise<Response> 
     return json({ install_id: reply.body.install_id, channel_id: reply.body.channel_id }, created ? 201 : 200)
   }
 
-  const m = /^\/installs\/([^/]+)(\/journal|\/homework|\/server|\/finish)?$/.exec(url.pathname)
+  const m = /^\/installs\/([^/]+)(\/journal|\/homework|\/server|\/finish|\/hetzner-token|\/hetzner-server|\/probe|\/close)?$/.exec(url.pathname)
   if (!m) return json({ error: 'not_found' }, 404)
   const [, id, sub] = m
 
   const route = `${req.method} ${sub ?? ''}`
   const needsSite = route === 'PATCH '
-  const needsAdmin = route === 'GET /journal' || route === 'POST /homework' || route === 'POST /server' || route === 'POST /finish'
+  const needsAdmin = route === 'GET /journal' || route === 'POST /homework' || route === 'POST /server' || route === 'POST /finish' ||
+    route === 'PUT /hetzner-token' || route === 'POST /hetzner-server' || route === 'POST /probe' || route === 'POST /close'
   if (!needsSite && !needsAdmin) return json({ error: 'not_found' }, 404)
   if (!(await (needsSite ? site() : admin()))) return json({ error: 'unauthorized' }, 401)
   if (!INSTALL_ID_RE.test(id) || !(await deps.exists(id))) return json({ error: 'not_found' }, 404)
@@ -90,6 +100,15 @@ export async function handle(req: Request, deps: RouterDeps): Promise<Response> 
 
   if (route === 'GET /journal') {
     const r = await inst.journalView()
+    return json(r.body, r.status)
+  }
+
+  if (route === 'POST /hetzner-server') {
+    const r = await inst.createServer()
+    return json(r.body, r.status)
+  }
+  if (route === 'POST /close') {
+    const r = await inst.closeByAdmin()
     return json(r.body, r.status)
   }
 
@@ -111,6 +130,12 @@ export async function handle(req: Request, deps: RouterDeps): Promise<Response> 
       return json({ error: 'want {item, state: pending|green}' }, 400)
     }
     r = await inst.setHomework(body.item, body.state)
+  } else if (route === 'PUT /hetzner-token') {
+    if (typeof body.token !== 'string') return json({ error: 'want {token}' }, 400)
+    r = await inst.setHetznerToken(body.token.trim())
+  } else if (route === 'POST /probe') {
+    if (!PROBES.includes(body.check as Probe)) return json({ error: `check must be one of ${PROBES.join(', ')}` }, 400)
+    r = await inst.probe(body.check as Probe)
   } else if (route === 'POST /finish') {
     if (body.status !== 'done' && body.status !== 'failed') return json({ error: 'want {status: done|failed}' }, 400)
     r = await inst.finishByAdmin(body.status)

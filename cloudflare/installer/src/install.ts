@@ -24,7 +24,8 @@ import {
   type InstallStatus,
   type JournalKind,
 } from './schema.ts'
-import { generateInstallKey, keyComment } from './sshkey.ts'
+import { cloudInitWithHostKey, HetznerClient, IMAGE, LOCATION, SERVER_TYPE, serverName } from './hetzner.ts'
+import { fingerprintOf, generateEd25519, generateInstallKey, keyComment } from './sshkey.ts'
 import { assertPinned, SshTransport, type RunOpts, type RunResult } from './transport.ts'
 import type { CreatePayload } from './payload.ts'
 import type { FetchLike, InstallerSecrets, KvLike, Reply, SqlLike } from './types.ts'
@@ -48,7 +49,16 @@ const K = {
   startNextCheck: 'start_next_check',
   startMissPosted: 'start_miss_posted',
   startChecks: 'start_checks',
+  hetznerServerId: 'hetzner_server_id',
 } as const
+
+// Fixed probes for the admin probe route. Arbitrary commands only ever come
+// from the runbook agent, never over HTTP.
+export const PROBES = ['true', 'uname', 'installer_key_present'] as const
+export type Probe = (typeof PROBES)[number]
+
+// Hetzner Cloud tokens are 64 alphanumerics; anything else is a paste error.
+const HETZNER_TOKEN_RE = /^[A-Za-z0-9]{64}$/
 
 const ITEM_RE = /^[a-z][a-z0-9_]{1,39}$/
 
@@ -350,6 +360,106 @@ export class InstallCore {
     await this.appendJournal('note', `server pinned: ${serverIp} ${hostKeyFp}`)
     await this.flush()
     return { status: 200, body: { install_id: r.install_id, server_ip: serverIp, host_key_fp: hostKeyFp, public_key: await this.d.kv.get<string>(K.publicKey) } }
+  }
+
+  // ---- customer secrets and the server ----------------------------------
+
+  // Stand-in for the key form (build step 4). Hard requirement 3: the token
+  // lives only in this DO's storage. TODO(key-form): once the box vault is
+  // up, write it there over stdin and delete it here; until then close
+  // deletes it.
+  async setHetznerToken(token: string): Promise<Reply> {
+    const r = this.row()
+    if (!r) return { status: 404, body: { error: 'not_found' } }
+    if (r.status === 'closed') return { status: 409, body: { error: 'install is closed' } }
+    if (!HETZNER_TOKEN_RE.test(token)) return { status: 400, body: { error: 'that does not look like a Hetzner Cloud API token' } }
+    await this.d.kv.put(K.hetznerToken, token)
+    await this.appendJournal('note', 'Hetzner project token saved (value never logged)', { stepName: 'secrets' })
+    await this.setHomework('hetzner_token', 'green')
+    return { status: 200, body: { install_id: r.install_id, saved: true } }
+  }
+
+  // Creates the customer's server in their own Hetzner project. Our
+  // per-install public key is injected through a project SSH key object
+  // (which also stops Hetzner emailing a root password); that object is
+  // removed again right after create. The host key comes from cloud-init
+  // with a key pair generated here, so host_key_fp is pinned before the box
+  // ever answers: verified by construction, not trust on first use.
+  async createServer(): Promise<Reply> {
+    const r = this.row()
+    if (!r) return { status: 404, body: { error: 'not_found' } }
+    if (r.status === 'closed') return { status: 409, body: { error: 'install is closed' } }
+    if (r.server_ip) return { status: 409, body: { error: 'a server is already pinned for this install', server_ip: r.server_ip } }
+    const token = await this.d.kv.get<string>(K.hetznerToken)
+    if (!token) return { status: 409, body: { error: 'no Hetzner token saved for this install' } }
+    const publicKey = await this.d.kv.get<string>(K.publicKey)
+    if (!publicKey) return { status: 409, body: { error: 'no installer key on record' } }
+
+    const hz = new HetznerClient({ token, fetch: this.d.fetch })
+    const jo = { stepName: 'server' }
+    const hostKey = await generateEd25519(`host-${r.install_id}`)
+    const hostFp = await fingerprintOf(hostKey.publicKey)
+    let keyId: number
+    try {
+      keyId = await hz.createSshKey(keyComment(r.install_id), publicKey)
+    } catch (e) {
+      await this.appendJournal('note', `server create failed registering our key: ${errText(e)}`, jo)
+      return { status: 502, body: { error: 'hetzner_error', detail: errText(e) } }
+    }
+    let server
+    try {
+      server = await hz.createServer({
+        name: serverName(r.install_id),
+        sshKeyId: keyId,
+        userData: cloudInitWithHostKey(hostKey.privateKeyPem, hostKey.publicKey),
+        labels: { 'behalfbot-installer': 'true', install: r.install_id.toLowerCase().replace(/_/g, '-') },
+      })
+    } catch (e) {
+      await this.appendJournal('note', `server create failed: ${errText(e)}`, jo)
+      await hz.deleteSshKey(keyId).catch(() => {})
+      return { status: 502, body: { error: 'hetzner_error', detail: errText(e) } }
+    }
+    this.update({ server_ip: server.ipv4, host_key_fp: hostFp })
+    await this.d.kv.put(K.hetznerServerId, server.id)
+    await this.appendJournal(
+      'note',
+      `server ${server.id} (${server.name}) created: ${SERVER_TYPE} ${LOCATION} ${IMAGE}, ${server.ipv4}. Host key ${hostFp} pinned from the host key we put in cloud-init (no trust on first use).`,
+      jo,
+    )
+    try {
+      await hz.deleteSshKey(keyId)
+    } catch (e) {
+      await this.appendJournal('note', `could not remove our SSH key object ${keyId} from the Hetzner project: ${errText(e)}`, jo)
+    }
+    await this.flush()
+    return { status: 201, body: { install_id: r.install_id, server_id: server.id, server_ip: server.ipv4, host_key_fp: hostFp } }
+  }
+
+  async probe(check: Probe): Promise<Reply> {
+    const r = this.row()
+    if (!r) return { status: 404, body: { error: 'not_found' } }
+    let cmd: string
+    if (check === 'true') cmd = 'true'
+    else if (check === 'uname') cmd = 'uname -a'
+    else {
+      const blob = ((await this.d.kv.get<string>(K.publicKey)) ?? '').split(' ')[1] ?? ''
+      cmd = `grep -cF '${blob}' "$HOME/.ssh/authorized_keys" || true`
+    }
+    try {
+      const res = await this.exec(0, `probe:${check}`, 1, cmd)
+      return { status: 200, body: { install_id: r.install_id, check, ...res } }
+    } catch (e) {
+      return { status: 502, body: { install_id: r.install_id, check, error: errText(e) } }
+    }
+  }
+
+  async closeByAdmin(): Promise<Reply> {
+    const r = this.row()
+    if (!r) return { status: 404, body: { error: 'not_found' } }
+    if (r.status === 'closed') return { status: 409, body: { error: 'install is already closed' } }
+    await this.close('closed by admin')
+    const after = this.requireRow()
+    return { status: 200, body: { install_id: after.install_id, status: after.status } }
   }
 
   journalView(): Reply {
