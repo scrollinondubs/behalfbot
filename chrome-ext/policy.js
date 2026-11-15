@@ -57,15 +57,23 @@ export function refusal(cmd, tabUrl, allow) {
       const target = cmd.params && cmd.params.url
       if (typeof target !== 'string' || !hostAllowed(target, allow)) return 'navigate target not allowed'
     }
+    // CDP rejects a string backendNodeId; the relay coerces, this refuses
+    // anything that still is not an int32 ref.
+    const ref = cmd.params && cmd.params.backendNodeId
+    if (ref !== undefined && !isRef(ref)) return 'bad ref'
   }
   if (cmd.op === 'scroll') {
     if (!Number.isInteger(cmd.dy) || Math.abs(cmd.dy) > 20000) return 'bad scroll'
   }
   if (cmd.op === 'save_secret') {
-    if (!Number.isInteger(cmd.ref) || cmd.ref <= 0) return 'bad ref'
+    if (!isRef(cmd.ref)) return 'bad ref'
     if (typeof cmd.secretTarget !== 'string' || !cmd.secretTarget) return 'missing vault item'
   }
   return null
+}
+
+function isRef(v) {
+  return Number.isInteger(v) && v > 0 && v <= 0x7fffffff
 }
 
 export function scrollExpression(dy) {

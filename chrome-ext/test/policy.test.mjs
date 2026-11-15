@@ -90,3 +90,14 @@ test('pairing codes normalise and reject look-alikes', () => {
   assert.equal(normalizeCode('K7Q-4M'), null)
   assert.equal(normalizeCode('K0Q-4M2'), null)
 })
+
+test('refusal: a backendNodeId or save_secret ref must be a positive int32, never a string', () => {
+  const at = (backendNodeId) => ({ op: 'cdp', method: 'DOM.focus', params: { backendNodeId }, label: '' })
+  assert.equal(refusal(at(2378), TAB, ALLOW), null)
+  assert.equal(refusal(at('2378'), TAB, ALLOW), 'bad ref')
+  assert.equal(refusal(at(0), TAB, ALLOW), 'bad ref')
+  assert.equal(refusal(at(1.5), TAB, ALLOW), 'bad ref')
+  assert.equal(refusal(at(2 ** 31), TAB, ALLOW), 'bad ref')
+  assert.equal(refusal({ op: 'cdp', method: 'Accessibility.getFullAXTree', params: {} }, TAB, ALLOW), null)
+  assert.equal(refusal({ op: 'save_secret', ref: '2378', secretTarget: 'x' }, TAB, ALLOW), 'bad ref')
+})

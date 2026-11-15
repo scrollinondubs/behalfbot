@@ -5,6 +5,8 @@
 // so the node tests can drive it.
 //
 //   admin  POST /installs/:id/autopilot/code   -> createCode     code XXX-XXX, single use, 10 min
+//   admin  POST /autopilot/sessions {customer}   -> createCustomerCode  same, for a customer with no install
+//   admin  GET  /autopilot/sessions?customer=    -> customerView   that customer's sessions and journal
 //   ext    POST /autopilot/pair {code}          -> pair           session token, allowlist
 //   ext    GET  /autopilot/ws?token=            -> accept         hibernatable socket
 //   admin  POST /autopilot/:session/cmd         -> forward        RelayCommand out, reply back
@@ -34,6 +36,22 @@ export const PAIR_FAILS_PER_MIN = 20
 
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTVWXYZ23456789'
 export const SESSION_RE = /^aps_[0-9A-HJKMNP-TV-Z]{26}$/
+// Owner id for an autopilot-only customer: someone already installed who
+// needs a browser session, with no install channel, homework or alarms. It
+// sits in the install_id column of ap_code and ap_session (the deployed
+// tables keep their names) and can never pass INSTALL_ID_RE.
+export const CUSTOMER_ID_RE = /^apcu_[0-9A-HJKMNP-TV-Z]{26}$/
+const CUSTOMER_JOURNAL_KEEP = 1000
+
+// A ref from the snapshot is a backendDOMNodeId. CDP wants an int32 and
+// rejects "2378", so accept the forms a caller copies out of "[2378]".
+export function toRef(v: unknown): number | null {
+  let n: number
+  if (typeof v === 'number') n = v
+  else if (typeof v === 'string' && /^\s*\[?\s*\d{1,10}\s*\]?\s*$/.test(v)) n = Number(v.replace(/[^\d]/g, ''))
+  else return null
+  return Number.isInteger(n) && n > 0 && n <= 0x7fffffff ? n : null
+}
 
 export const RELAY_OPS = ['cdp', 'scroll', 'save_secret', 'human_step', 'note'] as const
 export type RelayOp = (typeof RELAY_OPS)[number]
@@ -113,6 +131,12 @@ export const AUTOPILOT_DDL = [
     session_id TEXT NOT NULL, item TEXT NOT NULL, value TEXT NOT NULL, expires_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, item))`,
   `CREATE TABLE IF NOT EXISTS ap_pair_fail (minute INTEGER PRIMARY KEY, n INTEGER NOT NULL)`,
+  // Autopilot-only customers and their journal. An install's lines go to its
+  // InstallDO journal instead.
+  `CREATE TABLE IF NOT EXISTS ap_customer (
+    customer_id TEXT PRIMARY KEY, name TEXT NOT NULL, name_key TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS ap_journal (
+    seq INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, line TEXT NOT NULL, at INTEGER NOT NULL)`,
 ]
 
 export type Out = { status: number; body: Record<string, unknown> }
@@ -151,9 +175,11 @@ export function commandError(c: Record<string, unknown>): string | null {
   if (c.op === 'cdp') {
     if (!RELAY_METHODS.includes(c.method as (typeof RELAY_METHODS)[number])) return 'method not allowed'
     if (c.params !== undefined && (typeof c.params !== 'object' || c.params === null || Array.isArray(c.params))) return 'params must be an object'
+    const p = c.params as Record<string, unknown> | undefined
+    if (p && p.backendNodeId !== undefined && toRef(p.backendNodeId) === null) return 'params.backendNodeId must be a positive integer ref'
   }
   if (c.op === 'save_secret') {
-    if (!Number.isInteger(c.ref)) return 'save_secret needs ref'
+    if (toRef(c.ref) === null) return 'save_secret needs ref'
     if (typeof c.secretTarget !== 'string' || !c.secretTarget.trim() || c.secretTarget.length > 200) return 'save_secret needs secretTarget'
   }
   if (c.op === 'scroll' && !Number.isInteger(c.dy)) return 'scroll needs integer dy'
@@ -195,9 +221,20 @@ export class AutopilotCore {
     return { ...r, allow: rb.allow, task: rb.task, start_url: rb.start_url }
   }
 
-  private async journal(installId: string, line: string): Promise<void> {
+  private async journal(ownerId: string, line: string): Promise<void> {
+    const text = `autopilot: ${this.redactor().redact(line)}`
+    if (CUSTOMER_ID_RE.test(ownerId)) {
+      this.d.sql.exec('INSERT INTO ap_journal (owner_id, line, at) VALUES (?, ?, ?)', ownerId, text.slice(0, 500), Math.floor(this.d.now() / 1000))
+      this.d.sql.exec(
+        'DELETE FROM ap_journal WHERE owner_id = ? AND seq <= (SELECT seq FROM ap_journal WHERE owner_id = ? ORDER BY seq DESC LIMIT 1 OFFSET ?)',
+        ownerId,
+        ownerId,
+        CUSTOMER_JOURNAL_KEEP,
+      )
+      return
+    }
     try {
-      await this.d.journal(installId, `autopilot: ${this.redactor().redact(line)}`)
+      await this.d.journal(ownerId, text)
     } catch {
       // The journal is the record, but a journal hiccup must not wedge the
       // browser session.
@@ -225,6 +262,38 @@ export class AutopilotCore {
     await this.scheduleSweep()
     await this.journal(installId, `pairing code issued for "${rb.task}", sites: ${rb.allow.join(', ')}`)
     return { status: 201, body: { code, expires_at: Math.floor((now + CODE_TTL_MS) / 1000), allow: rb.allow, task: rb.task } }
+  }
+
+  // ---- admin: autopilot-only customers ----------------------------------
+
+  private customerRow(rawName: unknown): { customer_id: string; name: string } | null {
+    const key = nameKey(rawName)
+    if (!key) return null
+    const [r] = this.rows<{ customer_id: string; name: string }>('SELECT customer_id, name FROM ap_customer WHERE name_key = ?', key)
+    return r ?? null
+  }
+
+  // Same code as createCode, owned by a named customer instead of an install.
+  // The relay has no Discord client, so this path cannot post anywhere.
+  async createCustomerCode(rawName: unknown, runbookId: string, devRunbooks: boolean): Promise<Out> {
+    const key = nameKey(rawName)
+    if (!key) return { status: 400, body: { error: 'customer must be a name, 1 to 100 characters' } }
+    const rb = runbook(runbookId)
+    if (!rb || (rb.dev_only && !devRunbooks)) return { status: 400, body: { error: `unknown runbook ${runbookId}` } }
+    let c = this.customerRow(rawName)
+    if (!c) {
+      c = { customer_id: `apcu_${ulid(this.d.now())}`, name: String(rawName).trim().replace(/\s+/g, ' ') }
+      this.d.sql.exec('INSERT INTO ap_customer (customer_id, name, name_key, created_at) VALUES (?, ?, ?, ?)', c.customer_id, c.name, key, this.d.now())
+    }
+    const r = await this.createCode(c.customer_id, rb.id, devRunbooks)
+    return { status: r.status, body: { customer_id: c.customer_id, customer: c.name, ...r.body } }
+  }
+
+  customerView(rawName: unknown): Out {
+    const c = this.customerRow(rawName)
+    if (!c) return { status: 404, body: { error: 'no autopilot customer by that name' } }
+    const journal = this.rows<{ line: string; at: number }>('SELECT line, at FROM ap_journal WHERE owner_id = ? ORDER BY seq', c.customer_id)
+    return { status: 200, body: { customer_id: c.customer_id, customer: c.name, sessions: this.listSessions(c.customer_id).body.sessions, journal } }
   }
 
   // ---- extension: pair and connect --------------------------------------
@@ -402,10 +471,11 @@ export class AutopilotCore {
     }
     if (cmd.op === 'cdp') {
       cmd.method = raw.method as RelayCommand['method']
-      cmd.params = (raw.params as Record<string, unknown>) ?? {}
+      cmd.params = { ...((raw.params as Record<string, unknown>) ?? {}) }
+      if (cmd.params.backendNodeId !== undefined) cmd.params.backendNodeId = toRef(cmd.params.backendNodeId)
     }
     if (cmd.op === 'save_secret') {
-      cmd.ref = raw.ref as number
+      cmd.ref = toRef(raw.ref) as number
       cmd.secretTarget = (raw.secretTarget as string).trim()
     }
     if (cmd.op === 'scroll') cmd.dy = raw.dy as number
@@ -483,4 +553,10 @@ export class AutopilotCore {
       this.rows('SELECT 1 FROM ap_session WHERE connected_at IS NULL LIMIT 1').length
     await this.d.setAlarm(left ? now + SWEEP_MS : null)
   }
+}
+
+function nameKey(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const k = raw.trim().replace(/\s+/g, ' ').toLowerCase()
+  return k.length >= 1 && k.length <= 100 ? k : null
 }

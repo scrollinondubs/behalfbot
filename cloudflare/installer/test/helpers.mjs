@@ -197,6 +197,8 @@ export function fakeRelay({ clock, install }) {
   })
   const api = {
     createCode: (id, rb) => core.createCode(id, rb, true),
+    createCustomerCode: (c, rb) => core.createCustomerCode(c, rb, true),
+    customerView: (c) => core.customerView(c),
     pair: (c) => core.pair(c),
     listSessions: (id) => core.listSessions(id),
     forward: (s, c, w) => core.forward(s, c, w),
