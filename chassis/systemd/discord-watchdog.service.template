@@ -1,0 +1,29 @@
+# behalfbot-${BOT_NAME}-discord-watchdog.service - chassis-rendered template.
+#
+# Generated from chassis/systemd/discord-watchdog.service.template by
+# chassis/scripts/bootstrap-customer-scripts.sh (Linux hosts, --plists).
+# Linux counterpart of chassis/launchd/com.behalfbot.discord-watchdog.plist.template.
+# Fired every 30 minutes by behalfbot-${BOT_NAME}-discord-watchdog.timer.
+#
+# Runs ${CUSTOMER_HOME}/scripts/watchdog-${BOT_NAME}-discord.sh, which checks
+# the ${TMUX_SESSION_NAME} tmux session and, when it is missing or stuck,
+# runs the restart script in-process. That restart starts the tmux server
+# from THIS unit's cgroup, so this unit needs KillMode=process for the same
+# reason the restart unit does: with the default KillMode=control-group,
+# systemd kills the freshly started tmux server (and claude in it) the moment
+# the watchdog script exits. Full story in discord-restart.service.template.
+#
+# Scope: user unit. Same lingering and system-unit notes as the restart unit.
+
+[Unit]
+Description=Behalf.bot ${BOT_NAME} Discord session watchdog
+
+[Service]
+Type=oneshot
+KillMode=process
+WorkingDirectory=${CHASSIS_HOME}
+Environment="PATH=%h/.local/bin:%h/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="CUSTOMER_HOME=${CUSTOMER_HOME}"
+Environment="CHASSIS_HOME=${CHASSIS_HOME}"
+ExecStart=/bin/bash ${CUSTOMER_HOME}/scripts/watchdog-${BOT_NAME}-discord.sh
+TimeoutStartSec=10min

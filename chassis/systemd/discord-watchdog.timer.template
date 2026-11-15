@@ -1,0 +1,20 @@
+# behalfbot-${BOT_NAME}-discord-watchdog.timer - chassis-rendered template.
+#
+# Generated from chassis/systemd/discord-watchdog.timer.template by
+# chassis/scripts/bootstrap-customer-scripts.sh. Mirrors the launchd agent's
+# StartInterval 1800.
+#
+# The first run waits 5 minutes after the timer starts, so at boot it does not
+# race the restart timer (30s, plus up to 90s waiting for docker) into
+# starting the session twice.
+
+[Unit]
+Description=Behalf.bot ${BOT_NAME} Discord session watchdog (every 30 min)
+
+[Timer]
+OnActiveSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

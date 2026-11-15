@@ -864,7 +864,11 @@ setup_dispatcher_unit() {
     fi
 
     if [[ "$os" == "Linux" ]]; then
-        log "TODO: Linux systemd unit emission not yet implemented"
+        log "  Discord session: step 8 renders systemd user units into"
+        log "    $CUSTOMER_HOME/systemd/ and prints the commands to enable them (it does"
+        log "    not enable them). Templates + docs: chassis/systemd/discord-*.template,"
+        log "    chassis/systemd/INSTALL.md. Keep KillMode=process in any edited copy."
+        log "TODO: Linux systemd unit emission for the dispatcher not yet implemented"
         log "  - write /etc/systemd/system/behalfbot-heartbeat-dispatcher.{service,timer}"
         log "    (system-scope, NOT --user, per lesson #26)"
         log "  - service ExecStart sources chassis-env.sh + invokes dispatcher.sh"

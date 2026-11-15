@@ -1,0 +1,21 @@
+# behalfbot-${BOT_NAME}-discord-restart.timer - chassis-rendered template.
+#
+# Generated from chassis/systemd/discord-restart.timer.template by
+# chassis/scripts/bootstrap-customer-scripts.sh. Mirrors the launchd agent's
+# StartCalendarInterval 05:00 + RunAtLoad.
+#
+# OnActiveSec counts from when this timer starts: at user-manager startup (boot,
+# with lingering enabled) and at `systemctl --user enable --now`. It replaces
+# RunAtLoad. No Persistent=: a missed 05:00 run is covered by the startup run,
+# and the two together would restart the session twice in a row.
+
+[Unit]
+Description=Behalf.bot ${BOT_NAME} Discord session restart (daily 05:00 + at startup)
+
+[Timer]
+OnActiveSec=30s
+OnCalendar=*-*-* 05:00:00
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

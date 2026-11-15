@@ -1,0 +1,57 @@
+# behalfbot-${BOT_NAME}-discord-restart.service - chassis-rendered template.
+#
+# Generated from chassis/systemd/discord-restart.service.template by
+# chassis/scripts/bootstrap-customer-scripts.sh (Linux hosts, --plists).
+# Linux counterpart of chassis/launchd/com.behalfbot.discord-restart.plist.template.
+# Fired by behalfbot-${BOT_NAME}-discord-restart.timer (daily 05:00 and once
+# shortly after the user manager starts, i.e. at boot when lingering).
+#
+# Runs ${CUSTOMER_HOME}/scripts/restart-${BOT_NAME}-discord.sh, which kills
+# the ${TMUX_SESSION_NAME} tmux session and starts a fresh detached one running
+# `claude --channels`, then exits.
+#
+# KillMode=process IS LOAD-BEARING. Do not remove it.
+#
+# systemd's default is KillMode=control-group: when the main process of a
+# Type=oneshot service exits, systemd kills every process still left in the
+# unit's cgroup. `tmux new-session -d` forks a tmux server that daemonizes but
+# stays in the cgroup of whoever started it - this unit. So with the default,
+# the tmux server and the claude process inside it are killed a moment after
+# the restart script exits, and the script's own "session restarted
+# successfully" check has already passed by then. KillMode=process limits the
+# kill to the main process (the script itself), so the tmux server survives.
+#
+# Incident (2026-11-14 21:54 to 2026-11-15 08:18 UTC, Hetzner Ubuntu container
+# install): a hand-written oneshot supervisor without KillMode=process killed
+# the Discord session seconds after every start, and its 5-minute timer
+# restarted it for ten hours. It went unnoticed for two days because earlier
+# sessions had been started by hand over SSH, outside the unit's cgroup.
+#
+# Side effects of KillMode=process, both expected:
+#   - The next start of this unit logs "Found left-over process ... (tmux)".
+#     That is the session it started last time. Harmless.
+#   - `systemctl --user stop` on this unit does not stop the bot. Use
+#     `tmux kill-session -t ${TMUX_SESSION_NAME}`.
+#
+# Scope: user unit (~/.config/systemd/user/). Needs `loginctl enable-linger
+# <user>` or the user manager, and the tmux server with it, stops at logout
+# and does not start at boot. For a system unit instead, see
+# chassis/systemd/INSTALL.md: add User=<user> and replace every %h with the
+# literal home path, because in the system manager %h is root's home whatever
+# User= says.
+
+[Unit]
+Description=Behalf.bot ${BOT_NAME} Discord session restart (tmux + claude --channels)
+
+[Service]
+Type=oneshot
+KillMode=process
+WorkingDirectory=${CHASSIS_HOME}
+# systemd starts services with a minimal PATH. claude lives in %h/.local/bin
+# (and bun in %h/.bun/bin), which that PATH does not include.
+Environment="PATH=%h/.local/bin:%h/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="CUSTOMER_HOME=${CUSTOMER_HOME}"
+Environment="CHASSIS_HOME=${CHASSIS_HOME}"
+ExecStart=/bin/bash ${CUSTOMER_HOME}/scripts/restart-${BOT_NAME}-discord.sh
+# The script waits up to 90s for docker, then a few seconds for tmux.
+TimeoutStartSec=10min

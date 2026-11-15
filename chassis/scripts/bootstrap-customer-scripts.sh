@@ -54,7 +54,14 @@
 #                after rendering, actually install the plists into the right
 #                launchd domain (LaunchAgents or LaunchDaemons) and bootstrap
 #                them. Agent-domain plists need no sudo; daemon-domain plists
-#                prompt for it. Implies --plists. No-op on non-macOS hosts.
+#                prompt for it. Implies --plists. On Linux nothing is enabled;
+#                the systemctl commands are printed instead (see below).
+#
+# Linux: --plists also renders systemd user units for the Discord session
+# (discord-restart + discord-watchdog .service/.timer) into
+# $CUSTOMER_HOME/systemd/. They are never enabled automatically - a
+# container-path install runs its session through `docker compose run`, not the
+# rendered host-claude restart script. See chassis/systemd/INSTALL.md.
 
 set -euo pipefail
 
@@ -104,12 +111,19 @@ USER_NAME="${USER:-$(id -un)}"
 
 TEMPLATES_DIR="${CHASSIS_ROOT:-$CHASSIS_HOME/chassis}/scripts/templates"
 LAUNCHD_DIR="${CHASSIS_ROOT:-$CHASSIS_HOME/chassis}/launchd"
+SYSTEMD_DIR="${CHASSIS_ROOT:-$CHASSIS_HOME/chassis}/systemd"
 OUT_SCRIPTS="$CUSTOMER_HOME/scripts"
 OUT_PLISTS="$CUSTOMER_HOME/launchd"
+OUT_UNITS="$CUSTOMER_HOME/systemd"
+IS_DARWIN=false
+[[ "$(uname -s)" == "Darwin" ]] && IS_DARWIN=true
 
 mkdir -p "$OUT_SCRIPTS"
 if [[ "$RENDER_PLISTS" == "true" ]]; then
     mkdir -p "$OUT_PLISTS"
+    if [[ "$IS_DARWIN" != "true" ]]; then
+        mkdir -p "$OUT_UNITS"
+    fi
 fi
 
 # render_template <template_path> <output_path>
@@ -181,6 +195,51 @@ if [[ "$RENDER_PLISTS" == "true" ]]; then
     render_template "$LAUNCHD_DIR/com.behalfbot.colima.plist.template" \
         "$OUT_PLISTS/com.behalfbot.colima.plist"
 fi
+
+# Linux: systemd user units for the Discord session, the counterpart of the
+# discord-restart / discord-watchdog LaunchAgents. Both services carry
+# KillMode=process - without it systemd kills the tmux server the restart
+# script just started (see chassis/systemd/discord-restart.service.template).
+# render_template marks its output executable; systemd warns on executable
+# unit files, so reset them to 644.
+SYSTEMD_UNITS=()
+if [[ "$RENDER_PLISTS" == "true" && "$IS_DARWIN" != "true" ]]; then
+    for unit in discord-restart.service discord-restart.timer \
+                discord-watchdog.service discord-watchdog.timer; do
+        render_template "$SYSTEMD_DIR/${unit}.template" \
+            "$OUT_UNITS/behalfbot-${BOT_NAME}-${unit}"
+        SYSTEMD_UNITS+=("$OUT_UNITS/behalfbot-${BOT_NAME}-${unit}")
+        if [[ "$DRY_RUN" != "true" ]]; then
+            chmod 644 "$OUT_UNITS/behalfbot-${BOT_NAME}-${unit}"
+        fi
+    done
+fi
+
+# Print the commands that enable the Discord-session units. Not run for the
+# operator: the rendered restart script starts HOST `claude`, which is wrong
+# for a container-path install, and enabling the restart timer restarts the
+# live session 30s later.
+print_systemd_next_steps() {
+    echo ""
+    echo "Discord session systemd user units rendered into: $OUT_UNITS"
+    echo "They are NOT enabled. They run the rendered restart/watchdog scripts,"
+    echo "which start a host tmux session running \`claude --channels\`. If this"
+    echo "install runs its session through \`docker compose run ... claude --channels\`"
+    echo "instead, point ExecStart at your own start script and keep KillMode=process."
+    echo "See chassis/systemd/INSTALL.md (\"Discord session (channels) supervision\")."
+    echo ""
+    echo "To enable (no sudo except linger):"
+    echo "  sudo loginctl enable-linger ${USER_NAME}"
+    local u
+    for u in "${SYSTEMD_UNITS[@]}"; do
+        echo "  systemctl --user link $u"
+    done
+    echo "  systemctl --user daemon-reload"
+    echo "  systemctl --user enable --now behalfbot-${BOT_NAME}-discord-restart.timer behalfbot-${BOT_NAME}-discord-watchdog.timer"
+    echo ""
+    echo "The restart timer fires 30s after it starts and replaces the running"
+    echo "${TMUX_SESSION_NAME} session. Run it outside that session."
+}
 
 # install_plist <rendered-plist-path> <agent|daemon>
 # Install a rendered plist into the correct launchd domain and bootstrap it.
@@ -394,7 +453,8 @@ if [[ "$ACTIVATE_PLISTS" == "true" && "$(uname -s)" == "Darwin" ]]; then
 fi
 
 if [[ "$ACTIVATE_PLISTS" == "true" && "$(uname -s)" != "Darwin" ]]; then
-    echo "  --activate-plists requested but host is not macOS; skipping."
+    echo "  --activate-plists: launchd plists skipped (not macOS); systemd units are"
+    echo "  not enabled automatically, the commands to enable them are printed below."
 fi
 
 # Activating the restart agent fires it immediately (RunAtLoad) and, on a box
@@ -428,7 +488,7 @@ if [[ "$DRY_RUN" != "true" ]]; then
     echo "Customer-side scripts rendered into: $OUT_SCRIPTS"
     if [[ "$RENDER_PLISTS" == "true" ]]; then
         echo "Customer-side plists rendered into:  $OUT_PLISTS"
-        if [[ "$ACTIVATE_PLISTS" != "true" ]]; then
+        if [[ "$ACTIVATE_PLISTS" != "true" && "$IS_DARWIN" == "true" ]]; then
             echo ""
             echo "Next: activate the plists into the right launchd domain."
             echo "      discord-restart + discord-watchdog are gui-domain LaunchAgents:"
@@ -452,4 +512,8 @@ if [[ "$DRY_RUN" != "true" ]]; then
             echo "      Run it outside tmux: activation rebuilds the tmux server."
         fi
     fi
+fi
+
+if [[ "$RENDER_PLISTS" == "true" && "$IS_DARWIN" != "true" ]]; then
+    print_systemd_next_steps
 fi
