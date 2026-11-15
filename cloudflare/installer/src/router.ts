@@ -7,6 +7,7 @@
 //   GET   /installs/:id/journal         admin bearer
 //   POST  /installs/:id/homework        admin bearer  {item, state}  until the key form exists
 //   POST  /installs/:id/server          admin bearer  {server_ip, host_key_fp}  until Hetzner create exists
+//   POST  /installs/:id/finish          admin bearer  {status: done|failed}  until the runbook agent exists
 
 import { bearerMatches } from './auth.ts'
 import { INSTALL_ID_RE } from './ids.ts'
@@ -19,6 +20,7 @@ export interface InstallApi {
   patchSchedule(scheduledAt: number): Promise<Reply>
   setHomework(item: string, state: 'pending' | 'green'): Promise<Reply>
   pinServer(serverIp: string, hostKeyFp: string): Promise<Reply>
+  finishByAdmin(status: 'done' | 'failed'): Promise<Reply>
   journalView(): Promise<Reply> | Reply
 }
 
@@ -74,13 +76,13 @@ export async function handle(req: Request, deps: RouterDeps): Promise<Response> 
     return json({ install_id: reply.body.install_id, channel_id: reply.body.channel_id }, created ? 201 : 200)
   }
 
-  const m = /^\/installs\/([^/]+)(\/journal|\/homework|\/server)?$/.exec(url.pathname)
+  const m = /^\/installs\/([^/]+)(\/journal|\/homework|\/server|\/finish)?$/.exec(url.pathname)
   if (!m) return json({ error: 'not_found' }, 404)
   const [, id, sub] = m
 
   const route = `${req.method} ${sub ?? ''}`
   const needsSite = route === 'PATCH '
-  const needsAdmin = route === 'GET /journal' || route === 'POST /homework' || route === 'POST /server'
+  const needsAdmin = route === 'GET /journal' || route === 'POST /homework' || route === 'POST /server' || route === 'POST /finish'
   if (!needsSite && !needsAdmin) return json({ error: 'not_found' }, 404)
   if (!(await (needsSite ? site() : admin()))) return json({ error: 'unauthorized' }, 401)
   if (!INSTALL_ID_RE.test(id) || !(await deps.exists(id))) return json({ error: 'not_found' }, 404)
@@ -109,6 +111,9 @@ export async function handle(req: Request, deps: RouterDeps): Promise<Response> 
       return json({ error: 'want {item, state: pending|green}' }, 400)
     }
     r = await inst.setHomework(body.item, body.state)
+  } else if (route === 'POST /finish') {
+    if (body.status !== 'done' && body.status !== 'failed') return json({ error: 'want {status: done|failed}' }, 400)
+    r = await inst.finishByAdmin(body.status)
   } else {
     if (typeof body.server_ip !== 'string' || typeof body.host_key_fp !== 'string') {
       return json({ error: 'want {server_ip, host_key_fp}' }, 400)

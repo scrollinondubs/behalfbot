@@ -38,7 +38,7 @@ test('start rule: homework not green posts once, rechecks every 15 min, escalate
   await core.onAlarm()
   assert.equal(core.row().status, 'scheduled')
   assert.equal(w.alarms.get(id), slot * 1000 + 15 * MIN_MS)
-  const waitPosts = () => w.discord.posts(channel).filter((p) => /aren't done yet/.test(p))
+  const waitPosts = () => w.discord.posts(channel).filter((p) => /still need doing/.test(p))
   assert.equal(waitPosts().length, 1)
 
   for (let i = 1; i < 8; i++) {
@@ -171,15 +171,19 @@ test('close: removes our key from the box, deletes it from storage, never calls 
 
   assert.equal(w.box.requests.length, 1)
   const req = w.box.requests[0].body
-  assert.equal(req.cmd, removeKeyCommand(id))
+  const pub = (await w.stores.get(id).get('ssh_public_key'))
+  assert.equal(req.cmd, removeKeyCommand(pub))
   assert.equal(req.host, PIN.serverIp)
   assert.equal(req.host_key_fp, PIN.hostKeyFp)
   assert.equal(await store.get('ssh_private_key'), undefined)
   assert.equal(await store.get('hetzner_token'), undefined)
   assert.ok(w.discord.calls.every((c) => !/hetzner/i.test(c.path)))
-  // The only box command on close is the authorized_keys edit: no shutdown,
-  // no delete, nothing else.
-  assert.match(req.cmd, /^sed -i '\/ behalfbot-installer-inst_[0-9A-Z]{26}\$\/d' ~\/\.ssh\/authorized_keys$/)
+  // The only box command on close is the authorized_keys edit, keyed on our
+  // key blob, and it fails unless the blob is gone afterwards.
+  const blob = pub.split(' ')[1]
+  assert.ok(req.cmd.includes(`grep -vF '${blob}'`))
+  assert.ok(req.cmd.endsWith(`! grep -qF '${blob}' "$HOME/.ssh/authorized_keys"`))
+  assert.ok(!/shutdown|poweroff|reboot|hcloud|rm -rf/.test(req.cmd))
 })
 
 test('close: a failed key removal still deletes our private key and tells ops', async () => {
@@ -197,4 +201,54 @@ test('close with no server pinned skips the box and still closes', async () => {
   await core.close('test')
   assert.equal(w.box.requests.length, 0)
   assert.equal(core.row().status, 'closed')
+})
+
+test('removeKeyCommand really removes only our line and fails if the key is still there', async (t) => {
+  const { execFileSync } = await import('node:child_process')
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const { generateInstallKey } = await import('../src/sshkey.ts')
+  const ours = (await generateInstallKey('inst_X')).publicKey
+  const theirs = (await generateInstallKey('inst_Y')).publicKey.replace(/behalfbot-installer-inst_Y/, 'customer@laptop')
+  const home = mkdtempSync(join(tmpdir(), 'akeys-'))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  mkdirSync(join(home, '.ssh'))
+  const f = join(home, '.ssh', 'authorized_keys')
+  writeFileSync(f, `${theirs}\n${ours}\n`)
+  execFileSync('sh', ['-c', removeKeyCommand(ours)], { env: { ...process.env, HOME: home } })
+  assert.equal(readFileSync(f, 'utf8'), `${theirs}\n`)
+  // Running again with nothing to remove still succeeds (the key is gone).
+  execFileSync('sh', ['-c', removeKeyCommand(ours)], { env: { ...process.env, HOME: home } })
+  assert.throws(() => removeKeyCommand('ssh-rsa AAAAB3 x'))
+})
+
+test('admin finish moves a hand-run install into GC; PATCH can rebook a needs_human install that never ran', async () => {
+  const w = makeWorld()
+  const site = { token: ENV.INSTALLER_SITE_SECRET }
+  const admin = { token: ENV.INSTALLER_ADMIN_SECRET }
+  const { id, core, slot } = await scheduled(w)
+  // Homework missing for 2h: needs_human, no run started.
+  w.clock.ms = slot * 1000 + 2 * 3600 * 1000
+  await core.onAlarm()
+  assert.equal(core.row().status, 'needs_human')
+  const newSlot = w.clock.s + 86400
+  const re = await w.request('PATCH', `/installs/${id}`, { body: { scheduled_at: newSlot }, ...site })
+  assert.equal(re.status, 200)
+  assert.equal(core.row().status, 'scheduled')
+  assert.equal(w.alarms.get(id), newSlot * 1000)
+
+  // Once a run has started, the slot is fixed.
+  await greenAll(core)
+  w.clock.ms = newSlot * 1000
+  await core.onAlarm()
+  assert.equal(core.row().status, 'needs_human')
+  assert.equal((await w.request('PATCH', `/installs/${id}`, { body: { scheduled_at: newSlot + 86400 }, ...site })).status, 409)
+
+  assert.equal((await w.request('POST', `/installs/${id}/finish`, { body: { status: 'done' }, ...site })).status, 401)
+  assert.equal((await w.request('POST', `/installs/${id}/finish`, { body: { status: 'closed' }, ...admin })).status, 400)
+  const fin = await w.request('POST', `/installs/${id}/finish`, { body: { status: 'done' }, ...admin })
+  assert.equal(fin.status, 200)
+  assert.equal(core.row().status, 'done')
+  assert.equal(w.alarms.get(id), w.clock.ms + 11 * DAY_MS)
 })

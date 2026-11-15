@@ -48,17 +48,18 @@ Behalfbot-site (Vercel)
 | `GET /installs/:id/journal` | admin | Install row, homework and the full journal. Linked from escalations. |
 | `POST /installs/:id/homework` | admin | `{"item", "state": "pending" or "green"}`. Stand-in until the key form exists. |
 | `POST /installs/:id/server` | admin | `{"server_ip", "host_key_fp"}` pins the box. Stand-in until Hetzner server create exists. |
+| `POST /installs/:id/finish` | admin | `{"status": "done" or "failed"}` starts the GC clock. Stand-in until the runbook agent exists. |
 
 Both bearers use a constant-time compare, and an unset secret matches nothing.
 
 ## Behaviour
 
 - **Idempotency.** On `purchase_id`, and on `discord_user_id` for `source=admin` while that install is not closed. If Discord fails during create, the reply is `502` and the next POST for the same purchase retries on the same install.
-- **Start rule.** The alarm fires at `scheduled_at`. If every homework item is green, the run starts. If not, the bot posts once in the channel, rechecks every 15 minutes, and escalates 2h after the slot.
+- **Start rule.** The alarm fires at `scheduled_at`. If every homework item is green, the run starts. If not, the bot posts once in the channel, rechecks every 15 minutes, and escalates 2h after the slot. A `needs_human` install whose run never started can be rebooked with PATCH.
 - **Caps.** Spend is $40 per install (`spend_usd_cents`) and the wall clock is 4h from run start. Hitting either sets `needs_human` and escalates.
 - **Escalation.** Posts to `DISCORD_ESCALATION_CHANNEL_ID` with the install, step, attempts and journal link. The customer is told there is nothing for them to do, unless they are the blocker.
 - **GC.** This only applies once an install is `done` or `failed`. The bot warns at day 11 and closes at day 14 after the later of the finish time and the customer's last message. Any message from the customer resets the clock. If the channel cannot be read, nothing closes and it retries in an hour.
-- **Close.** Removes our key line from the box's `authorized_keys` over the transport. Deletes the private key and any Hetzner token from DO storage, even if the removal failed, and in that case tells ops. Then deletes the channel. There is no Hetzner API call anywhere in this Worker, so a close can never touch the customer's server.
+- **Close.** Removes every `authorized_keys` line carrying our key blob over the transport, and fails if the blob is still there afterwards. Deletes the private key and any Hetzner token from DO storage, even if the removal failed, and in that case tells ops. Then deletes the channel. There is no Hetzner API call anywhere in this Worker, so a close can never touch the customer's server.
 - **Secrets.** A secret only goes to the box as `run(cmd, { stdin })`. A command whose text contains a known secret is refused. Output is redacted before it is journaled or returned. All journal rows and Discord posts pass through the same redactor: exact stdin values in raw, base64 and URL-encoded form, plus common token shapes.
 - **Host pinning.** `server_ip` must be a literal IP and `host_key_fp` a `SHA256:` fingerprint. The container keyscans the host and refuses unless its ed25519 key matches the pin. It then connects with that key as the only known host and `StrictHostKeyChecking=yes`. The Worker also refuses any answer that does not confirm the pinned fingerprint.
 
@@ -75,7 +76,7 @@ The secret set is closed. Customer secrets live in per-install DO storage, never
 
 | Name | Use |
 |---|---|
-| `DISCORD_INSTALLER_BOT_TOKEN` | Installer bot. Needs Manage Channels in the guild. |
+| `DISCORD_INSTALLER_BOT_TOKEN` | Installer bot. Needs Manage Channels and Manage Roles in the guild (writing permission overwrites needs Manage Roles), plus View Channel, Send Messages and Read Message History. |
 | `DISCORD_GUILD_ID` | Guild the install channels live in. |
 | `DISCORD_ESCALATION_CHANNEL_ID` | `#installer-escalations`. |
 | `ANTHROPIC_API_KEY` | Installer-only key so spend is visible. Unused until the runbook agent lands. |
@@ -93,7 +94,7 @@ npm run typecheck
 npm test          # node --test, no network: Discord and the container are faked
 ```
 
-The tests back the DO SQLite with `node:sqlite`, so the real schema runs.
+Needs Node 23.6 or newer: the tests import `.ts` files directly (type stripping) and back the DO SQLite with `node:sqlite`, so the real schema runs. Verified on Node 26.
 
 ## Deploy (Sean's approval required)
 

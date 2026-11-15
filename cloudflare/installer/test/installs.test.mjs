@@ -145,3 +145,15 @@ test('GET /installs lists open installs with the contract fields, and drops clos
   assert.deepEqual(closed.map((r) => r.install_id), [b.body.install_id])
   assert.equal((await w.request('GET', '/installs?status=bogus', site)).status, 400)
 })
+
+test('stripe with no Discord id: a failing member lookup still creates the channel, bot-only', async () => {
+  const discord = fakeDiscord()
+  const inner = discord.fetch
+  discord.fetch = async (req) => (new URL(req.url).pathname.includes('/members/search') ? new Response('no', { status: 403 }) : inner(req))
+  const w = makeWorld({ discord })
+  const r = await createInstall(w, { ...STRIPE, discord_user_id: null })
+  assert.equal(r.res.status, 201)
+  const ow = JSON.parse(w.discord.channelCreates()[0].body).permission_overwrites
+  assert.equal(ow.length, 2, '@everyone deny + bot only')
+  assert.ok(r.core.journalView().body.journal.some((j) => /bot-only/.test(j.body)))
+})

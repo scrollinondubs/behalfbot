@@ -245,8 +245,12 @@ export class InstallCore {
       let customerId = row.discord_user_id
       const username = await this.d.kv.get<string>(K.discordUsername)
       if (!customerId && username) {
-        customerId = await this.discord().findMemberByUsername(username)
-        if (customerId) this.update({ discord_user_id: customerId })
+        try {
+          customerId = await this.discord().findMemberByUsername(username)
+          if (customerId) this.update({ discord_user_id: customerId })
+        } catch (e) {
+          await this.appendJournal('note', `could not look up Discord user ${username}, creating the channel bot-only: ${errText(e)}`)
+        }
       }
       const name = channelName(row.customer_name ?? username ?? 'customer')
       const channelId = await this.discord().createPrivateChannel(name, customerId)
@@ -280,15 +284,9 @@ export class InstallCore {
     // TODO(key-form): link the per-install homework and key page here.
     await this.say(
       r.channel_id,
-      `${hello} This is your private install channel. ${slot}\n\nBefore the install, please get these done:\n${this.homeworkLines()}\n\nI'll post here as each one turns green.`,
+      `${hello} This is your private install channel. ${slot}\n\nBefore then, please finish these:\n${this.homeworkLines()}\n\nI'll tick each one off here as it's done.`,
       r.discord_user_id ? [r.discord_user_id] : [],
     )
-  }
-
-  summary(): Reply {
-    const r = this.row()
-    if (!r) return { status: 404, body: { error: 'not_found' } }
-    return { status: 200, body: { install_id: r.install_id, channel_id: r.channel_id, status: r.status } }
   }
 
   // ---- PATCH /installs/:id ----------------------------------------------
@@ -296,8 +294,12 @@ export class InstallCore {
   async patchSchedule(scheduledAt: number): Promise<Reply> {
     const r = this.row()
     if (!r) return { status: 404, body: { error: 'not_found' } }
-    if (r.status !== 'homework' && r.status !== 'scheduled') {
-      return { status: 409, body: { error: `install is ${r.status}; the slot can only change before it starts` } }
+    // needs_human counts as "before it starts" when no run ever began, e.g.
+    // homework was still missing at the slot and the customer rebooks.
+    const started = (await this.d.kv.get<number>(K.runStartedAt)) != null
+    const reschedulable = r.status === 'homework' || r.status === 'scheduled' || (r.status === 'needs_human' && !started)
+    if (!reschedulable) {
+      return { status: 409, body: { error: `install is ${r.status}; the slot can only change before the run starts` } }
     }
     this.update({ scheduled_at: scheduledAt, status: 'scheduled' })
     await this.d.kv.delete(K.startNextCheck)
@@ -326,7 +328,7 @@ export class InstallCore {
     await this.appendJournal('note', `homework ${item} -> ${state}`)
     if (state === 'green') {
       const done = allGreen(this.homework().map((h) => h.state))
-      await this.say(r.channel_id, `✓ ${HOMEWORK_LABELS[item] ?? item}${done ? '\n\nThat was the last one. Homework is done.' : ''}`)
+      await this.say(r.channel_id, `✓ ${HOMEWORK_LABELS[item] ?? item}${done ? "\n\nThat's the last one. Homework's done." : ''}`)
     }
     return { status: 200, body: { install_id: r.install_id, homework: this.homework() } }
   }
@@ -447,8 +449,8 @@ export class InstallCore {
     await this.say(
       r.channel_id,
       o.customerNeeded
-        ? 'Your install is on hold until the homework above is done. Someone from the team will follow up here.'
-        : "I've hit something I need a human for. Nothing for you to do right now. Someone from the team will pick it up here.",
+        ? 'The install is on hold until the homework above is done. Someone from the team will follow up here.'
+        : "I'm stuck on something and need a person to look at it. Nothing for you to do. Someone from the team will pick it up here.",
     )
   }
 
@@ -469,6 +471,17 @@ export class InstallCore {
     await this.appendJournal('note', `install ${status}`)
     await this.arm()
     await this.flush()
+  }
+
+  // Admin stand-in for the runbook agent's finish (POST /installs/:id/finish),
+  // so a hand-run install can enter GC and eventually close.
+  async finishByAdmin(status: Extract<InstallStatus, 'done' | 'failed'>): Promise<Reply> {
+    const r = this.row()
+    if (!r) return { status: 404, body: { error: 'not_found' } }
+    if (r.status === 'closed') return { status: 409, body: { error: 'install is closed' } }
+    await this.finish(status)
+    const after = this.requireRow()
+    return { status: 200, body: { install_id: after.install_id, status: after.status } }
   }
 
   // ---- alarm -------------------------------------------------------------
@@ -514,7 +527,7 @@ export class InstallCore {
       await this.d.kv.put(K.startMissPosted, true)
       await this.say(
         r.channel_id,
-        `It's time for your install, but these aren't done yet:\n${missing.map((m) => `○ ${m}`).join('\n')}\n\nI'll check again every 15 minutes.`,
+        `It's install time, but these still need doing:\n${missing.map((m) => `○ ${m}`).join('\n')}\n\nI'll check again every 15 minutes.`,
       )
     }
   }
@@ -549,7 +562,7 @@ export class InstallCore {
       await this.appendJournal('note', `gc: warned, closing at ${new Date(d.closeAt * 1000).toISOString()} unless the customer posts`, { stepName: 'gc' })
       await this.say(
         r.channel_id,
-        `This channel closes <t:${d.closeAt}:R> unless someone posts here. If anything about your bot is off, just say so and the clock resets.`,
+        `This channel closes <t:${d.closeAt}:R> if it stays quiet. If anything about your bot seems off, say so here and the clock resets.`,
       )
     } else if (d.action === 'close') {
       await this.close('14 days without a customer message')
@@ -584,7 +597,8 @@ export class InstallCore {
     if (r.server_ip && r.host_key_fp && priv) {
       let failure: string | null = null
       try {
-        const res = await this.exec(0, 'close', 1, removeKeyCommand(r.install_id))
+        const pub = (await this.d.kv.get<string>(K.publicKey)) ?? ''
+        const res = await this.exec(0, 'close', 1, removeKeyCommand(pub))
         if (res.code !== 0) failure = `exit ${res.code}`
       } catch (e) {
         failure = errText(e)
@@ -614,10 +628,14 @@ export class InstallCore {
   }
 }
 
-export function removeKeyCommand(installId: string): string {
-  // installId is validated against INSTALL_ID_RE before any DO is reached, so
-  // it is safe inside this pattern.
-  return `sed -i '/ ${keyComment(installId)}$/d' ~/.ssh/authorized_keys`
+// Drops every authorized_keys line carrying our key blob, then fails unless
+// the blob is gone, so "no matching line" can never read as success when the
+// key is still there. `cat >` keeps the file's owner and mode.
+export function removeKeyCommand(publicKey: string): string {
+  const blob = publicKey.split(' ')[1] ?? ''
+  if (!/^AAAAC3NzaC1lZDI1NTE5[A-Za-z0-9+/]+=*$/.test(blob)) throw new Error('no installer public key on record')
+  const f = '"$HOME/.ssh/authorized_keys"'
+  return `test -f ${f} || exit 0; grep -vF '${blob}' ${f} > ${f}.tmp; cat ${f}.tmp > ${f} && rm -f ${f}.tmp && ! grep -qF '${blob}' ${f}`
 }
 
 function errText(e: unknown): string {

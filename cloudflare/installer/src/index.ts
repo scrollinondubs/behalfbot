@@ -94,6 +94,9 @@ export class InstallDO extends DurableObject<Env> implements InstallApi {
   pinServer(serverIp: string, hostKeyFp: string): Promise<Reply> {
     return this.core.pinServer(serverIp, hostKeyFp)
   }
+  finishByAdmin(status: 'done' | 'failed'): Promise<Reply> {
+    return this.core.finishByAdmin(status)
+  }
   journalView(): Reply {
     return this.core.journalView()
   }
