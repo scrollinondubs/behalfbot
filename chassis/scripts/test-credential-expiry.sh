@@ -102,6 +102,7 @@ reset() {
     CHECKS_ENABLED="tailscale,claude"
     TS_BIN_OVERRIDE=""
     REALERT_DAYS="3"
+    OAUTH_TOKEN_ENV=""
 }
 
 # A tailnet whose self key expires at $1 (empty = expiry disabled) and one
@@ -159,6 +160,7 @@ run_gather() {
         CHASSIS_CREDENTIAL_TAILSCALE_BIN="$TS_BIN_OVERRIDE" \
         CLAUDE_CREDENTIALS_FILE="$TMP/credentials.json" \
         KEYCHAIN_ACCOUNT="tester" \
+        CLAUDE_CODE_OAUTH_TOKEN="$OAUTH_TOKEN_ENV" \
         bash "$GATHER" 2>/dev/null
 }
 
@@ -405,6 +407,27 @@ plant_keychain "sk-ant-oat-SECRETVALUE" 30
 echo '{"mcpOAuth": {}}' > "$TMP/credentials.json"
 OUT="$(run_gather)"
 assert_issue "a credentials file with no accessToken fires" "$OUT" "claude-credentials-file_missing"
+
+# A setup-token install (CLAUDE_CODE_OAUTH_TOKEN) never writes the file:
+# a missing file is its normal state, so it is skipped, not alarmed.
+reset
+CHECKS_ENABLED="claude"
+plant_keychain "sk-ant-oat-SECRETVALUE" 30
+OAUTH_TOKEN_ENV="sk-ant-oat-SETUPTOKEN"
+OUT="$(run_gather)"
+assert_no_issue "a setup-token install with no credentials file stays quiet" "$OUT" "claude-credentials-file_missing"
+assert_contains "the setup-token skip names the reason" "$(jq -c '.skipped' <<<"$OUT")" "CLAUDE_CODE_OAUTH_TOKEN"
+if grep -q "SETUPTOKEN" <<<"$OUT"; then bad "setup-token value never echoed" "token text found in output"; else ok; fi
+
+# A setup-token install that ALSO has a broken credentials file still fires:
+# the env var only excuses an absent file, not a corrupt one.
+reset
+CHECKS_ENABLED="claude"
+plant_keychain "sk-ant-oat-SECRETVALUE" 30
+OAUTH_TOKEN_ENV="sk-ant-oat-SETUPTOKEN"
+echo '{"mcpOAuth": {}}' > "$TMP/credentials.json"
+OUT="$(run_gather)"
+assert_issue "a tokenless credentials file fires even with a setup-token" "$OUT" "claude-credentials-file_missing"
 
 # --- 21. the refresh token gets the T-7 / T-1 ladder ------------------------
 reset
