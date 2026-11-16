@@ -358,7 +358,13 @@ if check_enabled claude; then
         rm -f "$KC_ERR"
     fi
 
-    if [[ ! -f "$CRED_FILE" ]]; then
+    if [[ ! -f "$CRED_FILE" && -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+        # A setup-token install (`claude setup-token`, passed in as
+        # CLAUDE_CODE_OAUTH_TOKEN) never writes a credentials file, so a
+        # missing file is its normal state, not an outage. The token carries
+        # no readable expiry, so there is nothing to check here.
+        add_skip "claude-credentials-file" "CLAUDE_CODE_OAUTH_TOKEN is set; this install authenticates with a setup-token, not a credentials file"
+    elif [[ ! -f "$CRED_FILE" ]]; then
         add_check "claude-credentials-file" "claude credentials file" "" "missing" \
             "${CRED_FILE} does not exist - the chassis container has no way to authenticate"
     else
