@@ -35,6 +35,16 @@
 #                       by bucket lifecycle rules. OPT-IN: the copies accumulate
 #                       forever unless the companion lifecycle rules exist on
 #                       the bucket. See docs/backup-retention.md.
+#   BACKUP_OBJECT_LOCK_DAYS - default unset (off). A positive whole number N
+#                       puts S3 Object Lock retention (COMPLIANCE, now + N days)
+#                       on every object this script uploads, nightly and GFS
+#                       copies alike. Defense in depth behind the bucket's
+#                       default retention: each object carries its own lock
+#                       even if the bucket default is later changed. Needs a
+#                       bucket created or configured with Object Lock and
+#                       s3:PutObjectRetention on the writer key. Leave unset on
+#                       buckets without Object Lock: the call would fail there.
+#                       A failed lock is reported (count 1), never silent.
 #
 # Output (to stdout, single JSON line):
 #   {"count": 0, "issues": [], "s3_key": "...", "size_bytes": N,
@@ -95,6 +105,31 @@ if (( ${#missing[@]} > 0 )); then
     fail "missing required env vars: ${missing[*]}"
 fi
 
+BACKUP_OBJECT_LOCK_DAYS="${BACKUP_OBJECT_LOCK_DAYS:-}"
+if [[ -n "$BACKUP_OBJECT_LOCK_DAYS" && ! "$BACKUP_OBJECT_LOCK_DAYS" =~ ^[1-9][0-9]{0,4}$ ]]; then
+    fail "BACKUP_OBJECT_LOCK_DAYS must be a positive whole number, got: $BACKUP_OBJECT_LOCK_DAYS"
+fi
+
+# Object Lock retention for one just-uploaded key (opt-in, see header).
+# The retain-until date is computed AFTER the upload, so it is never earlier
+# than a bucket default retention applied at upload time: COMPLIANCE allows
+# extending a lock but refuses shortening it.
+LOCK_FAILED=()
+lock_object() {
+    local key="$1" until
+    [[ -z "$BACKUP_OBJECT_LOCK_DAYS" ]] && return 0
+    until="$(date -u -d "+${BACKUP_OBJECT_LOCK_DAYS} days" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+        || date -u -v+"${BACKUP_OBJECT_LOCK_DAYS}"d +%Y-%m-%dT%H:%M:%SZ)"
+    if ! AWS_ACCESS_KEY_ID="$AWS_BACKUP_WRITE_ACCESS_KEY_ID" \
+         AWS_SECRET_ACCESS_KEY="$AWS_BACKUP_WRITE_SECRET_ACCESS_KEY" \
+         AWS_DEFAULT_REGION="$S3_BACKUP_REGION" \
+         aws s3api put-object-retention --bucket "$S3_BACKUP_BUCKET" --key "$key" \
+             --retention "Mode=COMPLIANCE,RetainUntilDate=${until}" >/dev/null 2>&1; then
+        echo "warn: Object Lock retention on ${key} failed" >&2
+        LOCK_FAILED+=("$key")
+    fi
+}
+
 TODAY="$(date +%Y-%m-%d)"
 TS="$(date +%Y%m%dT%H%M%SZ)"
 BACKUP_NAME="${BACKUP_NAME:-chassis-backup}"
@@ -143,6 +178,7 @@ if ! AWS_ACCESS_KEY_ID="$AWS_BACKUP_WRITE_ACCESS_KEY_ID" \
      aws s3 cp "$ENCRYPTED" "s3://${S3_BACKUP_BUCKET}/${S3_KEY}" --no-progress >/dev/null 2>&1; then
     fail "s3 cp encrypted-tarball failed"
 fi
+lock_object "$S3_KEY"
 
 # Write + upload sibling manifest. Plaintext is OK - manifest contains
 # zero secret material.
@@ -166,6 +202,7 @@ if ! AWS_ACCESS_KEY_ID="$AWS_BACKUP_WRITE_ACCESS_KEY_ID" \
      aws s3 cp "$MANIFEST_FILE" "s3://${S3_BACKUP_BUCKET}/${S3_MANIFEST_KEY}" --no-progress >/dev/null 2>&1; then
     fail "s3 cp manifest failed (tarball already uploaded successfully)"
 fi
+lock_object "$S3_MANIFEST_KEY"
 
 # --- GFS long-tail retention fanout (opt-in) ---------------------------------
 # On calendar boundaries, upload the just-produced nightly artifacts (the local
@@ -200,6 +237,8 @@ if [[ "${BACKUP_GFS_RETENTION:-false}" == "true" && "${BACKUP_S3_PREFIX}" == "ni
                            "s3://${S3_BACKUP_BUCKET}/${dest_dir}/$(basename "$f")" \
                            --no-progress >/dev/null 2>&1; then
                 echo "warn: GFS fanout upload $(basename "$f") -> ${dest_dir}/ failed" >&2
+            else
+                lock_object "${dest_dir}/$(basename "$f")"
             fi
         done
     }
@@ -218,6 +257,14 @@ if [[ "${BACKUP_GFS_RETENTION:-false}" == "true" && "${BACKUP_S3_PREFIX}" == "ni
             gfs_copy_to "yearly/${GFS_YEAR}"
         fi
     fi
+fi
+
+# A failed lock is a failed safety control: report it (count 1) so the
+# heartbeat alerts, even though the upload itself succeeded.
+if (( ${#LOCK_FAILED[@]} > 0 )); then
+    printf '{"count": 1, "issues": ["Object Lock retention failed on %s object(s), first: %s (upload itself succeeded)"], "s3_key": "%s", "size_bytes": %s, "sha256": "%s"}\n' \
+        "${#LOCK_FAILED[@]}" "${LOCK_FAILED[0]}" "$S3_KEY" "$ENC_SIZE" "$SHA256"
+    exit 0
 fi
 
 printf '{"count": 0, "issues": [], "s3_key": "%s", "size_bytes": %s, "sha256": "%s"}\n' \

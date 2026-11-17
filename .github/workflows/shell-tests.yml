@@ -69,6 +69,8 @@ on:
       - 'chassis/scripts/sync-claude-oauth-bridge.sh'
       - 'chassis/scripts/test-claude-oauth-bridge-alert.sh'
       - 'chassis/scripts/_alert.sh'
+      - 'chassis/scripts/encrypted-s3-upload.sh'
+      - 'chassis/scripts/test-encrypted-s3-upload-lock.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -131,10 +133,19 @@ on:
       - 'chassis/scripts/sync-claude-oauth-bridge.sh'
       - 'chassis/scripts/test-claude-oauth-bridge-alert.sh'
       - 'chassis/scripts/_alert.sh'
+      - 'chassis/scripts/encrypted-s3-upload.sh'
+      - 'chassis/scripts/test-encrypted-s3-upload-lock.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
 jobs:
+  encrypted-s3-upload-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Stubs aws and age on PATH; no AWS account or network.
+      - run: bash chassis/scripts/test-encrypted-s3-upload-lock.sh
+
   chassis-update-health:
     runs-on: ubuntu-latest
     steps:
