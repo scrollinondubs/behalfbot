@@ -1,0 +1,20 @@
+{
+  "id": "aws-backup-hardening",
+  "task": "AWS console: let the backup writer key reach the GFS prefixes, and turn on S3 Object Lock for the backup bucket",
+  "allow": ["console.aws.amazon.com"],
+  "start_url": "https://console.aws.amazon.com/",
+  "steps": [
+    { "id": "signin", "human": "Sign in to the AWS console with an admin login (not one of the backup IAM users). Press Done when the console home page shows." },
+    { "id": "iam-read", "do": "IAM > Users > the backup writer user (S3_BACKUP_BUCKET's write key) > Permissions: open its policy and read the JSON. Report the Resource list before changing anything." },
+    { "id": "iam-edit", "do": "Edit the policy JSON: keep the nightly/* resource and add <bucket>/monthly/*, <bucket>/quarterly/* and <bucket>/yearly/*. Add s3:PutObjectRetention and s3:PutObjectLegalHold to the write actions. Add a statement allowing s3:GetBucketObjectLockConfiguration on the bucket ARN. Save." },
+    { "id": "iam-check", "human": "Look over the saved policy. Press Done if it matches what Jax described in the chat." },
+    { "id": "lock-form", "do": "S3 > the backup bucket > Properties > Object Lock > Edit: enable Object Lock, default retention mode Compliance, 60 days. Fill the form but do not save." },
+    { "id": "lock-save", "human": "Compliance mode cannot be undone, and nobody (root included) can delete a locked object until its retention ends. Tick the acknowledgement and press Save changes yourself, then Done." }
+  ],
+  "accept": "On the next GFS boundary (1st of the month, 03:15-03:35 UTC), the dispatcher log has no 'GFS fanout upload ... failed' lines and the gfs-fanout heartbeat stays quiet. get-object-lock-configuration on the bucket returns Mode COMPLIANCE, Days 60.",
+  "notes": [
+    "Sign-in pages are on signin.aws.amazon.com, which is deliberately not on the allow list: the extension lets go of the tab while the customer signs in.",
+    "Object Lock needs bucket versioning on, and it is checked before the form will save.",
+    "No save_secret step: nothing here creates a credential."
+  ]
+}

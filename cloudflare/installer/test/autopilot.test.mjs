@@ -375,3 +375,16 @@ async function pairedSession() {
   const conn = await ws(s.w, p.token)
   return { w: s.w, id: s.id, session: { id: p.session, token: p.token, ws: conn.ws } }
 }
+
+test('aws-backup-hardening: pairs with the AWS console only, start page on the allow list, no secret step', async () => {
+  const { res, code, w } = await setup('aws-backup-hardening')
+  assert.equal(res.status, 201)
+  const p = await (await w.request('POST', '/autopilot/pair', { body: { code } })).json()
+  assert.deepEqual(p.allow, ['console.aws.amazon.com'])
+  const { hostAllowed } = await import('../../../chrome-ext/policy.js')
+  assert.ok(hostAllowed(p.start_url, p.allow))
+  assert.ok(hostAllowed('https://eu-west-1.console.aws.amazon.com/s3/home', p.allow))
+  assert.ok(!hostAllowed('https://signin.aws.amazon.com/oauth', p.allow))
+  const { runbook } = await import('../src/runbooks.ts')
+  assert.ok(!runbook('aws-backup-hardening').steps.some((s) => s.save_secret))
+})
