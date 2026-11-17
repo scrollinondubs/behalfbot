@@ -87,6 +87,32 @@ The three long-tail rules are on distinct prefixes (`monthly/`, `quarterly/`,
 For each: filter on the prefix, add a transition to Glacier Deep Archive after
 1 day, and set expiration (365 / 1095 days; none for `yearly/`).
 
+### 3. Optional: S3 Object Lock
+
+The fanout protects against age. Object Lock protects against a compromised host.
+Anyone holding the writer key could overwrite today's object, and the lifecycle
+rule would then expire the real, now noncurrent, version. With Object Lock in
+COMPLIANCE mode, nobody can delete or shorten a version's lock before it ends,
+not even the AWS root account.
+
+1. On the bucket: Properties > Object Lock > Edit, then Enable. Default
+   retention: Enable, Compliance, Fixed retention, N days. Pick N longer than
+   the noncurrent-version expiry. This can't be undone: the bucket keeps
+   Object Lock and versioning for good.
+2. On the writer key: allow `s3:PutObjectRetention` and
+   `s3:PutObjectLegalHold` on every prefix it writes. If you want to read the
+   bucket config with the same key, also allow
+   `s3:GetBucketObjectLockConfiguration` on the bucket ARN.
+3. Optional, for defense in depth: set `BACKUP_OBJECT_LOCK_DAYS=N` in `.env`.
+   The uploader then locks each object it writes (nightly and GFS copies) to
+   now + N days, so every object carries its own lock even if the bucket
+   default is later changed. If a lock call fails, the backup reports
+   `count: 1` and the heartbeat alerts. Leave it unset on buckets without
+   Object Lock, or every nightly will alert.
+
+Cost: nightlies are kept N days instead of the lifecycle's 30, and a bad
+upload is billed for N days because it can't be deleted early.
+
 ## The lifecycle policy
 
 `chassis/scripts/apply-s3-lifecycle.sh` applies exactly this (also usable
