@@ -141,12 +141,13 @@ export class AutopilotDO extends DurableObject<Env> implements AutopilotApi {
         else await ctx.storage.setAlarm(at)
       },
       getAlarm: () => ctx.storage.getAlarm(),
-      accept: (ws, sessionId) => {
+      accept: (ws, sessionId, conn, at) => {
         ctx.acceptWebSocket(ws as WebSocket, [sessionId])
-        ;(ws as WebSocket).serializeAttachment({ session_id: sessionId })
+        ;(ws as WebSocket).serializeAttachment({ session_id: sessionId, conn, at })
       },
       sockets: (sessionId) => ctx.getWebSockets(sessionId),
-      attachment: (ws) => ((ws as WebSocket).deserializeAttachment() as { session_id: string } | null) ?? null,
+      attachment: (ws) => ((ws as WebSocket).deserializeAttachment() as { session_id: string; conn?: string; at?: number } | null) ?? null,
+      lastPing: (ws) => ctx.getWebSocketAutoResponseTimestamp(ws as WebSocket)?.getTime() ?? null,
       // Only install owners reach here; the core keeps customer lines itself.
       journal: async (installId, line) => {
         await env.INSTALL_DO.get(env.INSTALL_DO.idFromName(installId)).autopilotNote(line)

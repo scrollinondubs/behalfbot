@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { ENV, makeWorld, createInstall } from './helpers.mjs'
-import { CODE_TTL_MS, MAX_SCREENSHOT_B64, SECRET_TTL_MS, PAIR_FAILS_PER_MIN, UNCONNECTED_TTL_MS, toRef } from '../src/autopilot.ts'
+import { CODE_TTL_MS, MAX_SCREENSHOT_B64, RECONNECT_GRACE_MS, SECRET_TTL_MS, STALE_MS, PAIR_FAILS_PER_MIN, UNCONNECTED_TTL_MS, toRef } from '../src/autopilot.ts'
 
 const admin = { token: ENV.INSTALLER_ADMIN_SECRET }
 
@@ -82,16 +82,21 @@ test('pairing: failed attempts are capped per minute, then reset', async () => {
   assert.equal(ok.status, 200)
 })
 
-test('socket: needs a live token, one socket per session', async () => {
+test('socket: needs a live token; the same token again replaces the old socket', async () => {
   const s = await setup()
   const p = await (await s.w.request('POST', '/autopilot/pair', { body: { code: s.code } })).json()
   assert.equal((await ws(s.w, 'not-a-token')).status, 401)
   const first = await ws(s.w, p.token)
   assert.ok(first.ws)
-  assert.equal((await ws(s.w, p.token)).status, 401)
+  const second = await ws(s.w, p.token)
+  assert.ok(second.ws)
+  assert.equal(first.ws.closed.code, 4000)
   const list = await (await s.w.request('GET', `/installs/${s.id}/autopilot`, admin)).json()
   assert.equal(list.sessions.length, 1)
   assert.equal(list.sessions[0].connected, true)
+  second.ws.answer = () => ({ ok: true, result: 'via second' })
+  first.ws.answer = () => ({ ok: true, result: 'via first' })
+  assert.equal((await cmd(s.w, p.session, { op: 'note', label: 'x' })).body.result, 'via second')
 })
 
 test('cmd: admin only; a method off the list never reaches the browser', async () => {
@@ -211,12 +216,14 @@ test('human step: a slow answer comes back as 202 pending, then by polling', asy
   assert.equal((await p.json()).result, 'done')
 })
 
-test('teardown: closing the socket deletes the session, its token and any held secret', async () => {
+test('teardown: a bye from the extension deletes the session, its token and any held secret at once', async () => {
   const { w, id, session } = await pairedSession()
   session.ws.answer = (c) => (c.op === 'save_secret' ? { ok: true, secret: true, value: fakeGoogleKey() } : null)
   await cmd(w, session.id, { op: 'save_secret', ref: 3, secretTarget: 'k', label: '' })
   const pending = cmd(w, session.id, { op: 'human_step', label: 'Your turn', wait_ms: 5000 })
   await new Promise((r) => setTimeout(r, 5))
+  await w.autopilot.core.onMessage(session.ws, JSON.stringify({ type: 'bye', text: 'Disconnected by you' }))
+  assert.equal(session.ws.closed.code, 1000)
   await w.autopilot.disconnect(session.ws)
   const p = await pending
   assert.equal(p.body.ok, false)
@@ -227,7 +234,108 @@ test('teardown: closing the socket deletes the session, its token and any held s
   assert.equal((await cmd(w, session.id, { op: 'note', label: 'x' })).status, 404)
   const list = await (await w.request('GET', `/installs/${id}/autopilot`, admin)).json()
   assert.equal(list.sessions.length, 0)
-  assert.match(await journalText(w, id), /browser disconnected/)
+  assert.match(await journalText(w, id), /Disconnected by you \(session aps_\w+ ended\)/)
+})
+
+// #281: the socket died one-sidedly around a human step and every later call
+// failed. A drop now keeps the session for the extension to come back to.
+test('reconnect: Done pressed across a dropped socket still lands, and the session keeps working', async () => {
+  const { w, id, session } = await pairedSession()
+  const hs = cmd(w, session.id, { op: 'human_step', label: 'Set Duration to Forever', wait_ms: 5 })
+  assert.equal((await hs).status, 202)
+  const hsId = (await hs).body.id
+  const lost = cmd(w, session.id, { op: 'cdp', method: 'DOM.getBoxModel', params: { backendNodeId: 4 }, label: '', wait_ms: 5 })
+  assert.equal((await lost).status, 202)
+  await w.autopilot.disconnect(session.ws)
+
+  const mid = (await (await w.request('GET', `/installs/${id}/autopilot`, admin)).json()).sessions[0]
+  assert.equal(mid.connected, false)
+  assert.equal(mid.reconnecting, true)
+  assert.equal(mid.tab_url, null)
+  const refused = await cmd(w, session.id, { op: 'note', label: 'x' })
+  assert.equal(refused.status, 409)
+  assert.match(refused.body.error, /not answering/)
+
+  w.clock.advance(RECONNECT_GRACE_MS - 1000)
+  await w.autopilot.core.onAlarm()
+  const back = (await ws(w, session.token)).ws
+  assert.ok(back, 'same token reconnects inside the grace window')
+  // The extension flushes the Done it held, then says hello.
+  await w.autopilot.core.onMessage(back, JSON.stringify({ type: 'reply', id: hsId, ok: true, result: 'done' }))
+  await w.autopilot.core.onMessage(back, JSON.stringify({ type: 'hello', tab_url: 'https://console.cloud.google.com/x' }))
+  const done = await w.request('GET', `/autopilot/${session.id}/cmd/${hsId}?wait_ms=10`, admin)
+  assert.equal((await done.json()).result, 'done')
+  const failed = await (await w.request('GET', `/autopilot/${session.id}/cmd/${(await lost).body.id}?wait_ms=10`, admin)).json()
+  assert.equal(failed.ok, false)
+  assert.match(failed.error, /reconnected before answering/)
+  assert.equal(back.commands().length, 0, 'nothing but a pending human step is ever re-sent')
+
+  back.answer = (c) => ({ ok: true, result: c.op })
+  const after = await cmd(w, session.id, { op: 'cdp', method: 'Accessibility.getFullAXTree', label: '' })
+  assert.equal(after.status, 200)
+  w.clock.advance(RECONNECT_GRACE_MS)
+  back.lastPing = w.clock.now()
+  await w.autopilot.core.onAlarm()
+  const list = (await (await w.request('GET', `/installs/${id}/autopilot`, admin)).json()).sessions
+  assert.equal(list.length, 1)
+  assert.equal(list[0].connected, true)
+  assert.equal(list[0].tab_url, 'https://console.cloud.google.com/x')
+  assert.match(await journalText(w, id), /connection dropped.*browser reconnected/s)
+})
+
+test('reconnect: a human step still waiting for Done is shown again on the new socket', async () => {
+  const { w, session } = await pairedSession()
+  const hs = await cmd(w, session.id, { op: 'human_step', label: 'Your turn', wait_ms: 5 })
+  await w.autopilot.disconnect(session.ws)
+  w.clock.advance(1000)
+  const back = (await ws(w, session.token)).ws
+  await w.autopilot.core.onMessage(back, JSON.stringify({ type: 'hello', tab_url: 'https://console.cloud.google.com/' }))
+  assert.deepEqual(back.commands(), [{ id: hs.body.id, op: 'human_step', label: 'Your turn' }])
+})
+
+test('reconnect: a socket that never comes back is ended by the sweep after the grace window', async () => {
+  const { w, id, session } = await pairedSession()
+  const pending = cmd(w, session.id, { op: 'human_step', label: 'Your turn', wait_ms: 5000 })
+  await new Promise((r) => setTimeout(r, 5))
+  await w.autopilot.disconnect(session.ws)
+  assert.ok(w.autopilot.alarm() !== null, 'the sweep is scheduled')
+  w.clock.advance(RECONNECT_GRACE_MS + 1)
+  await w.autopilot.core.onAlarm()
+  assert.equal((await pending).body.ok, false)
+  assert.equal(w.autopilot.core['rows']('SELECT * FROM ap_session').length, 0)
+  assert.equal((await ws(w, session.token)).status, 401)
+  assert.equal(w.autopilot.alarm(), null)
+  assert.match(await journalText(w, id), /did not come back/)
+})
+
+test('reconnect: the late close of a replaced socket changes nothing', async () => {
+  const { w, id, session } = await pairedSession()
+  const back = (await ws(w, session.token)).ws
+  await w.autopilot.disconnect(session.ws)
+  const list = (await (await w.request('GET', `/installs/${id}/autopilot`, admin)).json()).sessions
+  assert.equal(list[0].connected, true)
+  assert.equal(list[0].reconnecting, false)
+  back.answer = () => ({ ok: true, result: 'ok' })
+  assert.equal((await cmd(w, session.id, { op: 'note', label: 'x' })).status, 200)
+})
+
+test('liveness: a socket nothing came over for STALE_MS reads connected:false, and commands are refused', async () => {
+  const { w, id, session } = await pairedSession()
+  const list = async () => (await (await w.request('GET', `/installs/${id}/autopilot`, admin)).json()).sessions[0]
+  assert.equal((await list()).connected, true)
+  w.clock.advance(STALE_MS + 1)
+  const stale = await list()
+  assert.equal(stale.connected, false)
+  assert.equal(stale.reconnecting, true)
+  assert.equal(stale.tab_url, null)
+  assert.equal((await cmd(w, session.id, { op: 'note', label: 'x' })).status, 409)
+  assert.equal(session.ws.commands().length, 0)
+  // A keepalive ping the runtime answered counts as heard from.
+  session.ws.lastPing = w.clock.now()
+  assert.equal((await list()).connected, true)
+  w.clock.advance(STALE_MS + 1)
+  await w.autopilot.core.onMessage(session.ws, JSON.stringify({ type: 'tab', tab_url: 'https://console.cloud.google.com/y' }))
+  assert.equal((await list()).connected, true)
 })
 
 test('teardown: DELETE ends the session and closes the socket', async () => {
@@ -456,4 +564,35 @@ test('challenge: a refused probe is not journaled; it runs after every click and
   const r = await cmd(w, session.id, { op: 'challenge', label: '' })
   assert.equal(r.body.ok, false)
   assert.ok(!/challenge: failed/.test(await journalText(w, id)))
+})
+
+test('click, type and select_option: forwarded with a numeric ref, text and pacing; bad input never reaches the browser', async () => {
+  const { w, session } = await pairedSession()
+  session.ws.answer = (c) => ({ ok: true, result: c.op })
+  for (const c of [
+    { op: 'click', ref: '[12]', label: 'Click button "Save"', pacing: 'off' },
+    { op: 'type', ref: 13, text: 'Gold for Silver', clear: true, submit: false, label: 'Type into textbox "Name"' },
+    { op: 'select_option', ref: 14, text: 'Forever', label: 'Choose "Forever" in combobox "Duration"', pacing: 'human' },
+  ]) assert.equal((await cmd(w, session.id, c)).status, 200, c.op)
+  const [click, type, sel] = session.ws.commands()
+  assert.deepEqual(click, { id: click.id, op: 'click', label: 'Click button "Save"', ref: 12, pacing: 'off' })
+  assert.deepEqual(type, { id: type.id, op: 'type', label: 'Type into textbox "Name"', ref: 13, text: 'Gold for Silver', clear: true })
+  assert.deepEqual(sel, { id: sel.id, op: 'select_option', label: 'Choose "Forever" in combobox "Duration"', ref: 14, text: 'Forever', pacing: 'human' })
+  for (const bad of [
+    { op: 'click', label: '' },
+    { op: 'type', ref: 1, label: '' },
+    { op: 'type', ref: 1, text: 'x'.repeat(2001), label: '' },
+    { op: 'type', ref: 1, text: 'x', clear: 'yes', label: '' },
+    { op: 'select_option', ref: 1, text: '  ', label: '' },
+    { op: 'select_option', text: 'Once', label: '' },
+    { op: 'click', ref: 1, pacing: 'robot', label: '' },
+  ]) assert.equal((await cmd(w, session.id, bad)).status, 400, JSON.stringify(bad))
+  assert.equal(session.ws.commands().length, 3)
+})
+
+test('human step: the 300-char label cap is the error the driver sees', async () => {
+  const { w, session } = await pairedSession()
+  const r = await cmd(w, session.id, { op: 'human_step', label: 'x'.repeat(301) })
+  assert.equal(r.status, 400)
+  assert.match(r.body.error, /300 chars/)
 })

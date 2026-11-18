@@ -13,6 +13,11 @@
 //   admin  GET  /autopilot/:session/cmd/:id     -> poll           for replies that outlast one request
 //   admin  POST /autopilot/:session/secret      -> takeSecret     one-shot, raw value, then gone
 //
+// Socket rule (#281): a close only starts a RECONNECT_GRACE_MS hold; the
+// extension comes back with the same token and replaces the socket. "bye"
+// from the extension or the driver's DELETE ends a session at once.
+// connected means heard from in the last STALE_MS, not merely an open socket.
+//
 // Secret rule: a save_secret reply's value goes into ap_secret for at most 5
 // minutes and leaves only through takeSecret. It is never in a cmd reply,
 // the journal or a log line. Every other reply passes the redactor first.
@@ -29,6 +34,12 @@ export const SECRET_TTL_MS = 4.5 * 60 * 1000
 const SWEEP_MS = 30_000
 // A paired session whose socket never opens is dropped after this.
 export const UNCONNECTED_TTL_MS = 10 * 60 * 1000
+// A dropped socket (network blip, laptop sleep, a worker restart) keeps its
+// session this long so the extension can come back with the same token.
+export const RECONNECT_GRACE_MS = 2 * 60 * 1000
+// The extension pings every 20 s. A socket with no ping or message for this
+// long is a zombie: the far end is gone and the close never arrived.
+export const STALE_MS = 60_000
 export const MAX_WAIT_MS = 25_000
 export const DEFAULT_WAIT_MS = 15_000
 // Failed pairing attempts allowed per minute across the whole relay.
@@ -53,7 +64,9 @@ export function toRef(v: unknown): number | null {
   return Number.isInteger(n) && n > 0 && n <= 0x7fffffff ? n : null
 }
 
-export const RELAY_OPS = ['cdp', 'scroll', 'save_secret', 'human_step', 'note', 'screenshot', 'clear', 'challenge'] as const
+export const RELAY_OPS = ['cdp', 'scroll', 'save_secret', 'human_step', 'note', 'screenshot', 'clear', 'challenge', 'click', 'type', 'select_option'] as const
+export const PACING = ['off', 'human'] as const
+export const MAX_TYPE_CHARS = 2000
 
 // A screenshot reply's base64 JPEG. Matches MAX_SCREENSHOT_B64 in
 // chrome-ext/policy.js and stays well under the 2 MB SQLite row cap.
@@ -81,8 +94,12 @@ export interface RelayCommand {
   op: RelayOp
   method?: (typeof RELAY_METHODS)[number]
   params?: Record<string, unknown>
-  ref?: number // backendDOMNodeId, for save_secret and clear
+  ref?: number // backendDOMNodeId, for save_secret, clear, click, type and select_option
   dy?: number // for scroll
+  text?: string // type: the text; select_option: the option's value or label
+  clear?: boolean // type only
+  submit?: boolean // type only
+  pacing?: (typeof PACING)[number] // click, type, select_option and cdp Page.navigate
   label: string // the side panel and journal line, in plain words; '' for helper calls
   secretTarget?: string // save_secret only: the vault item name
 }
@@ -103,9 +120,12 @@ export interface AutopilotDeps {
   now(): number
   setAlarm(at: number | null): Promise<void>
   getAlarm(): Promise<number | null>
-  accept(ws: WsLike, sessionId: string): void
+  accept(ws: WsLike, sessionId: string, conn: string, at: number): void
   sockets(sessionId: string): WsLike[]
-  attachment(ws: WsLike): { session_id: string } | null
+  attachment(ws: WsLike): { session_id: string; conn?: string; at?: number } | null
+  // When the runtime last answered this socket's "ping" without waking the
+  // object (getWebSocketAutoResponseTimestamp), or null.
+  lastPing(ws: WsLike): number | null
   // Writes one line into that install's journal (InstallDO.autopilotNote).
   journal(installId: string, line: string): Promise<void>
 }
@@ -119,6 +139,8 @@ export interface Session {
   created_at: number
   connected_at: number | null
   tab_url: string | null
+  disconnected_at: number | null
+  last_seen: number | null
 }
 
 export const AUTOPILOT_DDL = [
@@ -143,6 +165,12 @@ export const AUTOPILOT_DDL = [
   `CREATE TABLE IF NOT EXISTS ap_journal (
     seq INTEGER PRIMARY KEY AUTOINCREMENT, owner_id TEXT NOT NULL, line TEXT NOT NULL, at INTEGER NOT NULL)`,
 ]
+
+// Columns added after the first deploy; ap_session already exists there.
+const AP_SESSION_ADDED = ['disconnected_at INTEGER', 'last_seen INTEGER']
+
+type SessionRow = Omit<Session, 'allow' | 'task' | 'start_url'> & { runbook: string }
+const SESSION_COLS = 'session_id, install_id, runbook, created_at, connected_at, tab_url, disconnected_at, last_seen'
 
 export type Out = { status: number; body: Record<string, unknown> }
 
@@ -188,6 +216,18 @@ export function commandError(c: Record<string, unknown>): string | null {
     if (typeof c.secretTarget !== 'string' || !c.secretTarget.trim() || c.secretTarget.length > 200) return 'save_secret needs secretTarget'
   }
   if (c.op === 'clear' && toRef(c.ref) === null) return 'clear needs ref'
+  if (c.op === 'click' && toRef(c.ref) === null) return 'click needs ref'
+  if (c.op === 'type') {
+    if (toRef(c.ref) === null) return 'type needs ref'
+    if (typeof c.text !== 'string' || c.text.length > MAX_TYPE_CHARS) return `type needs text up to ${MAX_TYPE_CHARS} chars`
+    if (c.clear !== undefined && typeof c.clear !== 'boolean') return 'clear must be a boolean'
+    if (c.submit !== undefined && typeof c.submit !== 'boolean') return 'submit must be a boolean'
+  }
+  if (c.op === 'select_option') {
+    if (toRef(c.ref) === null) return 'select_option needs ref'
+    if (typeof c.text !== 'string' || !c.text.trim() || c.text.length > 300) return 'select_option needs the option value or label, up to 300 chars'
+  }
+  if (c.pacing !== undefined && !PACING.includes(c.pacing as (typeof PACING)[number])) return `pacing must be one of ${PACING.join(', ')}`
   if (c.op === 'scroll' && !Number.isInteger(c.dy)) return 'scroll needs integer dy'
   if (c.op === 'human_step' && !c.label) return 'human_step needs a label'
   return null
@@ -202,6 +242,8 @@ export class AutopilotCore {
   constructor(d: AutopilotDeps) {
     this.d = d
     for (const ddl of AUTOPILOT_DDL) d.sql.exec(ddl)
+    const have = new Set(this.rows<{ name: string }>('PRAGMA table_info(ap_session)').map((c) => c.name))
+    for (const col of AP_SESSION_ADDED) if (!have.has(col.split(' ')[0])) d.sql.exec(`ALTER TABLE ap_session ADD COLUMN ${col}`)
   }
 
   private rows<T>(q: string, ...b: unknown[]): T[] {
@@ -214,15 +256,12 @@ export class AutopilotCore {
     if (cur === null || cur > at) await this.d.setAlarm(at)
   }
 
-  private sessionRow(sessionId: string): (Omit<Session, 'allow' | 'task' | 'start_url'> & { runbook: string }) | null {
-    const [r] = this.rows<Omit<Session, 'allow' | 'task' | 'start_url'> & { runbook: string }>(
-      'SELECT session_id, install_id, runbook, created_at, connected_at, tab_url FROM ap_session WHERE session_id = ?',
-      sessionId,
-    )
+  private sessionRow(sessionId: string): SessionRow | null {
+    const [r] = this.rows<SessionRow>(`SELECT ${SESSION_COLS} FROM ap_session WHERE session_id = ?`, sessionId)
     return r ?? null
   }
 
-  private view(r: { session_id: string; install_id: string; runbook: string; created_at: number; connected_at: number | null; tab_url: string | null }): Session {
+  private view(r: SessionRow): Session {
     const rb = runbook(r.runbook) as Runbook
     return { ...r, allow: rb.allow, task: rb.task, start_url: rb.start_url }
   }
@@ -345,15 +384,57 @@ export class AutopilotCore {
     if (!token) return null
     const [r] = this.rows<{ session_id: string }>('SELECT session_id FROM ap_session WHERE token_hash = ?', await sha256Hex(token))
     if (!r) return null
-    if (this.d.sockets(r.session_id).length > 0) return null
     const s = this.sessionRow(r.session_id)
     return s ? this.view(s) : null
   }
 
+  // The token holder is the extension, so a second socket with the same
+  // token is that extension coming back after a drop: it replaces whatever
+  // socket the relay still holds, which is dead or about to be.
   async accept(ws: WsLike, s: Session): Promise<void> {
-    this.d.accept(ws, s.session_id)
-    this.d.sql.exec('UPDATE ap_session SET connected_at = ? WHERE session_id = ?', this.d.now(), s.session_id)
-    await this.journal(s.install_id, `browser connected (session ${s.session_id})`)
+    const now = this.d.now()
+    const old = this.d.sockets(s.session_id)
+    for (const o of old) {
+      try {
+        o.close(4000, 'replaced by a reconnect')
+      } catch {
+        // already closing
+      }
+    }
+    this.d.accept(ws, s.session_id, `apw_${ulid(now)}`, now)
+    const back = s.connected_at !== null
+    this.d.sql.exec(
+      'UPDATE ap_session SET connected_at = COALESCE(connected_at, ?), disconnected_at = NULL, last_seen = ? WHERE session_id = ?',
+      now,
+      now,
+      s.session_id,
+    )
+    await this.journal(s.install_id, `browser ${back ? 'reconnected' : 'connected'} (session ${s.session_id})`)
+  }
+
+  // A socket counts only if the extension has been heard from lately: a
+  // message, or a keepalive ping the runtime answered. A socket whose far end
+  // vanished without a close stays open here, and must not read as live.
+  // Only the newest socket counts: accept() replaced any older one, which
+  // lingers only until its close lands.
+  private liveSockets(sessionId: string, lastSeen: number | null): WsLike[] {
+    const newest = this.newestSocket(sessionId)
+    if (!newest) return []
+    const heard = Math.max(lastSeen ?? 0, this.d.lastPing(newest) ?? 0, this.d.attachment(newest)?.at ?? 0)
+    return heard >= this.d.now() - STALE_MS ? [newest] : []
+  }
+
+  private newestSocket(sessionId: string): WsLike | null {
+    let best: WsLike | null = null
+    let at = -1
+    for (const ws of this.d.sockets(sessionId)) {
+      const a = this.d.attachment(ws)?.at ?? 0
+      if (a >= at) {
+        best = ws
+        at = a
+      }
+    }
+    return best
   }
 
   // ---- socket events -----------------------------------------------------
@@ -363,6 +444,7 @@ export class AutopilotCore {
     if (!att) return ws.close(1008, 'no session')
     const s = this.sessionRow(att.session_id)
     if (!s) return ws.close(1008, 'session ended')
+    this.d.sql.exec('UPDATE ap_session SET last_seen = ? WHERE session_id = ?', this.d.now(), s.session_id)
     let m: Record<string, unknown>
     try {
       m = JSON.parse(typeof data === 'string' ? data : new TextDecoder().decode(data))
@@ -372,6 +454,13 @@ export class AutopilotCore {
     if (m.type === 'hello' || m.type === 'tab') {
       const url = typeof m.tab_url === 'string' ? m.tab_url.slice(0, 500) : null
       this.d.sql.exec('UPDATE ap_session SET tab_url = ? WHERE session_id = ?', url, s.session_id)
+      if (m.type === 'hello') await this.resume(ws, s.session_id, att.at ?? 0)
+      return
+    }
+    if (m.type === 'bye') {
+      // The person ended it in the browser: Disconnect, Cancel on Chrome's
+      // bar, or closing the tab. That ends the session now, no grace.
+      await this.end(s.session_id, typeof m.text === 'string' && m.text ? m.text.slice(0, 200) : 'browser disconnected')
       return
     }
     if (m.type === 'event' && typeof m.text === 'string') {
@@ -437,9 +526,41 @@ export class AutopilotCore {
     if (w) w(JSON.parse(text))
   }
 
+  // After a reconnect the extension flushes the replies it held while the
+  // socket was down, then says hello. Whatever is still unanswered at that
+  // point was lost with the old socket. A human step is shown again (the
+  // extension treats a repeat of its current turn as a no-op); anything else
+  // fails rather than run twice, since a click or a navigate may have landed.
+  private async resume(ws: WsLike, sessionId: string, since: number): Promise<void> {
+    const pending = this.rows<{ id: string; op: string; label: string }>(
+      'SELECT id, op, label FROM ap_cmd WHERE session_id = ? AND body IS NULL AND created_at < ? ORDER BY created_at',
+      sessionId,
+      since,
+    )
+    for (const p of pending) {
+      if (p.op === 'human_step') {
+        ws.send(JSON.stringify({ id: p.id, op: 'human_step', label: p.label }))
+        continue
+      }
+      const body = JSON.stringify({ ok: false, error: 'the browser reconnected before answering this; take a fresh snapshot and try again' })
+      this.d.sql.exec('UPDATE ap_cmd SET body = ? WHERE id = ?', body, p.id)
+      this.waiters.get(p.id)?.(JSON.parse(body))
+    }
+  }
+
+  // A close is not the end: the extension reconnects with its token, and the
+  // sweep ends the session if it has not within RECONNECT_GRACE_MS. Only a
+  // "bye" from the extension or the driver's DELETE ends it at once.
   async onClose(ws: WsLike): Promise<void> {
     const att = this.d.attachment(ws)
-    if (att) await this.end(att.session_id, 'browser disconnected')
+    if (!att) return
+    // The late close of a socket a reconnect already replaced.
+    if (this.d.sockets(att.session_id).some((o) => this.d.attachment(o)?.conn !== att.conn)) return
+    const s = this.sessionRow(att.session_id)
+    if (!s || s.disconnected_at !== null) return
+    this.d.sql.exec('UPDATE ap_session SET disconnected_at = ? WHERE session_id = ?', this.d.now(), att.session_id)
+    await this.scheduleSweep()
+    await this.journal(s.install_id, `browser connection dropped, holding the session ${RECONNECT_GRACE_MS / 60_000} min for it to come back (session ${att.session_id})`)
   }
 
   // Deletes the session, its token, any held secret and pending commands.
@@ -465,13 +586,18 @@ export class AutopilotCore {
   // ---- driver ------------------------------------------------------------
 
   listSessions(installId: string): Out {
-    const rows = this.rows<{ session_id: string; install_id: string; runbook: string; created_at: number; connected_at: number | null; tab_url: string | null }>(
-      'SELECT session_id, install_id, runbook, created_at, connected_at, tab_url FROM ap_session WHERE install_id = ? ORDER BY created_at',
-      installId,
-    )
+    const rows = this.rows<SessionRow>(`SELECT ${SESSION_COLS} FROM ap_session WHERE install_id = ? ORDER BY created_at`, installId)
     const sessions = rows.map((r) => {
       const v = this.view(r)
-      return { ...v, connected: this.d.sockets(r.session_id).length > 0, tab_url: r.tab_url ? this.redactor().redact(r.tab_url) : null }
+      const connected = this.liveSockets(r.session_id, r.last_seen).length > 0
+      return {
+        ...v,
+        connected,
+        // A socket is open but nothing came over it for STALE_MS, or it
+        // closed and the extension has not come back yet.
+        reconnecting: !connected && (r.disconnected_at !== null || this.d.sockets(r.session_id).length > 0),
+        tab_url: connected && r.tab_url ? this.redactor().redact(r.tab_url) : null,
+      }
     })
     return { status: 200, body: { sessions } }
   }
@@ -479,8 +605,13 @@ export class AutopilotCore {
   async forward(sessionId: string, raw: Record<string, unknown>, waitMs?: number): Promise<Out> {
     const s = this.sessionRow(sessionId)
     if (!s) return { status: 404, body: { error: 'no such session' } }
-    const sockets = this.d.sockets(sessionId)
-    if (sockets.length === 0) return { status: 409, body: { error: 'browser not connected' } }
+    const sockets = this.liveSockets(sessionId, s.last_seen)
+    if (sockets.length === 0) {
+      const why = s.disconnected_at !== null || this.d.sockets(sessionId).length > 0
+        ? 'browser not answering (connection dropped; it reconnects on its own for up to 2 min, else pair again)'
+        : 'browser not connected'
+      return { status: 409, body: { error: why } }
+    }
     const err = commandError(raw)
     if (err) return { status: 400, body: { error: err } }
     const cmd: RelayCommand = {
@@ -497,7 +628,13 @@ export class AutopilotCore {
       cmd.ref = toRef(raw.ref) as number
       cmd.secretTarget = (raw.secretTarget as string).trim()
     }
-    if (cmd.op === 'clear') cmd.ref = toRef(raw.ref) as number
+    if (cmd.op === 'clear' || cmd.op === 'click' || cmd.op === 'type' || cmd.op === 'select_option') cmd.ref = toRef(raw.ref) as number
+    if (cmd.op === 'type' || cmd.op === 'select_option') cmd.text = raw.text as string
+    if (cmd.op === 'type') {
+      if (raw.clear) cmd.clear = true
+      if (raw.submit) cmd.submit = true
+    }
+    if (raw.pacing !== undefined) cmd.pacing = raw.pacing as RelayCommand['pacing']
     if (cmd.op === 'scroll') cmd.dy = raw.dy as number
     // The journal says a screenshot was taken whatever the driver called it.
     if (cmd.op === 'screenshot') cmd.label = SCREENSHOT_LABEL
@@ -569,10 +706,15 @@ export class AutopilotCore {
       now - UNCONNECTED_TTL_MS,
     )
     for (const r of stale) await this.end(r.session_id, 'pairing never connected')
+    const dropped = this.rows<{ session_id: string }>(
+      'SELECT session_id FROM ap_session WHERE disconnected_at IS NOT NULL AND disconnected_at < ?',
+      now - RECONNECT_GRACE_MS,
+    )
+    for (const r of dropped) await this.end(r.session_id, 'browser disconnected and did not come back')
     const left =
       this.rows('SELECT 1 FROM ap_code LIMIT 1').length +
       this.rows('SELECT 1 FROM ap_secret LIMIT 1').length +
-      this.rows('SELECT 1 FROM ap_session WHERE connected_at IS NULL LIMIT 1').length
+      this.rows('SELECT 1 FROM ap_session WHERE connected_at IS NULL OR disconnected_at IS NOT NULL LIMIT 1').length
     await this.d.setAlarm(left ? now + SWEEP_MS : null)
   }
 }

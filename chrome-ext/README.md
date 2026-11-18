@@ -37,7 +37,7 @@ Chrome only (Manifest V3, Chrome 116+).
 5. `save_secret` reads one field and sends the value only to the relay, which
    holds it for one fetch. The driver gets "captured", never the value.
    Snapshots drop all field values.
-6. Three ops run whole inside the extension, so the driver cannot skip their
+6. These ops run whole inside the extension, so the driver cannot skip their
    safeguards. Their CDP calls are not in `ALLOWED_METHODS`:
    - `screenshot`: a JPEG of the bound tab. Before it leaves the worker, every
      text field and textarea, every frame off the allowed sites or in another
@@ -53,9 +53,37 @@ Chrome only (Manifest V3, Chrome 116+).
      hCaptcha, Turnstile, DataDome, PerimeterX, Arkose, AWS WAF) in the pierced
      DOM tree, frame boxes and tab title, and answers with a fixed kind and
      whether it blocks. The driver turns a blocking one into a human step.
-7. Disconnect (popup or side panel), Cancel on Chrome's bar, closing the tab,
-   or switching the extension off closes the socket; the relay then deletes
-   the session token and anything it held.
+   - `click`, `type`: the pointer moves to a point near the middle of the
+     element and presses; typing goes in one key event per ordinary
+     character (newlines, tabs and emoji through `insertText`, so Enter never
+     submits a form). `type` can `clear` first and stops if that fails.
+   - `select_option`: sets a native `<select>` by option value or label
+     through the prototype setter, then fires bubbling `input` and `change`,
+     so React-controlled selects (Stripe's coupon Duration) take it. A
+     custom dropdown is refused with "not a native select".
+7. Pacing. Each `click`, `type`, `select_option` and `Page.navigate` carries
+   `pacing`: `human` (the default when absent) waits 150 to 600 ms before the
+   action, moves the mouse in a few eased steps to a point a little off
+   centre, and types with 30 to 120 ms between keys and the odd longer
+   pause. `off` does none of that (tests). This is timing only: no user
+   agent or fingerprint changes, and a bot check still goes to the person.
+8. A command that fails with "Cannot access a chrome-extension:// URL of
+   different extension" (another extension's frame in the way) is retried
+   once after 800 ms, and only if nothing reached the page yet. Every
+   `chrome.debugger` call has a deadline, so one stuck call cannot wedge the
+   queue.
+9. A dropped socket does not end the session (#281). The worker pings every
+   20 s and calls a Chrome API on the same beat so it is not stopped while
+   the debugger is off the tab. No pong for 45 s means the socket is dead:
+   the worker reconnects with the same token (backoff up to 15 s, for up to
+   100 s) and the relay holds the session for 2 minutes. Replies made while
+   the socket was down, such as Done, are sent first on the new socket; a
+   Done lost in the dead socket is answered again when the relay re-sends
+   that turn. Other commands in flight fail with "reconnected before
+   answering" and are never replayed.
+10. Disconnect (popup or side panel), Cancel on Chrome's bar, closing the tab,
+   or switching the extension off sends `bye` and closes the socket; the
+   relay then deletes the session token and anything it held at once.
 
 ## Why a page cannot press Done
 
@@ -80,7 +108,7 @@ input-event click succeeds.
 | `manifest.json` | MV3; permissions `debugger`, `tabs`, `storage`, `sidePanel`; host permission for the relay origin only. |
 | `config.js` | `RELAY_ORIGIN`. `build.sh` rewrites it and the host permission together. |
 | `policy.js` | Pure allowlist and method policy, AX tree compaction, screenshot masking targets, clear key sequence, bot-check classifier, message guard. Tested in `test/`. |
-| `background.js` | Service worker: pairing, socket, command execution, teardown. |
+| `background.js` | Service worker: pairing, socket and reconnect, command execution, pacing, teardown. |
 | `popup.*` | Code entry, status, allowed sites, last session. |
 | `sidepanel.*` | Live action log, "Your turn" with Done, Disconnect. |
 

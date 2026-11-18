@@ -1,34 +1,59 @@
 // Service worker: one WebSocket out to the relay, one bound tab, and the
 // policy check (policy.js) on every command before anything touches the tab.
 // The session token lives only in this worker's memory and the socket URL.
+// A dropped socket is not the end of the session: the worker reconnects with
+// the same token and the relay holds the session for it (#281).
 
 import { RELAY_ORIGIN } from './config.js'
 import {
   FIELD_STATE_FN,
   MAX_SCREENSHOT_B64,
   READ_FIELD_FN,
+  SELECT_OPTION_FN,
+  actionPause,
   challengeFacts,
   classifyChallenge,
   clearKeys,
+  clickPoint,
   compactAX,
   hostAllowed,
+  keyGap,
+  keyPlan,
   maskNodeIds,
   messageRefusal,
+  mousePath,
   normalizeCode,
   quadToRect,
   refusal,
   scrollExpression,
   secretShapeIds,
+  transientError,
 } from './policy.js'
 
 const store = chrome.storage.session
 
 let ws = null
-let session = null // { allow, task, tabId, startedAt, steps, secretRefs }
+let session = null // { token, allow, task, tabId, startedAt, steps, secretRefs }
 let attachedTab = null
 let keepalive = null
-let turn = null // { id, nonce } while a "Your turn" step waits for Done
+let turn = null // { id, nonce, text } while a "Your turn" step waits for Done
 let queue = Promise.resolve()
+let lastHeard = 0 // last message or pong from the relay
+let outbox = [] // replies and events held while the socket is down
+let retry = null // { attempt, since, timer } while reconnecting
+let pointer = null // where the last paced click left the mouse
+// Turns already finished, by command id. A Done sent into a socket that was
+// already dead is lost; the relay re-sends the turn after the reconnect, and
+// this answers it again instead of asking the person twice.
+const finished = new Map()
+
+const PING_MS = 20_000
+// No pong for this long and the socket is dead, whatever its readyState says.
+const DEAD_MS = 45_000
+// Inside the relay's 2 min hold (RECONNECT_GRACE_MS), with room to spare.
+const RECONNECT_FOR_MS = 100_000
+const BACKOFF_MS = [500, 1000, 2000, 4000, 8000, 15000]
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // A restarted worker has no socket, so whatever the panel last showed is stale.
 store.set({ status: 'off', turn: null, current: null })
@@ -40,7 +65,9 @@ async function log(text, kind) {
 }
 
 function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj))
+  if (ws && ws.readyState === WebSocket.OPEN) return ws.send(JSON.stringify(obj))
+  // A Done pressed while the socket is down must still reach the driver.
+  if (session && (obj.type === 'reply' || obj.type === 'event')) outbox = [...outbox, obj].slice(-100)
 }
 
 function reply(id, body) {
@@ -51,39 +78,119 @@ function event(text) {
   send({ type: 'event', text })
 }
 
+// A chrome.debugger call that never settles would wedge the command queue
+// for the rest of the session, so each one gets a deadline.
+function within(ms, p, what) {
+  let t
+  return Promise.race([
+    p,
+    new Promise((_, rej) => {
+      t = setTimeout(() => rej(new Error(`${what} did not answer in ${ms / 1000} s`)), ms)
+    }),
+  ]).finally(() => clearTimeout(t))
+}
+
 async function attach() {
   if (attachedTab === session.tabId) return
-  await chrome.debugger.attach({ tabId: session.tabId }, '1.3')
+  await within(10_000, chrome.debugger.attach({ tabId: session.tabId }, '1.3'), 'attaching to the tab')
   attachedTab = session.tabId
 }
 
 async function detach() {
   const t = attachedTab
   attachedTab = null
-  if (t !== null) await chrome.debugger.detach({ tabId: t }).catch(() => {})
+  if (t !== null) await within(5_000, chrome.debugger.detach({ tabId: t }), 'detaching').catch(() => {})
 }
 
 function cdp(method, params) {
-  return chrome.debugger.sendCommand({ tabId: session.tabId }, method, params || {})
+  return within(30_000, chrome.debugger.sendCommand({ tabId: session.tabId }, method, params || {}), method)
 }
 
-async function callOn(ref, fn) {
+async function callOn(ref, fn, args) {
   const { object } = await cdp('DOM.resolveNode', { backendNodeId: ref })
   try {
-    const r = await cdp('Runtime.callFunctionOn', { objectId: object.objectId, functionDeclaration: fn, returnByValue: true })
+    const r = await cdp('Runtime.callFunctionOn', {
+      objectId: object.objectId,
+      functionDeclaration: fn,
+      arguments: (args || []).map((value) => ({ value })),
+      returnByValue: true,
+    })
     return r && r.result ? r.result.value : undefined
   } finally {
     await cdp('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {})
   }
 }
 
-async function box(ref) {
+async function box(ref, which = 'border') {
   try {
     const { model } = await cdp('DOM.getBoxModel', { backendNodeId: ref })
-    return model.border
+    return model[which]
   } catch {
     return null // not rendered
   }
+}
+
+// A click the way a hand makes one: the pointer travels to a point near the
+// middle of the element, then presses and lets go. progress.pressed says
+// whether anything reached the page, so a retry never double-clicks.
+async function humanClick(ref, pacing, progress = {}) {
+  await cdp('DOM.scrollIntoViewIfNeeded', { backendNodeId: ref }).catch(() => {})
+  const q = (await box(ref, 'content')) || (await box(ref))
+  if (!q) throw new Error('that element is not on screen (no layout); for an <option> use select_option')
+  const to = clickPoint(q, pacing)
+  for (const p of mousePath(pointer, to, pacing)) {
+    await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y })
+    if (pacing !== 'off') await sleep(8 + Math.random() * 20)
+  }
+  pointer = to
+  if (pacing !== 'off') await sleep(40 + Math.random() * 80)
+  progress.pressed = true
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x: to.x, y: to.y, button: 'left', clickCount: 1 })
+  if (pacing !== 'off') await sleep(50 + Math.random() * 70)
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x: to.x, y: to.y, button: 'left', clickCount: 1 })
+  return { clicked: true }
+}
+
+const ENTER = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
+
+// Typing: with pacing one key at a time with small uneven gaps, else one
+// insertText. clear empties the field first and stops if it could not.
+async function typeInto(cmd, pacing, progress = {}) {
+  if (cmd.clear) {
+    const c = await clearField(cmd.ref)
+    if (c.cleared === false || c.cleared === null) {
+      throw new Error(`could not clear that field (${c.error || `still has text, field kind ${c.kind}`}); nothing was typed`)
+    }
+  } else {
+    await cdp('DOM.focus', { backendNodeId: cmd.ref })
+  }
+  for (const step of keyPlan(cmd.text, pacing)) {
+    progress.typed = true
+    if (step.insert !== undefined) {
+      await cdp('Input.insertText', { text: step.insert })
+    } else {
+      await cdp('Input.dispatchKeyEvent', { type: 'keyDown', key: step.key, text: step.key, unmodifiedText: step.key })
+      await cdp('Input.dispatchKeyEvent', { type: 'keyUp', key: step.key })
+    }
+    const gap = keyGap(pacing)
+    if (gap) await sleep(gap)
+  }
+  if (cmd.submit) {
+    progress.typed = true
+    await cdp('Input.dispatchKeyEvent', { type: 'keyDown', ...ENTER, text: '\r' })
+    await cdp('Input.dispatchKeyEvent', { type: 'keyUp', ...ENTER })
+  }
+  return { typed: cmd.text.length, submitted: Boolean(cmd.submit) }
+}
+
+async function selectOption(cmd) {
+  await cdp('DOM.scrollIntoViewIfNeeded', { backendNodeId: cmd.ref }).catch(() => {})
+  const r = await callOn(cmd.ref, SELECT_OPTION_FN, [cmd.text])
+  if (!r || !r.ok) {
+    const opts = r && r.options ? ` (options: ${r.options.join(' | ')})` : ''
+    throw new Error(`${(r && r.error) || 'could not set that select'}${opts}`)
+  }
+  return { selected: r.label, value: r.value }
 }
 
 async function clickRef(ref) {
@@ -217,6 +324,12 @@ async function run(cmd) {
     await log(`Refused${cmd.label ? `: ${cmd.label}` : ''} (${why})`, 'err')
     return reply(cmd.id, { ok: false, error: why })
   }
+  if (cmd.op === 'human_step' && finished.has(cmd.id)) return reply(cmd.id, finished.get(cmd.id))
+  if (cmd.op === 'human_step' && turn && turn.id === cmd.id) {
+    // The relay re-sent the turn after a reconnect; it is already showing.
+    await store.set({ turn: { text: turn.text, nonce: turn.nonce } })
+    return
+  }
   if (turn && cmd.op !== 'note') return reply(cmd.id, { ok: false, error: 'waiting for the person to press Done' })
   if (cmd.op === 'note') {
     await log(cmd.label, 'ok')
@@ -225,52 +338,35 @@ async function run(cmd) {
   if (cmd.op === 'human_step') {
     // Hand the tab back: detaching removes the debugging bar until Done.
     await detach()
-    turn = { id: cmd.id, nonce: crypto.randomUUID() }
+    turn = { id: cmd.id, nonce: crypto.randomUUID(), text: cmd.label }
     await store.set({ turn: { text: cmd.label, nonce: turn.nonce }, current: null })
     await log(`Your turn: ${cmd.label}`, 'handoff')
     chrome.windows.update(tab.windowId, { focused: true }).catch(() => {})
     return
   }
   if (cmd.label) await store.set({ current: cmd.label })
+  const pacing = cmd.pacing === 'off' ? 'off' : 'human'
+  const paced = cmd.op === 'click' || cmd.op === 'type' || cmd.op === 'select_option' || (cmd.op === 'cdp' && cmd.method === 'Page.navigate')
+  if (paced) {
+    const wait = actionPause(pacing)
+    if (wait) await sleep(wait)
+  }
   try {
-    await attach()
+    const progress = {}
     let result
-    if (cmd.op === 'cdp') {
-      result = await cdp(cmd.method, cmd.params)
-      if (cmd.method === 'Accessibility.getFullAXTree') result = compactAX(result)
-    } else if (cmd.op === 'scroll') {
-      await cdp('Runtime.evaluate', { expression: scrollExpression(cmd.dy) })
-      result = 'scrolled'
-    } else if (cmd.op === 'save_secret') {
-      const { object } = await cdp('DOM.resolveNode', { backendNodeId: cmd.ref })
-      const read = await cdp('Runtime.callFunctionOn', {
-        objectId: object.objectId,
-        functionDeclaration: READ_FIELD_FN,
-        returnByValue: true,
-      })
-      await cdp('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {})
-      const value = read && read.result && typeof read.result.value === 'string' ? read.result.value : ''
+    try {
+      result = await exec(cmd, tab, pacing, progress)
+    } catch (e) {
+      // Another extension's frame was in the way for a moment. Once, and
+      // only if nothing reached the page yet.
+      if (!transientError(e && e.message) || progress.pressed || progress.typed || !RETRYABLE.has(cmd.op)) throw e
+      await sleep(800)
+      attachedTab = null
+      result = await exec(cmd, tab, pacing, progress)
+    }
+    if (result && result.reply) {
       await store.set({ current: null })
-      if (!value) {
-        await log(`${cmd.label || 'Save to vault'}: field was empty`, 'err')
-        return reply(cmd.id, { ok: false, error: 'field empty' })
-      }
-      // The value goes to the relay's one-shot store, never to the panel.
-      session.steps++
-      await log(cmd.label || `Sent a value for "${cmd.secretTarget}" to your vault`, 'ok')
-      session.secretRefs.add(cmd.ref)
-      return reply(cmd.id, { ok: true, secret: true, value })
-    } else if (cmd.op === 'clear') {
-      result = await clearField(cmd.ref)
-    } else if (cmd.op === 'screenshot') {
-      result = await screenshot(tab.url)
-      session.steps++
-      await log('Took a screenshot of this tab (typed values blacked out)', 'ok')
-      await store.set({ current: null })
-      return reply(cmd.id, { ok: true, result })
-    } else if (cmd.op === 'challenge') {
-      result = await challenge(tab)
-      if (result && result.blocking) await log('This page is showing a bot check', 'handoff')
+      return reply(cmd.id, result.reply)
     }
     if (cmd.label) {
       session.steps++
@@ -285,10 +381,61 @@ async function run(cmd) {
   }
 }
 
+const RETRYABLE = new Set(['cdp', 'click', 'type', 'select_option', 'clear', 'challenge'])
+
+// One command against the attached tab. A { reply } result goes back as it
+// is (save_secret's value, a screenshot); anything else is the result.
+async function exec(cmd, tab, pacing, progress) {
+  await attach()
+  let result
+  if (cmd.op === 'click') {
+    result = await humanClick(cmd.ref, pacing, progress)
+  } else if (cmd.op === 'type') {
+    result = await typeInto(cmd, pacing, progress)
+  } else if (cmd.op === 'select_option') {
+    result = await selectOption(cmd)
+  } else if (cmd.op === 'cdp') {
+    result = await cdp(cmd.method, cmd.params)
+    if (cmd.method === 'Accessibility.getFullAXTree') result = compactAX(result)
+  } else if (cmd.op === 'scroll') {
+    await cdp('Runtime.evaluate', { expression: scrollExpression(cmd.dy) })
+    result = 'scrolled'
+  } else if (cmd.op === 'save_secret') {
+    const { object } = await cdp('DOM.resolveNode', { backendNodeId: cmd.ref })
+    const read = await cdp('Runtime.callFunctionOn', {
+      objectId: object.objectId,
+      functionDeclaration: READ_FIELD_FN,
+      returnByValue: true,
+    })
+    await cdp('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {})
+    const value = read && read.result && typeof read.result.value === 'string' ? read.result.value : ''
+    if (!value) {
+      await log(`${cmd.label || 'Save to vault'}: field was empty`, 'err')
+      return { reply: { ok: false, error: 'field empty' } }
+    }
+    // The value goes to the relay's one-shot store, never to the panel.
+    session.steps++
+    await log(cmd.label || `Sent a value for "${cmd.secretTarget}" to your vault`, 'ok')
+    session.secretRefs.add(cmd.ref)
+    return { reply: { ok: true, secret: true, value } }
+  } else if (cmd.op === 'clear') {
+    result = await clearField(cmd.ref)
+  } else if (cmd.op === 'screenshot') {
+    result = await screenshot(tab.url)
+    session.steps++
+    await log('Took a screenshot of this tab (typed values blacked out)', 'ok')
+    return { reply: { ok: true, result } }
+  } else if (cmd.op === 'challenge') {
+    result = await challenge(tab)
+    if (result && result.blocking) await log('This page is showing a bot check', 'handoff')
+  }
+  return result
+}
+
 async function pair(rawCode) {
   const code = normalizeCode(rawCode)
   if (!code) throw new Error('That code does not look right. It has 6 letters and numbers, like K7Q-4M2.')
-  if (ws) await disconnect('Replaced by a new pairing')
+  if (session) await disconnect('Replaced by a new pairing')
   const res = await fetch(`${RELAY_ORIGIN}/autopilot/pair`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -303,21 +450,42 @@ async function pair(rawCode) {
     if (!hostAllowed(j.start_url, j.allow)) throw new Error('start page is not on the allowed sites')
     tab = await chrome.tabs.create({ url: j.start_url, active: true })
   }
-  session = { allow: j.allow, task: j.task, tabId: tab.id, startedAt: Date.now(), steps: 0, secretRefs: new Set() }
+  session = { token: j.token, allow: j.allow, task: j.task, tabId: tab.id, startUrl: j.start_url, startedAt: Date.now(), steps: 0, secretRefs: new Set() }
+  outbox = []
+  retry = null
+  pointer = null
   await store.set({ status: 'connecting', allow: j.allow, task: j.task, log: [], turn: null, current: null })
+  // An MV3 worker is stopped after ~30 s without an extension event, and
+  // timers alone do not count. The socket traffic and this API call keep it
+  // running while the debugger is off the tab (a human step) or the socket
+  // is down and reconnecting.
+  keepalive = setInterval(heartbeat, PING_MS)
+  open()
+  return { ok: true }
+}
 
-  const url = RELAY_ORIGIN.replace(/^http/, 'ws') + '/autopilot/ws?token=' + encodeURIComponent(j.token)
+function open() {
+  const url = RELAY_ORIGIN.replace(/^http/, 'ws') + '/autopilot/ws?token=' + encodeURIComponent(session.token)
   const sock = new WebSocket(url)
   ws = sock
   sock.onopen = async () => {
-    send({ type: 'hello', tab_url: tab.url || tab.pendingUrl || j.start_url })
-    // An MV3 worker sleeps after ~30 s idle; socket traffic keeps it awake.
-    // The relay answers "ping" without waking its Durable Object.
-    keepalive = setInterval(() => sock.readyState === WebSocket.OPEN && sock.send('ping'), 20_000)
+    if (ws !== sock) return
+    lastHeard = Date.now()
+    const back = retry !== null
+    if (retry) clearTimeout(retry.timer)
+    retry = null
+    // Held replies first (a Done pressed while the socket was down), then
+    // hello: the relay re-sends a lost human step only after it.
+    const held = outbox
+    outbox = []
+    for (const m of held) sock.send(JSON.stringify(m))
+    const tab = await chrome.tabs.get(session.tabId).catch(() => null)
+    send({ type: 'hello', tab_url: (tab && (tab.url || tab.pendingUrl)) || session.startUrl })
     await store.set({ status: 'connected' })
-    await log(`Connected. Allowed: ${j.allow.join(', ')}`, 'ok')
+    await log(back ? 'Reconnected' : `Connected. Allowed: ${session.allow.join(', ')}`, 'ok')
   }
   sock.onmessage = (m) => {
+    lastHeard = Date.now()
     if (m.data === 'pong') return
     let cmd
     try {
@@ -328,9 +496,46 @@ async function pair(rawCode) {
     queue = queue.then(() => run(cmd)).catch(() => {})
   }
   sock.onclose = () => {
-    if (ws === sock) teardown('Relay closed the session')
+    if (ws === sock) lost()
   }
-  return { ok: true }
+}
+
+function heartbeat() {
+  if (!session) return
+  chrome.runtime.getPlatformInfo().catch(() => {})
+  const sock = ws
+  if (!sock || sock.readyState !== WebSocket.OPEN) return
+  if (Date.now() - lastHeard > DEAD_MS) {
+    // The far end went away without a close (sleep, a network change). Drop
+    // this socket and come back on a new one.
+    ws = null
+    sock.onclose = null
+    try {
+      sock.close(4001, 'no pong')
+    } catch {
+      // already closing
+    }
+    lost()
+    return
+  }
+  sock.send('ping')
+}
+
+// The socket closed without anyone ending the session. Come back with the
+// same token while the relay holds the session; give up after that.
+async function lost() {
+  ws = null
+  if (!session) return
+  if (!retry) {
+    retry = { attempt: 0, since: Date.now(), timer: null }
+    await store.set({ status: 'connecting' })
+    await log('Connection to the relay dropped, reconnecting', 'err')
+  }
+  if (Date.now() - retry.since > RECONNECT_FOR_MS) return teardown('Lost the connection to the relay')
+  const wait = BACKOFF_MS[Math.min(retry.attempt++, BACKOFF_MS.length - 1)]
+  retry.timer = setTimeout(() => {
+    if (session && !ws) open()
+  }, wait)
 }
 
 async function teardown(why) {
@@ -338,6 +543,10 @@ async function teardown(why) {
   ws = null
   session = null
   turn = null
+  outbox = []
+  finished.clear()
+  if (retry) clearTimeout(retry.timer)
+  retry = null
   clearInterval(keepalive)
   keepalive = null
   await detach()
@@ -350,7 +559,9 @@ async function teardown(why) {
 async function disconnect(why) {
   const sock = ws
   if (sock) {
-    event(why)
+    // "bye" ends the session on the relay at once; a plain close would only
+    // start its reconnect hold.
+    if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: 'bye', text: why }))
     ws = null
     try {
       sock.close(1000, why.slice(0, 100))
@@ -368,6 +579,8 @@ async function done() {
   await store.set({ turn: null })
   await log('Done pressed', 'ok')
   event('The person pressed Done on "Your turn"')
+  finished.set(id, { ok: true, result: 'done' })
+  for (const k of [...finished.keys()].slice(0, -20)) finished.delete(k)
   reply(id, { ok: true, result: 'done' })
   return { ok: true }
 }
