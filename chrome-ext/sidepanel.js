@@ -10,6 +10,7 @@ async function render() {
   $('task').textContent = s.task || (status === 'off' ? 'Not connected. Pair from the toolbar button.' : '')
   $('turn').hidden = !s.turn
   $('turntext').textContent = s.turn ? s.turn.text : ''
+  turnNonce = s.turn ? s.turn.nonce : null
   $('disconnect').hidden = status === 'off'
   const ul = $('log')
   ul.textContent = ''
@@ -27,9 +28,14 @@ async function render() {
   }
 }
 
-$('done').addEventListener('click', async () => {
+let turnNonce = null
+
+// Done counts only from a real click or key press on this button, never a
+// scripted .click(), and names the turn it was shown for.
+$('done').addEventListener('click', async (e) => {
+  if (!e.isTrusted || !turnNonce) return
   $('done').disabled = true
-  await chrome.runtime.sendMessage({ type: 'done' })
+  await chrome.runtime.sendMessage({ type: 'done', turn: turnNonce }).catch(() => {})
   $('done').disabled = false
 })
 $('disconnect').addEventListener('click', () => chrome.runtime.sendMessage({ type: 'disconnect' }))

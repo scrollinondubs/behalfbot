@@ -3,15 +3,31 @@
 // The session token lives only in this worker's memory and the socket URL.
 
 import { RELAY_ORIGIN } from './config.js'
-import { READ_FIELD_FN, compactAX, hostAllowed, normalizeCode, refusal, scrollExpression } from './policy.js'
+import {
+  FIELD_STATE_FN,
+  MAX_SCREENSHOT_B64,
+  READ_FIELD_FN,
+  challengeFacts,
+  classifyChallenge,
+  clearKeys,
+  compactAX,
+  hostAllowed,
+  maskNodeIds,
+  messageRefusal,
+  normalizeCode,
+  quadToRect,
+  refusal,
+  scrollExpression,
+  secretShapeIds,
+} from './policy.js'
 
 const store = chrome.storage.session
 
 let ws = null
-let session = null // { allow, task, tabId, startedAt, steps }
+let session = null // { allow, task, tabId, startedAt, steps, secretRefs }
 let attachedTab = null
 let keepalive = null
-let turn = null // { id } while a "Your turn" step waits for Done
+let turn = null // { id, nonce } while a "Your turn" step waits for Done
 let queue = Promise.resolve()
 
 // A restarted worker has no socket, so whatever the panel last showed is stale.
@@ -51,13 +67,153 @@ function cdp(method, params) {
   return chrome.debugger.sendCommand({ tabId: session.tabId }, method, params || {})
 }
 
+async function callOn(ref, fn) {
+  const { object } = await cdp('DOM.resolveNode', { backendNodeId: ref })
+  try {
+    const r = await cdp('Runtime.callFunctionOn', { objectId: object.objectId, functionDeclaration: fn, returnByValue: true })
+    return r && r.result ? r.result.value : undefined
+  } finally {
+    await cdp('Runtime.releaseObject', { objectId: object.objectId }).catch(() => {})
+  }
+}
+
+async function box(ref) {
+  try {
+    const { model } = await cdp('DOM.getBoxModel', { backendNodeId: ref })
+    return model.border
+  } catch {
+    return null // not rendered
+  }
+}
+
+async function clickRef(ref) {
+  await cdp('DOM.scrollIntoViewIfNeeded', { backendNodeId: ref }).catch(() => {})
+  const q = await box(ref)
+  if (!q) return false
+  const x = (q[0] + q[2] + q[4] + q[6]) / 4
+  const y = (q[1] + q[3] + q[5] + q[7]) / 4
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y })
+  await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 })
+  await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 })
+  return true
+}
+
+// Empties a field so the next insertText replaces rather than appends. Plain
+// inputs, contenteditable, Monaco and CodeMirror all take the same real key
+// events; the field state check says whether it worked, never what was there.
+async function clearField(ref) {
+  const state = async () => (await callOn(ref, FIELD_STATE_FN)) || { kind: 'other', empty: null, focused: false }
+  await cdp('DOM.focus', { backendNodeId: ref }).catch(() => {})
+  let s = await state()
+  if (!s.focused) {
+    // Code editors often refuse DOM.focus on their wrapper; a click lands.
+    await clickRef(ref)
+    s = await state()
+  }
+  if (!s.focused) return { cleared: false, kind: s.kind, error: 'could not put the cursor in that field' }
+  if (s.empty === true) return { cleared: true, kind: s.kind }
+  const { os } = await chrome.runtime.getPlatformInfo()
+  for (let i = 0; i < 2 && (i === 0 || s.empty === false); i++) {
+    for (const k of clearKeys(os)) await cdp('Input.dispatchKeyEvent', k)
+    // Code editors repaint on the next animation frame.
+    for (let t = 0; t < 6; t++) {
+      s = await state()
+      if (s.empty !== false) break
+      await new Promise((r) => setTimeout(r, 80))
+    }
+  }
+  return { cleared: s.empty, kind: s.kind, os }
+}
+
+function b64(bytes) {
+  let bin = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  return btoa(bin)
+}
+
+// Screenshot of the bound tab with every field value, off-site frame,
+// save_secret field and credential-shaped text painted black in this worker, so nothing about
+// the page can undo the masking. Fails closed: if masking cannot be worked
+// out, or the page changes underneath, no image leaves.
+async function screenshot(tabUrl) {
+  const metrics = await cdp('Page.getLayoutMetrics')
+  const vp = metrics.cssVisualViewport || metrics.visualViewport
+  const vw = Math.max(1, Math.round(vp.clientWidth))
+  const vh = Math.max(1, Math.round(vp.clientHeight))
+  const { root } = await cdp('DOM.getDocument', { depth: -1, pierce: true })
+  const ids = new Set(maskNodeIds(root, session.allow, tabUrl))
+  for (const id of secretShapeIds(await cdp('Accessibility.getFullAXTree'))) ids.add(id)
+  for (const id of session.secretRefs) ids.add(id)
+  if (ids.size > 3000) throw new Error('too many fields to hide on this page, no screenshot taken')
+  const quads = []
+  for (const id of ids) {
+    const q = await box(id)
+    if (q) quads.push(q)
+  }
+  const shot = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
+  const now = await chrome.tabs.get(session.tabId).catch(() => null)
+  if (!now || now.url !== tabUrl || !hostAllowed(now.url, session.allow)) throw new Error('the page changed during the screenshot, nothing sent')
+
+  const raw = Uint8Array.from(atob(shot.data), (c) => c.charCodeAt(0))
+  const bmp = await createImageBitmap(new Blob([raw], { type: 'image/png' }))
+  let scale = Math.min(1, 1600 / vw)
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const w = Math.max(1, Math.round(vw * scale))
+    const h = Math.max(1, Math.round(vh * scale))
+    const canvas = new OffscreenCanvas(w, h)
+    const ctx = canvas.getContext('2d')
+    ctx.drawImage(bmp, 0, 0, w, h)
+    ctx.fillStyle = '#000'
+    for (const q of quads) {
+      const r = quadToRect(q, scale, w, h)
+      if (r) ctx.fillRect(r.x, r.y, r.w, r.h)
+    }
+    const quality = [0.7, 0.5, 0.35][Math.min(attempt, 2)]
+    const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality })
+    const data = b64(new Uint8Array(await blob.arrayBuffer()))
+    if (data.length <= MAX_SCREENSHOT_B64) {
+      bmp.close()
+      return { mime: 'image/jpeg', width: w, height: h, masked: quads.length, data }
+    }
+    if (attempt >= 2) scale *= 0.7
+  }
+  bmp.close()
+  throw new Error('screenshot too large to send')
+}
+
+// Looks for a bot check on the bound tab, from the pierced DOM tree, frame
+// boxes and the tab title. The answer is a fixed kind; nothing the page
+// wrote travels back.
+async function challenge(tab) {
+  const metrics = await cdp('Page.getLayoutMetrics')
+  const vp = metrics.cssVisualViewport || metrics.visualViewport
+  const { root } = await cdp('DOM.getDocument', { depth: -1, pierce: true })
+  const facts = challengeFacts(root, tab.url)
+  const frames = []
+  for (const f of facts.frames) {
+    const q = await box(f.backendNodeId)
+    if (!q) {
+      frames.push({ url: f.url, w: 0, h: 0, onscreen: false })
+      continue
+    }
+    const xs = [q[0], q[2], q[4], q[6]]
+    const ys = [q[1], q[3], q[5], q[7]]
+    const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys)
+    const onscreen = x1 > 0 && y1 > 0 && x0 < vp.clientWidth && y0 < vp.clientHeight
+    frames.push({ url: f.url, w: x1 - x0, h: y1 - y0, onscreen })
+  }
+  return classifyChallenge({ title: tab.title || '', ids: facts.ids, tags: facts.tags, frames })
+}
+
 async function run(cmd) {
   if (!session) return reply(cmd.id, { ok: false, error: 'not connected' })
   const tab = await chrome.tabs.get(session.tabId).catch(() => null)
   if (!tab) return reply(cmd.id, { ok: false, error: 'tab closed' })
   const why = refusal(cmd, tab.url, session.allow)
   if (why) {
-    // No attach, no read.
+    // No attach, no read. The bot-check probe after every click and navigate
+    // is the driver's housekeeping; its refusals stay out of the panel.
+    if (cmd.op === 'challenge') return reply(cmd.id, { ok: false, error: why })
     await log(`Refused${cmd.label ? `: ${cmd.label}` : ''} (${why})`, 'err')
     return reply(cmd.id, { ok: false, error: why })
   }
@@ -69,8 +225,8 @@ async function run(cmd) {
   if (cmd.op === 'human_step') {
     // Hand the tab back: detaching removes the debugging bar until Done.
     await detach()
-    turn = { id: cmd.id }
-    await store.set({ turn: { text: cmd.label }, current: null })
+    turn = { id: cmd.id, nonce: crypto.randomUUID() }
+    await store.set({ turn: { text: cmd.label, nonce: turn.nonce }, current: null })
     await log(`Your turn: ${cmd.label}`, 'handoff')
     chrome.windows.update(tab.windowId, { focused: true }).catch(() => {})
     return
@@ -102,7 +258,19 @@ async function run(cmd) {
       // The value goes to the relay's one-shot store, never to the panel.
       session.steps++
       await log(cmd.label || `Sent a value for "${cmd.secretTarget}" to your vault`, 'ok')
+      session.secretRefs.add(cmd.ref)
       return reply(cmd.id, { ok: true, secret: true, value })
+    } else if (cmd.op === 'clear') {
+      result = await clearField(cmd.ref)
+    } else if (cmd.op === 'screenshot') {
+      result = await screenshot(tab.url)
+      session.steps++
+      await log('Took a screenshot of this tab (typed values blacked out)', 'ok')
+      await store.set({ current: null })
+      return reply(cmd.id, { ok: true, result })
+    } else if (cmd.op === 'challenge') {
+      result = await challenge(tab)
+      if (result && result.blocking) await log('This page is showing a bot check', 'handoff')
     }
     if (cmd.label) {
       session.steps++
@@ -135,7 +303,7 @@ async function pair(rawCode) {
     if (!hostAllowed(j.start_url, j.allow)) throw new Error('start page is not on the allowed sites')
     tab = await chrome.tabs.create({ url: j.start_url, active: true })
   }
-  session = { allow: j.allow, task: j.task, tabId: tab.id, startedAt: Date.now(), steps: 0 }
+  session = { allow: j.allow, task: j.task, tabId: tab.id, startedAt: Date.now(), steps: 0, secretRefs: new Set() }
   await store.set({ status: 'connecting', allow: j.allow, task: j.task, log: [], turn: null, current: null })
 
   const url = RELAY_ORIGIN.replace(/^http/, 'ws') + '/autopilot/ws?token=' + encodeURIComponent(j.token)
@@ -204,9 +372,16 @@ async function done() {
   return { ok: true }
 }
 
+const PANEL_URL = chrome.runtime.getURL('sidepanel.html')
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  // Only this extension's own pages talk to the worker.
-  if (sender.id !== chrome.runtime.id) return
+  // Only this extension's own pages talk to the worker, and Done only from
+  // the side panel for the turn it shows (policy.messageRefusal).
+  const why = messageRefusal(msg, sender, chrome.runtime.id, PANEL_URL, turn && turn.nonce)
+  if (why) {
+    sendResponse({ ok: false, error: why })
+    return
+  }
   const p =
     msg.type === 'pair' ? pair(msg.code)
     : msg.type === 'disconnect' ? disconnect('Disconnected by you').then(() => ({ ok: true }))

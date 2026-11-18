@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
 import { ENV, makeWorld, createInstall } from './helpers.mjs'
-import { CODE_TTL_MS, SECRET_TTL_MS, PAIR_FAILS_PER_MIN, UNCONNECTED_TTL_MS, toRef } from '../src/autopilot.ts'
+import { CODE_TTL_MS, MAX_SCREENSHOT_B64, SECRET_TTL_MS, PAIR_FAILS_PER_MIN, UNCONNECTED_TTL_MS, toRef } from '../src/autopilot.ts'
 
 const admin = { token: ENV.INSTALLER_ADMIN_SECRET }
 
@@ -387,4 +387,73 @@ test('aws-backup-hardening: pairs with the AWS console only, start page on the a
   assert.ok(!hostAllowed('https://signin.aws.amazon.com/oauth', p.allow))
   const { runbook } = await import('../src/runbooks.ts')
   assert.ok(!runbook('aws-backup-hardening').steps.some((s) => s.save_secret))
+})
+
+// A JPEG-shaped base64 body with long alphanumeric runs, the kind the text
+// redactor's 64-character pattern would cut into.
+function fakeJpegB64(len = 4000) {
+  const abc = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+  let s = '/9j/'
+  while (s.length < len) s += [...randomBytes(64)].map((b) => abc[b % abc.length]).join('') + '+'
+  return s.slice(0, len - (len % 4))
+}
+
+test('screenshot: the image passes through byte for byte; the label is fixed whatever the driver sends', async () => {
+  const { w, id, session } = await pairedSession()
+  const data = fakeJpegB64()
+  session.ws.answer = (c) => (c.op === 'screenshot' ? { ok: true, result: { mime: 'image/jpeg', width: 1280, height: 800, masked: 3, data, extra: 'dropped' } } : null)
+  const r = await cmd(w, session.id, { op: 'screenshot', label: 'Nothing to see here' })
+  assert.equal(r.status, 200)
+  assert.equal(r.body.result.data, data)
+  assert.deepEqual({ ...r.body.result, data: undefined }, { mime: 'image/jpeg', width: 1280, height: 800, masked: 3, data: undefined })
+  assert.equal(session.ws.commands()[0].label, 'Took a screenshot of the tab')
+  const j = await journalText(w, id)
+  assert.match(j, /Took a screenshot of the tab/)
+  assert.ok(!j.includes('Nothing to see here'))
+})
+
+test('screenshot: anything but a JPEG within the size cap is refused', async () => {
+  const { w, session } = await pairedSession()
+  for (const result of [
+    { mime: 'image/png', data: fakeJpegB64() },
+    { mime: 'image/jpeg', data: 'not base64 at all!' },
+    { mime: 'image/jpeg', data: 'iVBORw0KGgo' + 'A'.repeat(100) },
+    { mime: 'image/jpeg', data: fakeJpegB64(MAX_SCREENSHOT_B64 + 400) },
+    'a string',
+  ]) {
+    session.ws.answer = () => ({ ok: true, result })
+    const r = await cmd(w, session.id, { op: 'screenshot', label: '' })
+    assert.equal(r.body.ok, false, JSON.stringify(result).slice(0, 60))
+    assert.match(r.body.error, /JPEG/)
+  }
+})
+
+test('screenshot: the text fields of the reply are still redacted', async () => {
+  const { w, session } = await pairedSession()
+  const key = fakeGoogleKey()
+  session.ws.answer = () => ({ ok: false, error: `boom ${key}` })
+  const r = await cmd(w, session.id, { op: 'screenshot', label: '' })
+  assert.ok(!JSON.stringify(r.body).includes(key))
+})
+
+test('clear and challenge: forwarded with a numeric ref; clear without a ref never reaches the browser', async () => {
+  const { w, session } = await pairedSession()
+  session.ws.answer = (c) => (c.op === 'clear' ? { ok: true, result: { cleared: true, kind: 'monaco' } } : { ok: true, result: { kind: 'cloudflare', blocking: true } })
+  const bad = await cmd(w, session.id, { op: 'clear', label: '' })
+  assert.equal(bad.status, 400)
+  const c = await cmd(w, session.id, { op: 'clear', ref: '[812]', label: '' })
+  assert.deepEqual(c.body.result, { cleared: true, kind: 'monaco' })
+  const ch = await cmd(w, session.id, { op: 'challenge', label: '' })
+  assert.deepEqual(ch.body.result, { kind: 'cloudflare', blocking: true })
+  const sent = session.ws.commands()
+  assert.strictEqual(sent[0].ref, 812)
+  assert.equal(sent[1].ref, undefined)
+})
+
+test('challenge: a refused probe is not journaled; it runs after every click and navigate', async () => {
+  const { w, id, session } = await pairedSession()
+  session.ws.answer = () => ({ ok: false, error: 'tab not allowed' })
+  const r = await cmd(w, session.id, { op: 'challenge', label: '' })
+  assert.equal(r.body.ok, false)
+  assert.ok(!/challenge: failed/.test(await journalText(w, id)))
 })
