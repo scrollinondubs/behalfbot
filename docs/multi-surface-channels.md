@@ -61,6 +61,15 @@ if [[ -n "$secondary" ]]; then
 fi
 ```
 
+## Matrix
+
+`matrix` is a valid `surfaces.primary` / `.secondary` value, but only for the
+conversation: it is the Claude Code channel plugin in
+`claude-plugins/matrix-channel/` (setup in `docs/SELF_INSTALL.md`, "Matrix as
+a chat surface"). There is no `post-to-matrix.sh`, so the fan-out `case`
+above has no Matrix branch, and a Matrix-primary install still needs a
+Discord, Telegram or Slack target for `briefings` and `ops`.
+
 ## Telegram supergroup-topics
 
 For installers using one Telegram supergroup with multiple forum topics (vs separate chats per channel), append `/<thread_id>` to the chat_id in the env var:

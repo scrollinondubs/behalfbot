@@ -1,0 +1,28 @@
+{
+  "name": "matrix",
+  "description": "Matrix channel for Claude Code - messaging bridge with an allowlist, media and voice notes. Mirrors the Discord channel's tools. Manage access via /matrix:access.",
+  "version": "0.1.0",
+  "license": "MIT",
+  "keywords": [
+    "matrix",
+    "messaging",
+    "channel",
+    "mcp"
+  ],
+  "author": {
+    "name": "Behalf.bot"
+  },
+  "mcpServers": {
+    "matrix": {
+      "command": "bun",
+      "args": [
+        "run",
+        "--cwd",
+        "${CLAUDE_PLUGIN_ROOT}",
+        "--shell=bun",
+        "--silent",
+        "start"
+      ]
+    }
+  }
+}

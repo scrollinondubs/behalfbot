@@ -38,6 +38,8 @@
 #   TMUX_SESSION_NAME   default: ${BOT_NAME}-discord
 #   INSTANCE_NAME       default: BOT_NAME (capitalised)
 #   CLAUDE_CHANNELS     default: plugin:discord@claude-plugins-official
+#                       space-separated for several, e.g. adding
+#                       plugin:matrix@behalfbot
 #   HOMEBREW_PREFIX     default: /opt/homebrew on Apple Silicon, else /usr/local
 #   NODE_BIN_PATH       optional extra node bin dir
 #

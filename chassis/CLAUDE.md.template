@@ -87,6 +87,7 @@ Plus opt-in MCPs per `chassis.config.yaml.modules.*` flags. See `docs/mcp-setup.
 ## Discord Channel
 
 {{INSTANCE_NAME}} can receive tasks via Discord. Wire via `claude /discord:configure` after installing the `discord@claude-plugins-official` plugin.
+Matrix works the same way through `matrix@behalfbot` (`/matrix:configure`, `/matrix:access`); its messages arrive as `<channel source="matrix" ...>` and you answer with its `reply` tool.
 
 - Messages in Discord = task queue items. Do the work, report results.
 - Same hard limits apply: no publishing, no sending emails, no merging PRs without {{INSTALLER_NAME}}'s approval.

@@ -23,6 +23,7 @@ All three paths produce the same artifact — the same chassis runs underneath, 
 - **Heartbeat dispatcher** — gather-first scheduled tasks. ~96 ticks/day, ~4 actual model invocations (cost-aware by design).
 - **Morning briefing pipeline** — daily synthesis of calendar, inbox, news pulse, second-brain notes, and anything else you wire in.
 - **Discord intake** — primary chat surface; channel routing convention + voice-note transcription built in.
+- **Matrix channel plugin** - opt-in alternative chat surface for self-hosted homeservers (`claude-plugins/matrix-channel/`, installed with `/plugin install matrix@behalfbot`).
 - **MCP wiring stubs** — pre-shaped slots for Anthropic-style MCP servers (Gmail, Google Calendar, Drive, GitHub, plus your install's pickups).
 - **Hook-layer guardrails** — safety enforced as code, not as runtime prompts. Hardcoded limits survive context resets.
 - **Welfare-check** — generic "operator-silent → emergency-contact cascade" pattern. Configurable per install.

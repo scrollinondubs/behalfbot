@@ -34,7 +34,8 @@ done
 #   TMUX_SESSION_NAME   - tmux session label (typically ${BOT_NAME}-discord)
 #   CUSTOMER_HOME       - per-customer state root (e.g. ~/.behalfbot)
 #   CHASSIS_HOME        - chassis git tree root (e.g. ~/behalfbot)
-#   CLAUDE_CHANNELS     - --channels flag value (default plugin:discord@claude-plugins-official)
+#   CLAUDE_CHANNELS     - --channels value, space-separated for several
+#                         (default plugin:discord@claude-plugins-official)
 
 set -euo pipefail
 
@@ -172,7 +173,7 @@ fi
 # 30 min StartInterval) - which itself reads the login keychain, and is the
 # other half of why this job has to run under Aqua.
 tmux new-session -s "${TMUX_SESSION_NAME}" -d \
-    "cd '${CUSTOMER_HOME}' && claude --channels '${CLAUDE_CHANNELS}' --dangerously-skip-permissions"
+    "cd '${CUSTOMER_HOME}' && claude --channels ${CLAUDE_CHANNELS} --dangerously-skip-permissions"
 
 sleep 2
 
