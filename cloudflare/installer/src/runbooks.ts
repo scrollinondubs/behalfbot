@@ -4,6 +4,7 @@
 import googlePlaces from '../../../runbooks/google-places.json' with { type: 'json' }
 import localTest from '../../../runbooks/local-test.json' with { type: 'json' }
 import awsBackupHardening from '../../../runbooks/aws-backup-hardening.json' with { type: 'json' }
+import stripeGoldForSilver from '../../../runbooks/stripe-gold-for-silver.json' with { type: 'json' }
 
 export interface Runbook {
   id: string
@@ -15,7 +16,12 @@ export interface Runbook {
   steps: unknown[]
 }
 
-const ALL: Runbook[] = [googlePlaces as Runbook, localTest as Runbook, awsBackupHardening as Runbook]
+const ALL: Runbook[] = [
+  googlePlaces as Runbook,
+  localTest as Runbook,
+  awsBackupHardening as Runbook,
+  stripeGoldForSilver as Runbook,
+]
 
 export function runbook(id: string): Runbook | null {
   return ALL.find((r) => r.id === id) ?? null
