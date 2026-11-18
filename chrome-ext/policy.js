@@ -16,7 +16,8 @@ export const ALLOWED_METHODS = new Set([
   'Page.navigate',
 ])
 
-export const OPS = new Set(['cdp', 'scroll', 'save_secret', 'human_step', 'note', 'screenshot', 'clear', 'challenge'])
+export const OPS = new Set(['cdp', 'scroll', 'save_secret', 'human_step', 'note', 'screenshot', 'clear', 'challenge', 'click', 'type', 'select_option'])
+export const MAX_TYPE_CHARS = 2000
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1'])
 
@@ -66,6 +67,10 @@ export function refusal(cmd, tabUrl, allow) {
     if (!Number.isInteger(cmd.dy) || Math.abs(cmd.dy) > 20000) return 'bad scroll'
   }
   if (cmd.op === 'clear' && !isRef(cmd.ref)) return 'bad ref'
+  if ((cmd.op === 'click' || cmd.op === 'type' || cmd.op === 'select_option') && !isRef(cmd.ref)) return 'bad ref'
+  if (cmd.op === 'type' && (typeof cmd.text !== 'string' || cmd.text.length > MAX_TYPE_CHARS)) return 'bad text'
+  if (cmd.op === 'select_option' && (typeof cmd.text !== 'string' || !cmd.text.trim() || cmd.text.length > 300)) return 'bad option'
+  if (cmd.pacing !== undefined && cmd.pacing !== 'off' && cmd.pacing !== 'human') return 'bad pacing'
   if (cmd.op === 'save_secret') {
     if (!isRef(cmd.ref)) return 'bad ref'
     if (typeof cmd.secretTarget !== 'string' || !cmd.secretTarget) return 'missing vault item'
@@ -86,6 +91,97 @@ export function scrollExpression(dy) {
 // text: the relay never supplies code.
 export const READ_FIELD_FN =
   'function () { var v = (this.value !== undefined && this.value !== null && this.value !== "") ? this.value : this.textContent; return String(v || "").trim() }'
+
+// Sets a native <select> by option value or visible label, the way a person
+// picking from the list would: the value goes through the prototype setter
+// (so React and other frameworks see the change), then input and change
+// bubble. A ref to one of its <option>s works too. The wanted text arrives as
+// a CDP call argument, never spliced into this source.
+export const SELECT_OPTION_FN = `function (want) {
+  var sel = this instanceof HTMLOptionElement ? this.closest('select') : this
+  if (!(sel instanceof HTMLSelectElement)) {
+    return { ok: false, error: 'not a native select (it is a ' + String(this.tagName || 'node').toLowerCase() + '); click it, then click the option' }
+  }
+  var norm = function (s) { return String(s).replace(/\\s+/g, ' ').trim().toLowerCase() }
+  var opts = Array.prototype.slice.call(sel.options)
+  var w = norm(want)
+  var o = opts.find(function (x) { return x.value === want })
+    || opts.find(function (x) { return norm(x.label) === w })
+    || opts.find(function (x) { return norm(x.value) === w })
+    || opts.find(function (x) { return norm(x.label).indexOf(w) === 0 })
+  if (!o) return { ok: false, error: 'no option matches', options: opts.slice(0, 40).map(function (x) { return x.label.slice(0, 80) }) }
+  if (o.disabled) return { ok: false, error: 'that option is disabled' }
+  if (sel.disabled) return { ok: false, error: 'the select is disabled' }
+  sel.focus()
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(sel, o.value)
+  sel.dispatchEvent(new Event('input', { bubbles: true }))
+  sel.dispatchEvent(new Event('change', { bubbles: true }))
+  return { ok: sel.value === o.value, value: o.value.slice(0, 80), label: o.label.slice(0, 80) }
+}`
+
+// Pacing: timing that reads like a person at the keyboard. rand is
+// Math.random in the worker and fixed in tests.
+export function actionPause(pacing, rand = Math.random) {
+  return pacing === 'off' ? 0 : Math.round(150 + rand() * 450)
+}
+
+export function keyGap(pacing, rand = Math.random) {
+  if (pacing === 'off') return 0
+  const gap = 30 + rand() * 90
+  // Now and then a longer hesitation, as between words.
+  return Math.round(rand() < 0.06 ? gap + 150 + rand() * 200 : gap)
+}
+
+// Where in the element to click: the centre, or with pacing a point a little
+// off it, kept inside the box.
+export function clickPoint(q, pacing, rand = Math.random) {
+  const xs = [q[0], q[2], q[4], q[6]]
+  const ys = [q[1], q[3], q[5], q[7]]
+  const cx = (xs[0] + xs[1] + xs[2] + xs[3]) / 4
+  const cy = (ys[0] + ys[1] + ys[2] + ys[3]) / 4
+  if (pacing === 'off') return { x: cx, y: cy }
+  const hw = (Math.max(...xs) - Math.min(...xs)) / 2
+  const hh = (Math.max(...ys) - Math.min(...ys)) / 2
+  const dx = Math.min(hw * 0.3, 8) * (rand() * 2 - 1)
+  const dy = Math.min(hh * 0.3, 4) * (rand() * 2 - 1)
+  return { x: cx + dx, y: cy + dy }
+}
+
+// Mouse path from where the pointer was to the target: a few eased steps.
+export function mousePath(from, to, pacing, rand = Math.random) {
+  if (pacing === 'off' || !from) return [to]
+  const n = 3 + Math.floor(rand() * 4)
+  const out = []
+  for (let i = 1; i <= n; i++) {
+    const t = i / n
+    const e = t * t * (3 - 2 * t)
+    out.push({ x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e })
+  }
+  out[out.length - 1] = to
+  return out
+}
+
+// How typed text goes in: one key event per ordinary character; newlines,
+// tabs and anything off the keyboard go through insertText, so Enter never
+// submits a form and Tab never moves focus.
+export function keyPlan(text, pacing) {
+  if (pacing === 'off') return text ? [{ insert: text }] : []
+  const out = []
+  for (const ch of text) {
+    const code = ch.codePointAt(0)
+    const key = ch.length === 1 && code >= 0x20 && code !== 0x7f && !(code >= 0x80 && code < 0xa0)
+    if (key) out.push({ key: ch })
+    else if (out.length && out[out.length - 1].insert !== undefined) out[out.length - 1].insert += ch
+    else out.push({ insert: ch })
+  }
+  return out
+}
+
+// Errors worth one retry after a short wait: another extension's frame
+// (a password manager, usually) was in the way for a moment.
+export function transientError(message) {
+  return /Cannot access a chrome-extension:\/\/ URL of different extension/.test(String(message || ''))
+}
 
 const TEXT_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'textarea', 'spinbutton'])
 const SKIP_ROLES = new Set(['none', 'generic', 'InlineTextBox', 'LineBreak'])

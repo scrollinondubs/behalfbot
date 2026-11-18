@@ -158,6 +158,7 @@ export class FakeSocket {
   constructor() {
     this.sent = []
     this.closed = null
+    this.lastPing = null
     this.answer = null
     this.core = null
   }
@@ -187,12 +188,14 @@ export function fakeRelay({ clock, install }) {
     now: clock.now,
     setAlarm: async (at) => { alarm = at },
     getAlarm: async () => alarm,
-    accept: (ws, sessionId) => {
+    accept: (ws, sessionId, conn, at) => {
       socks.set(sessionId, [...(socks.get(sessionId) ?? []), ws])
-      att.set(ws, { session_id: sessionId })
+      att.set(ws, { session_id: sessionId, conn, at })
     },
     sockets: (sessionId) => socks.get(sessionId) ?? [],
     attachment: (ws) => att.get(ws) ?? null,
+    // Tests set ws.lastPing to stand in for the runtime's auto-response time.
+    lastPing: (ws) => ws.lastPing ?? null,
     journal: async (installId, line) => { await install(installId).autopilotNote(line) },
   })
   const api = {
