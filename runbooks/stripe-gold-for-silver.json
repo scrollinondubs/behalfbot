@@ -1,0 +1,23 @@
+{
+  "id": "stripe-gold-for-silver",
+  "task": "Stripe dashboard (VCL account): set up the Gold-for-the-price-of-Silver promo (a EUR 150 off forever coupon on the Gold product plus a GOLDFORSILVER promotion code) and move one existing Silver member onto Gold with that coupon",
+  "allow": ["dashboard.stripe.com"],
+  "start_url": "https://dashboard.stripe.com/coupons",
+  "steps": [
+    { "id": "signin", "human": "Sign in to Stripe and switch to the Vibecode Lisboa account that pays out as VIBECODELISBOA.COM (acct_1BNrWkGreCf1HRqM), in live mode. Press Done when the Coupons page shows." },
+    { "id": "coupon-check", "do": "Products > Coupons: look for an existing 'Gold for Silver price' coupon. If one exists, report its id and skip to promo-code." },
+    { "id": "coupon-form", "do": "Create coupon: name 'Gold for Silver price (-EUR150/mo)', fixed amount EUR 150.00, apply to the product 'Vibecode Lisboa Membership' (prod_UkEiuzF9VPutYo) only, duration Forever. Fill the form but do not create it." },
+    { "id": "coupon-save", "human": "Check the coupon form against the chat. Press Create coupon yourself, then Done." },
+    { "id": "promo-code", "do": "On the coupon's page, add a promotion code: code GOLDFORSILVER, with the expiry date and redemption cap Sean gives in the chat (none if he gives none). Fill the form but do not save." },
+    { "id": "promo-save", "human": "Check the promotion code against the chat. Press Create yourself, then Done." },
+    { "id": "sub-open", "do": "Open the member's subscription (the URL Jax gives in the chat). Actions > Update subscription. Replace the Silver price (Membership Silver Monthly, EUR 49) with the Gold product's Monthly EUR 199 price, add the 'Gold for Silver price' coupon, and choose no proration. Fill the form but do not save." },
+    { "id": "sub-save", "human": "Check the next invoice preview reads EUR 49.00. Press Update subscription yourself, then Done." }
+  ],
+  "accept": "The subscription shows the Gold Monthly EUR 199 price with the coupon and an upcoming invoice of EUR 49.00. The member's VCL account reads as Gold after the webhook. GOLDFORSILVER is listed under the coupon.",
+  "notes": [
+    "Every money-changing save (create coupon, create code, update subscription) is a human step: Jax fills, Sean presses the button.",
+    "Stripe sign-in and 2FA run on dashboard.stripe.com/login, so the sign-in step hands the tab over.",
+    "The Gold product also carries the EUR 2000 annual price, so the coupon would take EUR 150 off an annual invoice too.",
+    "No save_secret step: nothing here creates a credential."
+  ]
+}
