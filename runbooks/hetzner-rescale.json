@@ -1,0 +1,20 @@
+{
+  "id": "hetzner-rescale",
+  "task": "Hetzner Cloud console: rescale one server to a bigger type in place (e.g. CX23 to CX33), keeping the disk the same size so it can be scaled back down later",
+  "allow": ["console.hetzner.cloud", "console.hetzner.com"],
+  "start_url": "https://console.hetzner.cloud/projects",
+  "steps": [
+    { "id": "signin", "human": "Sign in to your Hetzner account in this tab (accounts.hetzner.com, plus 2FA if you have it). Press Done when you see your projects." },
+    { "id": "find", "do": "Open the project and the server Jax names in the chat. Report its current type, location and status before changing anything." },
+    { "id": "power-off", "human": "The server must be off to rescale, and the bot on it goes offline for about 2-3 minutes. Press Power > Power off yourself, then Done." },
+    { "id": "rescale-form", "do": "Rescale tab: choose the target type Jax gives in the chat, keep 'CPU and RAM only' (disk unchanged, so it can scale back down). Do not submit." },
+    { "id": "rescale-save", "human": "Check the new type and monthly price. Press Rescale yourself, then Done." },
+    { "id": "power-on", "do": "Wait for the rescale to finish, then press Power > Power on and wait until the status reads Running." }
+  ],
+  "accept": "The server shows the new type and is Running. Jax confirms over SSH that memory matches the new type and that the bot's containers came back.",
+  "notes": [
+    "Money-changing and downtime steps (power off, Rescale) are human steps.",
+    "Sign-in runs on accounts.hetzner.com, which is deliberately off the allow list, so the extension lets go of the tab while the person signs in.",
+    "No save_secret step: nothing here creates a credential."
+  ]
+}
