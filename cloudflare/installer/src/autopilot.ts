@@ -53,7 +53,12 @@ export function toRef(v: unknown): number | null {
   return Number.isInteger(n) && n > 0 && n <= 0x7fffffff ? n : null
 }
 
-export const RELAY_OPS = ['cdp', 'scroll', 'save_secret', 'human_step', 'note'] as const
+export const RELAY_OPS = ['cdp', 'scroll', 'save_secret', 'human_step', 'note', 'screenshot', 'clear', 'challenge'] as const
+
+// A screenshot reply's base64 JPEG. Matches MAX_SCREENSHOT_B64 in
+// chrome-ext/policy.js and stays well under the 2 MB SQLite row cap.
+export const MAX_SCREENSHOT_B64 = 1_200_000
+export const SCREENSHOT_LABEL = 'Took a screenshot of the tab'
 export type RelayOp = (typeof RELAY_OPS)[number]
 
 // The extension enforces the same list (chrome-ext/policy.js); this copy
@@ -76,7 +81,7 @@ export interface RelayCommand {
   op: RelayOp
   method?: (typeof RELAY_METHODS)[number]
   params?: Record<string, unknown>
-  ref?: number // backendDOMNodeId, for save_secret
+  ref?: number // backendDOMNodeId, for save_secret and clear
   dy?: number // for scroll
   label: string // the side panel and journal line, in plain words; '' for helper calls
   secretTarget?: string // save_secret only: the vault item name
@@ -182,6 +187,7 @@ export function commandError(c: Record<string, unknown>): string | null {
     if (toRef(c.ref) === null) return 'save_secret needs ref'
     if (typeof c.secretTarget !== 'string' || !c.secretTarget.trim() || c.secretTarget.length > 200) return 'save_secret needs secretTarget'
   }
+  if (c.op === 'clear' && toRef(c.ref) === null) return 'clear needs ref'
   if (c.op === 'scroll' && !Number.isInteger(c.dy)) return 'scroll needs integer dy'
   if (c.op === 'human_step' && !c.label) return 'human_step needs a label'
   return null
@@ -382,6 +388,7 @@ export class AutopilotCore {
     if (!cmd || cmd.body !== null) return
 
     let body: Record<string, unknown>
+    let image: string | null = null
     if (m.secret === true) {
       // Only a pending save_secret may carry a value, and the value stops here.
       const value = typeof m.value === 'string' ? m.value : ''
@@ -402,17 +409,29 @@ export class AutopilotCore {
       }
     } else if (cmd.op === 'save_secret') {
       body = { ok: false, error: typeof m.error === 'string' ? m.error.slice(0, 300) : 'save_secret failed' }
+    } else if (cmd.op === 'screenshot' && m.ok === true) {
+      const shot = screenshotResult(m.result)
+      body = shot ? { ok: true, result: shot.meta } : { ok: false, error: 'screenshot reply was not a JPEG within the size limit' }
+      if (shot) image = shot.data
     } else {
       body = { ok: m.ok === true }
       if (m.ok === true) body.result = m.result ?? null
       else body.error = typeof m.error === 'string' ? m.error.slice(0, 300) : 'failed'
     }
-    if (body.ok !== true) {
+    if (body.ok !== true && cmd.op !== 'challenge') {
       await this.journal(s.install_id, `${cmd.label || cmd.method || cmd.op}: failed (${String(body.error)})`)
     }
     // Belt and braces: a snapshot taken while the key is on screen must not
     // carry it to the driver.
-    const text = this.redactor(s.session_id).redact(JSON.stringify(body))
+    // The image bytes skip the text redactor: base64 is full of 64-character
+    // runs its token patterns would cut into. Pixels are masked in the
+    // extension before capture leaves the browser.
+    let text = this.redactor(s.session_id).redact(JSON.stringify(body))
+    if (image !== null) {
+      const b = JSON.parse(text)
+      b.result = { ...b.result, data: image }
+      text = JSON.stringify(b)
+    }
     this.d.sql.exec('UPDATE ap_cmd SET body = ? WHERE id = ?', text, m.id)
     const w = this.waiters.get(m.id)
     if (w) w(JSON.parse(text))
@@ -478,7 +497,10 @@ export class AutopilotCore {
       cmd.ref = toRef(raw.ref) as number
       cmd.secretTarget = (raw.secretTarget as string).trim()
     }
+    if (cmd.op === 'clear') cmd.ref = toRef(raw.ref) as number
     if (cmd.op === 'scroll') cmd.dy = raw.dy as number
+    // The journal says a screenshot was taken whatever the driver called it.
+    if (cmd.op === 'screenshot') cmd.label = SCREENSHOT_LABEL
     this.d.sql.exec(
       'INSERT INTO ap_cmd (id, session_id, op, method, label, secret_target, body, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)',
       cmd.id,
@@ -553,6 +575,18 @@ export class AutopilotCore {
       this.rows('SELECT 1 FROM ap_session WHERE connected_at IS NULL LIMIT 1').length
     await this.d.setAlarm(left ? now + SWEEP_MS : null)
   }
+}
+
+// Only a JPEG within the size cap passes, with its numbers; any other field
+// the extension might add is dropped.
+export function screenshotResult(r: unknown): { meta: Record<string, unknown>; data: string } | null {
+  if (!r || typeof r !== 'object') return null
+  const o = r as Record<string, unknown>
+  const data = o.data
+  if (o.mime !== 'image/jpeg' || typeof data !== 'string' || data.length === 0 || data.length > MAX_SCREENSHOT_B64) return null
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data) || !data.startsWith('/9j/')) return null
+  const n = (v: unknown) => (Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 100_000 ? (v as number) : null)
+  return { meta: { mime: 'image/jpeg', width: n(o.width), height: n(o.height), masked: n(o.masked) }, data }
 }
 
 function nameKey(raw: unknown): string | null {

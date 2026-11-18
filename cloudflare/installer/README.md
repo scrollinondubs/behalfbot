@@ -121,6 +121,14 @@ session's site allowlist; `local-test` only pairs when the Worker runs with
   arrive as `2378`, `"2378"` or `"[2378]"`; the relay forwards the integer.
   Anything that is not a positive int32 is refused with 400, and the
   extension refuses a non-integer again.
+- **Screenshots, clear and bot checks.** Ops `screenshot`, `clear` (needs a
+  `ref`) and `challenge` run whole inside the extension (see
+  `chrome-ext/README.md`). A screenshot's journal line is fixed ("Took a
+  screenshot of the tab") whatever label the driver sends. Its reply must be
+  a base64 JPEG of at most 1.2 MB; only `mime`, `width`, `height`, `masked`
+  and `data` pass. The image skips the text redactor, whose 64-character token
+  pattern would cut into base64; the extension paints over fields and
+  credential-shaped text before the image leaves the browser.
 - **Teardown.** Socket close or error deletes the session, its token hash,
   held secrets and pending commands. Pairings whose socket never opens are
   swept after 10 minutes.

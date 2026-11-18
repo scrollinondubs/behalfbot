@@ -1,0 +1,32 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Fields</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<style>body{font:14px sans-serif;margin:16px} .box{margin:8px 0} #monaco{width:600px;height:120px;border:1px solid #999} #cm6host{border:1px solid #999;width:600px} .CodeMirror{height:80px;width:600px;border:1px solid #999}</style>
+</head><body>
+<div class="box"><label>Plain <input id="plain" aria-label="Plain input" value="old plain value"></label></div>
+<div class="box"><label>Password <input id="pw" type="password" aria-label="Password" value="hunter2hunter2"></label></div>
+<div class="box"><label>Notes <textarea id="ta" aria-label="Notes">old
+textarea</textarea></label></div>
+<div class="box" id="ce" contenteditable="true" aria-label="Rich text" role="textbox" style="border:1px solid #999;padding:4px">old <b>rich</b> text</div>
+<div class="box">Access key id: <span id="akid"></span></div>
+<script>document.getElementById('akid').textContent = ['AK', 'IA', 'ABCDEFGHIJKLMNOP'].join('')</script>
+<div class="box">Inner frame: <iframe id="inner" width="320" height="44" srcdoc="<input id='x' aria-label='Inner' value='inner-frame-value-123'>"></iframe></div>
+<div class="box">Monaco: <div id="monaco"></div></div>
+<div class="box">CodeMirror 6: <div id="cm6host"></div></div>
+<div class="box">CodeMirror 5: <textarea id="cm5src">{"old": "cm5"}</textarea></div>
+<script>
+window.cm5 = CodeMirror.fromTextArea(document.getElementById('cm5src'), { lineNumbers: true })
+</script>
+<script type="module">
+import { EditorView, basicSetup } from 'https://esm.sh/codemirror@6.0.1'
+window.cm6 = new EditorView({ doc: '{"old": "cm6"}', extensions: [basicSetup], parent: document.getElementById('cm6host') })
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs/loader.min.js"></script>
+<script>
+require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.45.0/min/vs' } })
+require(['vs/editor/editor.main'], function () {
+  window.mon = monaco.editor.create(document.getElementById('monaco'), { value: '{\n  "Version": "2012-10-17",\n  "Statement": []\n}', language: 'json', automaticLayout: true })
+})
+</script>
+<div style="height:1500px"></div>
+</body></html>
