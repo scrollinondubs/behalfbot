@@ -34,8 +34,8 @@ claude --channels plugin:matrix@behalfbot
 
 `matrix` is not on Anthropic's default channel allowlist, so Claude Code only
 registers it when managed settings allow it. Add this to
-`managed-settings.json` (macOS: `/Library/Application Support/ClaudeCode/`,
-Linux and the chassis container: `/etc/claude-code/`):
+`managed-settings.json` on the machine that runs the session (macOS:
+`/Library/Application Support/ClaudeCode/`, Linux: `/etc/claude-code/`):
 
 ```json
 {

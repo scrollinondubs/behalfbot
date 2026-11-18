@@ -509,8 +509,8 @@ print_matrix_steps() {
         "$config_src" || return 0
 
     step "8b/14" "Matrix channel setup (surfaces lists matrix)"
-    log "  1. managed-settings.json (macOS: /Library/Application Support/ClaudeCode/,"
-    log "     Linux + container: /etc/claude-code/): \"channelsEnabled\": true and"
+    log "  1. managed-settings.json on the host running claude --channels (macOS:"
+    log "     /Library/Application Support/ClaudeCode/, Linux: /etc/claude-code/): \"channelsEnabled\": true and"
     log "     allowedChannelPlugins naming {\"marketplace\": \"behalfbot\", \"plugin\": \"matrix\"}."
     log "     The list replaces Anthropic's default, so also name discord@claude-plugins-official if kept."
     log "  2. claude plugin marketplace add scrollinondubs/behalfbot"
@@ -519,8 +519,9 @@ print_matrix_steps() {
     log "     /matrix:configure MATRIX_HOMESERVER_URL=<https://...> MATRIX_BOT_USER_ID=<@bot:server> MATRIX_ACCESS_TOKEN=<from password manager>"
     log "     /matrix:access add <@you:server>"
     log "  4. Keep the bot's rooms unencrypted - the plugin skips E2EE events."
-    log "  5. Add plugin:matrix@behalfbot to CLAUDE_CHANNELS in .env (space-separated),"
-    log "     then re-run chassis/scripts/bootstrap-customer-scripts.sh."
+    log "  5. Re-render the restart script with CLAUDE_CHANNELS exported, space-separated:"
+    log "     CLAUDE_CHANNELS=\"plugin:discord@claude-plugins-official plugin:matrix@behalfbot\" \\"
+    log "       bash chassis/scripts/bootstrap-customer-scripts.sh"
     log "  Full guide: docs/SELF_INSTALL.md, \"Matrix as a chat surface\"."
 }
 

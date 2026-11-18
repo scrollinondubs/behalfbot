@@ -155,9 +155,9 @@ Set `surfaces.primary: matrix` (or list it as a secondary) in
    access token (the plugin README shows the login call). Keep the token in
    your password manager.
 2. **Allow the channel.** `matrix` is not on Anthropic's default channel
-   allowlist. In `managed-settings.json` (macOS:
-   `/Library/Application Support/ClaudeCode/`, Linux and the container:
-   `/etc/claude-code/`) set `"channelsEnabled": true` and an
+   allowlist. In `managed-settings.json` on the host that runs the
+   `claude --channels` session (macOS: `/Library/Application Support/ClaudeCode/`,
+   Linux: `/etc/claude-code/`) set `"channelsEnabled": true` and an
    `allowedChannelPlugins` list that names
    `{"marketplace": "behalfbot", "plugin": "matrix"}`. That list replaces
    the default one, so also name
@@ -178,12 +178,13 @@ Set `surfaces.primary: matrix` (or list it as a secondary) in
 5. **Rooms.** Create a room from your own account, leave encryption off, and
    invite the bot; it auto-joins invites from allowlisted users. The plugin
    skips encrypted events, so an encrypted room reads as silence.
-6. **Start the session with it.** Set `CLAUDE_CHANNELS` in `.env`, space-separated
-   when you run more than one, and re-run
-   `chassis/scripts/bootstrap-customer-scripts.sh` so the restart script
-   picks it up:
+6. **Start the session with it.** Re-render the restart script with
+   `CLAUDE_CHANNELS` set in the environment, space-separated when you run
+   more than one (the renderer reads it from the environment, not from `.env`):
    ```
-   CLAUDE_CHANNELS="plugin:discord@claude-plugins-official plugin:matrix@behalfbot"
+   CLAUDE_CHANNELS="plugin:discord@claude-plugins-official plugin:matrix@behalfbot" \
+   CUSTOMER_HOME=~/.behalfbot CHASSIS_HOME=~/behalfbot BOT_NAME=<bot> \
+       bash chassis/scripts/bootstrap-customer-scripts.sh
    ```
 
 Matrix carries the conversation only. There is no `post-to-matrix.sh` yet, so
