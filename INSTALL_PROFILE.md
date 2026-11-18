@@ -49,7 +49,7 @@ For V1 case studies we hand-author the artifacts directly from an interview. Onc
 
 | Field | Value |
 |---|---|
-| `primary_channel` | `<discord \| telegram \| slack>` |
+| `primary_channel` | `<discord \| telegram \| slack \| matrix>` |
 | `secondary_channel` | `<describe or "none">` |
 | `notification_strategy` | `<describe channel topology>` |
 

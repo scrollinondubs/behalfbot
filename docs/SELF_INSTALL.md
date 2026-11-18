@@ -13,7 +13,7 @@ Before you start:
 - **Linux or macOS host** with Docker + Compose plugin installed
 - **Claude Code CLI** installed and logged in (`claude --version` should print a version)
 - **A second-brain backend account** (Notion, SiYuan, or Obsidian) - you'll point chassis at it later
-- **Discord, Telegram, or Slack workspace** where the chassis can talk to you
+- **Discord, Telegram, or Slack workspace, or a Matrix homeserver** where the chassis can talk to you
 - **A bot identity** distinct from your personal accounts:
   - GitHub user (for the agent's commits, separate from yours)
   - Google Workspace user (for Gmail / Calendar read+write, separate from yours)
@@ -82,7 +82,7 @@ Whatever path you choose, the resulting `.env` should contain (at minimum):
 - `OPENAI_API_KEY`
 - `GITHUB_PAT` (for the agent's bot account)
 - Google OAuth credentials (`GOOGLE_OAUTH_*` set)
-- `DISCORD_BOT_TOKEN` (or equivalent for Telegram / Slack)
+- `DISCORD_BOT_TOKEN` (or equivalent for Telegram / Slack; a Matrix bot's token goes into the plugin's own `.env` instead, see [Matrix as a chat surface](#matrix-as-a-chat-surface))
 - Per-plugin keys for the modules you enabled in `chassis.config.yaml`
 
 See `docs/hydration.md` for the full env-var map.
@@ -137,10 +137,58 @@ After Step 5 completes:
 - A heartbeat dispatcher that can run any number of scheduled "gather-first" tasks
 - A plugin system - flip flags in `chassis.config.yaml` to enable BFL, dating, restaurant-booking, etc.
 - Memory continuity across sessions (`~/.claude/projects/<install>/memory/`)
-- Discord/Telegram/Slack intake for ad-hoc tasks
+- Discord/Telegram/Slack/Matrix intake for ad-hoc tasks
 - A dispatcher that lives in a container, runs under launchd/systemd, and survives reboots
 
 ---
+
+## Matrix as a chat surface
+
+The chassis ships a Claude Code channel plugin for Matrix at
+[`claude-plugins/matrix-channel/`](../claude-plugins/matrix-channel/README.md).
+It gives the session the same tools as the Discord plugin (`reply`, `react`,
+`edit_message`, `fetch_messages`, `download_attachment`) over any homeserver.
+Set `surfaces.primary: matrix` (or list it as a secondary) in
+`chassis.config.yaml` and `bootstrap.sh` prints these steps for you.
+
+1. **Bot account.** Register a dedicated Matrix user for the agent and get its
+   access token (the plugin README shows the login call). Keep the token in
+   your password manager.
+2. **Allow the channel.** `matrix` is not on Anthropic's default channel
+   allowlist. In `managed-settings.json` (macOS:
+   `/Library/Application Support/ClaudeCode/`, Linux and the container:
+   `/etc/claude-code/`) set `"channelsEnabled": true` and an
+   `allowedChannelPlugins` list that names
+   `{"marketplace": "behalfbot", "plugin": "matrix"}`. That list replaces
+   the default one, so also name
+   `{"marketplace": "claude-plugins-official", "plugin": "discord"}` if you
+   keep Discord.
+3. **Install the plugin.**
+   ```
+   claude plugin marketplace add scrollinondubs/behalfbot
+   claude plugin install matrix@behalfbot
+   ```
+4. **Configure it** from a Claude Code session started in your install directory:
+   ```
+   /matrix:configure MATRIX_HOMESERVER_URL=https://matrix.example.org MATRIX_BOT_USER_ID=@yourbot:example.org MATRIX_ACCESS_TOKEN=<token>
+   /matrix:access add @you:example.org
+   ```
+   The token lands in `~/.claude/channels/matrix/.env` (mode 600), not in the
+   install's `.env`.
+5. **Rooms.** Create a room from your own account, leave encryption off, and
+   invite the bot; it auto-joins invites from allowlisted users. The plugin
+   skips encrypted events, so an encrypted room reads as silence.
+6. **Start the session with it.** Set `CLAUDE_CHANNELS` in `.env`, space-separated
+   when you run more than one, and re-run
+   `chassis/scripts/bootstrap-customer-scripts.sh` so the restart script
+   picks it up:
+   ```
+   CLAUDE_CHANNELS="plugin:discord@claude-plugins-official plugin:matrix@behalfbot"
+   ```
+
+Matrix carries the conversation only. There is no `post-to-matrix.sh` yet, so
+briefings and ops alerts still go out through Discord, Telegram or Slack, and
+`principal-policy-hook.sh` does not yet recognise Matrix messages.
 
 ## Going further
 

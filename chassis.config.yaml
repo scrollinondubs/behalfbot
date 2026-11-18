@@ -110,7 +110,13 @@ deployment:
 host_clis: []
 
 surfaces:
-  primary: discord                          # discord | telegram | slack
+  primary: discord                          # discord | telegram | slack | matrix
+                                            # matrix = the Claude Code channel plugin in
+                                            # claude-plugins/matrix-channel (install it with
+                                            # `/plugin install matrix@behalfbot`, set it up with
+                                            # /matrix:configure). Conversation only: briefings
+                                            # and ops alerts still post through discord,
+                                            # telegram or slack (docs/multi-surface-channels.md).
   secondary: {}                             # Add telegram_monitor, slack, etc. as needed
   channel_topology:                         # Installer creates these channels in their Discord server
     - id: <installer>-briefings             # Daily briefing target

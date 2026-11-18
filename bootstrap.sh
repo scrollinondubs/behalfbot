@@ -496,6 +496,34 @@ populate_discord_access() {
     fi
 }
 
+print_matrix_steps() {
+    # Matrix is an opt-in chat surface (claude-plugins/matrix-channel). Its
+    # token lives in the plugin's own state dir, written by /matrix:configure,
+    # so nothing is rendered here; this only prints the steps when the
+    # surfaces block names matrix. Comments are stripped first because the
+    # shipped template lists matrix in a comment.
+    local config_src
+    config_src="$(first_existing "$CUSTOMER_HOME/chassis.config.yaml" "$CHASSIS_HOME/chassis.config.yaml")"
+    [[ -n "$config_src" ]] || return 0
+    awk '/^surfaces:/{f=1; next} /^[^[:space:]#]/{f=0} {sub(/#.*/, "")} f && /matrix/{found=1} END{exit !found}' \
+        "$config_src" || return 0
+
+    step "8b/14" "Matrix channel setup (surfaces lists matrix)"
+    log "  1. managed-settings.json (macOS: /Library/Application Support/ClaudeCode/,"
+    log "     Linux + container: /etc/claude-code/): \"channelsEnabled\": true and"
+    log "     allowedChannelPlugins naming {\"marketplace\": \"behalfbot\", \"plugin\": \"matrix\"}."
+    log "     The list replaces Anthropic's default, so also name discord@claude-plugins-official if kept."
+    log "  2. claude plugin marketplace add scrollinondubs/behalfbot"
+    log "     claude plugin install matrix@behalfbot"
+    log "  3. In a claude session in $CUSTOMER_HOME:"
+    log "     /matrix:configure MATRIX_HOMESERVER_URL=<https://...> MATRIX_BOT_USER_ID=<@bot:server> MATRIX_ACCESS_TOKEN=<from password manager>"
+    log "     /matrix:access add <@you:server>"
+    log "  4. Keep the bot's rooms unencrypted - the plugin skips E2EE events."
+    log "  5. Add plugin:matrix@behalfbot to CLAUDE_CHANNELS in .env (space-separated),"
+    log "     then re-run chassis/scripts/bootstrap-customer-scripts.sh."
+    log "  Full guide: docs/SELF_INSTALL.md, \"Matrix as a chat surface\"."
+}
+
 preflight_bot_identity() {
     # chassis#5 item 3: pre-flight check that the bot's outbound webhook
     # identity (INSTANCE_NAME + per-channel webhook URLs) matches the
@@ -965,6 +993,7 @@ main() {
     initialize_heartbeats
     render_customer_scripts
     populate_discord_access
+    print_matrix_steps
     preflight_bot_identity
     activate_plugins
     seed_memory

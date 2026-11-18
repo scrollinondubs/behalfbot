@@ -1,0 +1,12 @@
+{
+  "name": "behalfbot",
+  "owner": { "name": "Behalf.bot" },
+  "metadata": { "description": "Claude Code plugins shipped with the Behalf.bot chassis" },
+  "plugins": [
+    {
+      "name": "matrix",
+      "source": "./claude-plugins/matrix-channel",
+      "description": "Matrix channel for Claude Code - Discord-equivalent tool surface over the Matrix client-server API"
+    }
+  ]
+}
