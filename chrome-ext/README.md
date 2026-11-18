@@ -81,9 +81,11 @@ Chrome only (Manifest V3, Chrome 116+).
    Done lost in the dead socket is answered again when the relay re-sends
    that turn. Other commands in flight fail with "reconnected before
    answering" and are never replayed.
-10. Disconnect (popup or side panel), Cancel on Chrome's bar, closing the tab,
-   or switching the extension off sends `bye` and closes the socket; the
-   relay then deletes the session token and anything it held at once.
+10. Disconnect (popup or side panel), Cancel on Chrome's bar or closing the
+   tab sends `bye` and closes the socket; the relay then deletes the session
+   token and anything it held at once. Switching the extension off cannot
+   say goodbye, so the relay ends that session when its 2 minute hold runs
+   out.
 
 ## Why a page cannot press Done
 

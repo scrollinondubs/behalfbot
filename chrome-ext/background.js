@@ -92,7 +92,12 @@ function within(ms, p, what) {
 
 async function attach() {
   if (attachedTab === session.tabId) return
-  await within(10_000, chrome.debugger.attach({ tabId: session.tabId }, '1.3'), 'attaching to the tab')
+  try {
+    await within(10_000, chrome.debugger.attach({ tabId: session.tabId }, '1.3'), 'attaching to the tab')
+  } catch (e) {
+    // A slow attach that landed after its deadline: we hold the tab already.
+    if (!/already attached/i.test(String(e && e.message))) throw e
+  }
   attachedTab = session.tabId
 }
 
@@ -154,17 +159,23 @@ async function humanClick(ref, pacing, progress = {}) {
 const ENTER = { key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }
 
 // Typing: with pacing one key at a time with small uneven gaps, else one
-// insertText. clear empties the field first and stops if it could not.
+// insertText. clear empties the field first and stops if it could not. Code
+// editors (Monaco, CodeMirror) auto-close brackets and re-indent on typed
+// keys, which would change the text, so they always get one insertText.
 async function typeInto(cmd, pacing, progress = {}) {
+  let kind
   if (cmd.clear) {
     const c = await clearField(cmd.ref)
     if (c.cleared === false || c.cleared === null) {
       throw new Error(`could not clear that field (${c.error || `still has text, field kind ${c.kind}`}); nothing was typed`)
     }
+    kind = c.kind
   } else {
     await cdp('DOM.focus', { backendNodeId: cmd.ref })
+    if (pacing !== 'off') kind = ((await callOn(cmd.ref, FIELD_STATE_FN)) || {}).kind
   }
-  for (const step of keyPlan(cmd.text, pacing)) {
+  const how = kind === 'monaco' || kind === 'codemirror' ? 'off' : pacing
+  for (const step of keyPlan(cmd.text, how)) {
     progress.typed = true
     if (step.insert !== undefined) {
       await cdp('Input.insertText', { text: step.insert })
@@ -361,7 +372,6 @@ async function run(cmd) {
       // only if nothing reached the page yet.
       if (!transientError(e && e.message) || progress.pressed || progress.typed || !RETRYABLE.has(cmd.op)) throw e
       await sleep(800)
-      attachedTab = null
       result = await exec(cmd, tab, pacing, progress)
     }
     if (result && result.reply) {
@@ -530,6 +540,8 @@ async function lost() {
     retry = { attempt: 0, since: Date.now(), timer: null }
     await store.set({ status: 'connecting' })
     await log('Connection to the relay dropped, reconnecting', 'err')
+    // Disconnect may have run while those awaited.
+    if (!session || !retry) return
   }
   if (Date.now() - retry.since > RECONNECT_FOR_MS) return teardown('Lost the connection to the relay')
   const wait = BACKOFF_MS[Math.min(retry.attempt++, BACKOFF_MS.length - 1)]

@@ -155,6 +155,20 @@ for (const [name, sel, read] of cases) {
   const v = await ev(P, read)
   check(`clear+type ${name}`, r.ok && r.result.cleared === true && ins.ok && v === '{"new": 1}', `${JSON.stringify(r.result || r.error)} -> ${JSON.stringify(v)}`)
 }
+// the type op with human pacing, key by key, over the same six fields: code
+// editors auto-close brackets and quotes on typed keys
+const JSON_TEXT = '{\n  "Version": "2012-10-17",\n  "Statement": [{"Effect": "Allow"}]\n}'
+// Monaco re-indents a multi-line insertText as well (as before this op
+// existed), so it gets one line; it must still come out exact.
+const ONE_LINE = '{"Version": "2012-10-17", "Statement": [{"Effect": "Allow"}]}'
+for (const [name, sel, read] of cases) {
+  const text = name === 'monaco' ? ONE_LINE : JSON_TEXT
+  const r = await cmd({ op: 'type', ref: await ref(sel), text, clear: true, pacing: 'human' }, 60000)
+  const v = String(await ev(P, read)).replace(/\u00a0/g, ' ')
+  // A single-line input drops newlines; contenteditable may too.
+  const want = name === 'plain input' || name === 'contenteditable' ? text.replace(/\n/g, '') : text
+  check(`paced type ${name}`, r.ok && (v === text || v === want), `${JSON.stringify(r.error || r.result)} -> ${JSON.stringify(v)}`)
+}
 // clearing an already empty field is a no-op, and old rawKeyDown behaviour for comparison
 await ev(P, `mon.setValue('{"Statement": []}')`)
 await cmd({ op: 'cdp', method: 'DOM.focus', params: { backendNodeId: await ref('#monaco textarea') } })
@@ -296,6 +310,11 @@ check('paced click: one trusted click inside the button, after a pause', clicked
 // while it is down must reach the driver after the reconnect, and the same
 // tab keeps working. The harness lets go of the worker first: an attached
 // DevTools session would keep it alive and hide a worker stop.
+// What Chrome says to a second attach while we hold the tab; attach()
+// treats it as attached.
+await cmd({ op: 'cdp', method: 'DOM.getBoxModel', params: { backendNodeId: await ref('#btn') } })
+const again = await ev(SW, `chrome.tabs.query({}).then((ts) => chrome.debugger.attach({ tabId: ts.find((t) => t.url.includes('select.html')).id }, '1.3').then(() => 'attached twice', (e) => e.message))`)
+check('second attach on a held tab says "already attached"', /already attached/i.test(again), again)
 await B('Target.detachFromTarget', { sessionId: SW })
 await cmd({ op: 'cdp', method: 'Page.navigate', params: { url: 'http://127.0.0.1:8100/select.html' } })
 await sleep(1000)
