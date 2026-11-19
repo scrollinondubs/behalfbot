@@ -18,6 +18,8 @@ Semver:
 
 ## Unreleased
 
+- **Matrix kill switch went deaf on conduwuit/continuwuity homeservers.** On first sight of a room the listener saved the backward page's `start`, which those servers return as an i64-max sentinel that a forward page never moves past, so `halt` and `resume` from Matrix were never seen (new-jaxity#756, 2026-11-19). It now saves the newest event's position (`end`) and pages forward once, skipping whatever comes back, which also covers Synapse. Covered by a regression test that fails against the old code. **Existing installs:** a listener already armed on one of these servers keeps the bad cursor; delete `state/matrix-control-listener-cursor.json` and restart the container.
+
 ### Added
 
 - **Opt-in Matrix transport for chassis alerts and the remote kill switch (scrollinondubs/new-jaxity#756).** For installs that moved their operator chat to Matrix. Full setup: `chassis/docs/matrix-transport.md`.
