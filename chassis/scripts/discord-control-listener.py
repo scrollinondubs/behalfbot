@@ -328,6 +328,10 @@ class Discord:
 
 
 class Listener:
+    # The `enabled_by` prefix. matrix-control-listener.py subclasses this and
+    # sets its own, so the flag file says which transport flipped it.
+    SOURCE = "discord-control-listener"
+
     def __init__(self, customer_home, principal_id, channels, discord):
         self.customer_home = customer_home
         self.principal_id = principal_id
@@ -399,7 +403,7 @@ class Listener:
         )
 
     def apply(self, command, duration, reason, user_id):
-        by = "discord-control-listener:%s" % user_id
+        by = "%s:%s" % (self.SOURCE, user_id)
 
         if command == "status":
             return self.describe_state()

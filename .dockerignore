@@ -59,6 +59,7 @@ scheduled-tasks/heartbeat-state.json
 scheduled-tasks/conservation-mode.json
 scheduled-tasks/halt.json
 state/control-listener-cursor.json
+state/matrix-control-listener-cursor.json
 scheduled-tasks/bfl-health-state.json
 scheduled-tasks/telegram-monitor-state.json
 

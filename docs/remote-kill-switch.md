@@ -48,6 +48,14 @@ change. Installs that want stronger isolation can run the same image with the
 docker compose run --rm chassis control-listener
 ```
 
+### Matrix
+
+Installs that moved their operator chat to Matrix can run the same switch
+there: `chassis/scripts/matrix-control-listener.py`, started only when
+`CHASSIS_MATRIX_CONTROL=1`. Same commands, same flag files, same acks. It
+cannot read encrypted rooms, so the control room must be unencrypted. Setup:
+`chassis/docs/matrix-transport.md`.
+
 ### Host-side (non-container) installs
 
 The listener is started by the container entrypoint. An install that runs the
