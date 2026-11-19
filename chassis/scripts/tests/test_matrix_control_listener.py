@@ -319,3 +319,11 @@ def test_config_fails_closed(cfg, var, value, capsys):
     out = capsys.readouterr()
     assert "UNARMED" in out.out
     assert "secret-token" not in out.out + out.err
+
+
+def test_missing_pagination_token_is_logged_not_silent(tmp_path, capsys):
+    inst, fake, _ = make(tmp_path, primed=False)
+    fake.messages = lambda *a, **k: {"chunk": []}
+    inst.poll_once()
+    assert "no pagination token" in capsys.readouterr().out
+    assert ROOM not in inst.cursors

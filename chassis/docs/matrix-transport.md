@@ -72,6 +72,13 @@ Rules:
 ## Configuration
 
 All in the install's `.env`. Values are runtime-only and never committed.
+When the install has a `.env.baked`, re-run `bake-env.sh` after adding them:
+the container and these scripts read the baked file first.
+
+`host.docker.internal` resolves on Docker Desktop and colima. On Linux Docker
+it does not by default, so either set `CHASSIS_MATRIX_HOMESERVER` to an
+address the container can reach or add `host.docker.internal:host-gateway` to
+the service's `extra_hosts`.
 
 | Variable | Used by | Meaning |
 |---|---|---|

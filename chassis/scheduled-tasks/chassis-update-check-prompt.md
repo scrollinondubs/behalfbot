@@ -32,7 +32,7 @@ The gather script has already filtered out:
 
 ### Step 1 - Resolve the alerts channel
 
-Read `chassis.config.yaml` at `${CHASSIS_HOME}/chassis.config.yaml`. The customer's alerts channel comes from `discord_channels.alerts_label` (display name, e.g. `#alerts` or `#<installer>-ops`). The runtime channel ID is in the `.env` as `DISCORD_ALERTS_CHANNEL_ID`. Post with `bash "$CHASSIS_ROOT/scripts/alert-post.sh" alerts @<file-with-the-message>`, which resolves that channel itself and honours `CHASSIS_ALERT_TRANSPORT` (Discord, Matrix or both). If the script is missing or exits non-zero, fall back to the previous route (the discord MCP `reply` tool, or `discord-post.sh`, to that channel id).
+Read `chassis.config.yaml` at `${CHASSIS_HOME}/chassis.config.yaml`. The customer's alerts channel comes from `discord_channels.alerts_label` (display name, e.g. `#alerts` or `#<installer>-ops`). The runtime channel ID is in the `.env` as `DISCORD_ALERTS_CHANNEL_ID`. Post with `bash "$CHASSIS_ROOT/scripts/alert-post.sh" alerts @<file-with-the-message>`, which resolves that channel itself and honours `CHASSIS_ALERT_TRANSPORT` (Discord, Matrix or both). If the script is missing or exits non-zero, fall back to the previous route: `chassis/scripts/post-to-channel.sh alerts "<message>"` (the webhook path), then `discord-post.sh` to that channel id.
 
 If neither is configured, fall back to `DISCORD_PRIMARY_CHANNEL_ID`. Do NOT silently drop the notification.
 

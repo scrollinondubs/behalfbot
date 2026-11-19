@@ -155,6 +155,7 @@ class Matrix:
         self.base = base
         self._token = token
         self.timeout = timeout
+        self._txn = 0
 
     def request(self, method, path, body=None, raw=None, content_type=None):
         data = raw if raw is not None else (json.dumps(body).encode("utf-8") if body is not None else None)
@@ -181,7 +182,10 @@ class Matrix:
             raise PostError("homeserver returned non-JSON on %s" % path.split("?")[0])
 
     def send(self, room_id, content):
-        txn = "chassis-%d-%d" % (int(time.time() * 1000), os.getpid())
+        # A repeated txn id is silently deduplicated by the homeserver, so a
+        # second send in the same millisecond would vanish without the counter.
+        self._txn += 1
+        txn = "chassis-%d-%d-%d" % (int(time.time() * 1000), os.getpid(), self._txn)
         path = "/_matrix/client/v3/rooms/%s/send/m.room.message/%s" % (
             urllib.parse.quote(room_id, safe=""),
             txn,

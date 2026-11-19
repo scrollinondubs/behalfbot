@@ -12,6 +12,7 @@ The page tests need fastapi and httpx and are skipped without them.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -38,6 +39,30 @@ _gspec.loader.exec_module(gather)
 
 OCT = _spend.Period(date(2026, 10, 1), date(2026, 11, 1))
 
+
+
+def _curl_stub(tmp: Path) -> tuple[dict, Path]:
+    """A fake `curl` on PATH so the real alert-post.sh -> discord-post.sh chain
+    runs end to end. It records the target URL and the payload_json file
+    (deleted by discord-post.sh on exit, so it is copied at call time)."""
+    bindir = tmp / "bin"
+    bindir.mkdir()
+    rec = tmp / "curl.rec"
+    (bindir / "curl").write_text(
+        "#!/bin/bash\n"
+        "for a in \"$@\"; do\n"
+        "  case \"$a\" in\n"
+        "    payload_json=\\<*) cat \"${a#payload_json=<}\" > \"%s.payload\" ;;\n"
+        "    https://*) printf '%%s' \"$a\" > \"%s.url\" ;;\n"
+        "  esac\n"
+        "done\n"
+        "echo '{\"id\": \"1\"}'\n" % (rec, rec)
+    )
+    (bindir / "curl").chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CHASSIS_ALERT", "CHASSIS_MATRIX"))}
+    env.update({"PATH": "%s:%s" % (bindir, os.environ.get("PATH", "/usr/bin:/bin")),
+                "CHASSIS_HOME": str(tmp), "CUSTOMER_HOME": str(tmp), "DISCORD_BOT_TOKEN": "fake-token"})
+    return env, rec
 
 class PeriodTests(unittest.TestCase):
     def test_calendar_month(self):
@@ -417,6 +442,18 @@ class ProviderTests(unittest.TestCase):
                                     datetime(2026, 10, 8, tzinfo=timezone.utc))
             self.assertEqual(status, {"x": "error"})
             conn.close()
+
+    def test_post_discord_reaches_the_same_channel_by_default(self):
+        """post_discord now goes through alert-post.sh. With
+        CHASSIS_ALERT_TRANSPORT unset the same channel and text must arrive."""
+        with tempfile.TemporaryDirectory() as d:
+            env, rec = _curl_stub(Path(d))
+            with unittest.mock.patch.dict(os.environ, env, clear=True):
+                gather.post_discord("424242", "Spend alert: x")
+                with self.assertRaises(RuntimeError):
+                    gather.post_discord("", "no channel")
+            self.assertEqual(Path(f"{rec}.url").read_text(), "https://discord.com/api/v10/channels/424242/messages")
+            self.assertEqual(json.loads(Path(f"{rec}.payload").read_text())["content"], "Spend alert: x")
 
     def test_alert_target_from_settings_then_env(self):
         self.assertEqual(gather.alert_target({"alert_channel_id": "1", "dashboard_url": "https://d.example/"}),

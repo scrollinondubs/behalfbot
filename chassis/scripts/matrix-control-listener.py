@@ -194,7 +194,8 @@ class Matrix:
         return True
 
     def send(self, room_id, content):
-        txn = "control-%d-%d" % (int(time.time() * 1000), os.getpid())
+        self._txn = getattr(self, "_txn", 0) + 1
+        txn = "control-%d-%d-%d" % (int(time.time() * 1000), os.getpid(), self._txn)
         path = "/_matrix/client/v3/rooms/%s/send/m.room.message/%s" % (self.q(room_id), txn)
         return self._request("PUT", path, content)
 
@@ -255,6 +256,9 @@ class MatrixListener(control.Listener):
             if start:
                 self.cursors[room] = start
                 self._save_cursors()
+            else:
+                log("ERROR: %s returned no pagination token - the kill switch cannot read this room "
+                    "until it does" % room)
             return
         data = self.matrix.messages(room, from_token=token)
         for ev in data.get("chunk") or []:
