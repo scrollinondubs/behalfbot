@@ -8,6 +8,9 @@
 #                      on an existing install to gain it.
 #   control-listener - the kill switch on its own, for installs that would
 #                      rather run it as a separate service
+#   matrix-control-listener
+#                    - the Matrix kill switch on its own. The dispatcher also
+#                      supervises it, but only when CHASSIS_MATRIX_CONTROL=1.
 #   bootstrap        - one-shot: hydrate .mcp.json/CLAUDE.md/HEARTBEATS.md, seed memory
 #   install-plugin <name>
 #                    - one-shot: run plugins/<name>/install.sh
@@ -269,6 +272,40 @@ supervise_control_listener() {
     done
 }
 
+supervise_matrix_control_listener() {
+    # Opt-in Matrix twin of the Discord kill switch. Nothing runs unless the
+    # install set CHASSIS_MATRIX_CONTROL=1, so existing installs are untouched.
+    [[ "${CHASSIS_MATRIX_CONTROL:-}" == "1" ]] || return 0
+    local script="$CHASSIS_ROOT/scripts/matrix-control-listener.py"
+    local logfile="$CUSTOMER_HOME/logs/scheduled/matrix-control-listener.log"
+
+    if [[ ! -f "$script" ]]; then
+        log "WARN: CHASSIS_MATRIX_CONTROL=1 but $script is missing - Matrix kill switch UNARMED"
+        return
+    fi
+
+    local rc=0
+    python3 "$script" --check >/dev/null 2>&1 || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        log "WARN: Matrix kill switch UNARMED - set CHASSIS_MATRIX_PRINCIPAL, CHASSIS_MATRIX_TOKEN_FILE"
+        log "WARN: and CHASSIS_MATRIX_DM_ROOM (or CHASSIS_MATRIX_CONTROL_ROOMS). Details in $logfile"
+        python3 "$script" >> "$logfile" 2>&1 || true
+        return
+    fi
+
+    log "Matrix control listener starting - log: $logfile"
+    while true; do
+        rc=0
+        python3 "$script" >> "$logfile" 2>&1 || rc=$?
+        if [[ "$rc" -eq 78 ]]; then
+            log "Matrix control listener exited 78 (config, or an encrypted control room) - not restarting. See $logfile"
+            return
+        fi
+        log "Matrix control listener exited rc=$rc - restarting in 30s"
+        sleep 30
+    done
+}
+
 run_plugin_fetch() {
     # behalfbot#82. Pull the vendored plugin tree from scrollinondubs/behalfbot-plugins
     # at the tag+SHA recorded in PLUGINS_PIN, into $CUSTOMER_HOME/vendored-plugins.
@@ -350,6 +387,7 @@ cmd_dispatcher() {
     # tick must not take the kill switch down with it - being able to say "halt"
     # matters most exactly when the rest of the loop is misbehaving.
     supervise_control_listener &
+    supervise_matrix_control_listener &
     while true; do
         run_dispatcher_once
         sleep "$DISPATCHER_INTERVAL_SECONDS"
@@ -366,6 +404,19 @@ cmd_control_listener() {
         exit 2
     fi
     log "running control listener from $script"
+    exec python3 "$script"
+}
+
+cmd_matrix_control_listener() {
+    ensure_customer_layout
+    source_env
+    resolve_chassis_root
+    local script="$CHASSIS_ROOT/scripts/matrix-control-listener.py"
+    if [[ ! -f "$script" ]]; then
+        log "FATAL: Matrix control listener not found at $script"
+        exit 2
+    fi
+    log "running Matrix control listener from $script"
     exec python3 "$script"
 }
 
@@ -506,6 +557,7 @@ configure_npm_cache
 case "$MODE" in
     dispatcher)       cmd_dispatcher       "$@" ;;
     control-listener) cmd_control_listener "$@" ;;
+    matrix-control-listener) cmd_matrix_control_listener "$@" ;;
     bootstrap)        cmd_bootstrap        "$@" ;;
     install-plugin)   cmd_install_plugin   "$@" ;;
     hydrate-env)      cmd_hydrate_env      "$@" ;;
@@ -516,7 +568,7 @@ case "$MODE" in
     update-cli)       cmd_update_cli       "$@" ;;
     *)
         echo "unknown mode: $MODE" >&2
-        echo "valid modes: dispatcher | control-listener | bootstrap | install-plugin <name> | hydrate-env | migrate | smoke-test | claude | shell | update-cli [version]" >&2
+        echo "valid modes: dispatcher | control-listener | matrix-control-listener | bootstrap | install-plugin <name> | hydrate-env | migrate | smoke-test | claude | shell | update-cli [version]" >&2
         exit 2
         ;;
 esac

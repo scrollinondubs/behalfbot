@@ -196,9 +196,10 @@ Common fields: `label`, `tz` (the timezone the vendor bills in), `anchor_day`
 (the day the billing period renews), `cap` (alert when the projection passes
 it), `note`.
 
-Alerts post through `chassis/scripts/discord-post.sh` (needs
+Alerts post through `chassis/scripts/alert-post.sh` (needs
 `DISCORD_BOT_TOKEN`) to `_settings.alert_channel_id`, falling back to
-`SPEND_ALERT_CHANNEL_ID`. `_settings.dashboard_url` (or `DASHBOARD_URL`) adds a
+`SPEND_ALERT_CHANNEL_ID`. With `CHASSIS_ALERT_TRANSPORT=matrix` or `both` they
+go to the Matrix alerts room instead or as well. `_settings.dashboard_url` (or `DASHBOARD_URL`) adds a
 link to the service's page. With no channel the alert is logged and retried
 next run. `DRY_RUN=1` prints alerts instead of posting them.
 

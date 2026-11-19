@@ -468,6 +468,31 @@ class StoreConcurrency(Case):
         self.assertIsNotNone(self.store.last_run())
 
 
+
+def _curl_stub(tmp: Path) -> tuple[dict, Path]:
+    """A fake `curl` on PATH so the real alert-post.sh -> discord-post.sh chain
+    runs end to end. It records the target URL and the payload_json file
+    (deleted by discord-post.sh on exit, so it is copied at call time)."""
+    bindir = tmp / "bin"
+    bindir.mkdir()
+    rec = tmp / "curl.rec"
+    (bindir / "curl").write_text(
+        "#!/bin/bash\n"
+        "for a in \"$@\"; do\n"
+        "  case \"$a\" in\n"
+        "    payload_json=\\<*) cat \"${a#payload_json=<}\" > \"%s.payload\" ;;\n"
+        "    https://*) printf '%%s' \"$a\" > \"%s.url\" ;;\n"
+        "  esac\n"
+        "done\n"
+        "echo '{\"id\": \"1\"}'\n" % (rec, rec)
+    )
+    (bindir / "curl").chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CHASSIS_ALERT", "CHASSIS_MATRIX"))}
+    env.update({"PATH": "%s:%s" % (bindir, os.environ.get("PATH", "/usr/bin:/bin")),
+                "CHASSIS_HOME": str(tmp), "CUSTOMER_HOME": str(tmp), "DISCORD_BOT_TOKEN": "fake-token"})
+    return env, rec
+
+
 class Notification(unittest.TestCase):
     def stub(self, tmp: Path) -> tuple[Path, Path]:
         out = tmp / "out"
@@ -486,6 +511,17 @@ class Notification(unittest.TestCase):
     def test_failure_is_reported(self) -> None:
         with mock.patch.dict(os.environ, {"CHASSIS_ALERT_CMD": "/usr/bin/false", "TRIPWIRE_CHANNEL_ID": ""}):
             self.assertFalse(tw.send_notification("x"))
+
+    def test_channel_override_reaches_that_discord_channel_by_default(self) -> None:
+        """TRIPWIRE_CHANNEL_ID now goes through alert-post.sh. With
+        CHASSIS_ALERT_TRANSPORT unset the same channel and text must arrive."""
+        with tempfile.TemporaryDirectory() as d:
+            env, rec = _curl_stub(Path(d))
+            env["TRIPWIRE_CHANNEL_ID"] = "123456"
+            with mock.patch.dict(os.environ, env, clear=True):
+                self.assertTrue(tw.send_notification("TripWire fired: shop"))
+            self.assertEqual(Path(f"{rec}.url").read_text(), "https://discord.com/api/v10/channels/123456/messages")
+            self.assertEqual(json.loads(Path(f"{rec}.payload").read_text())["content"], "TripWire fired: shop")
 
     def test_channel_override_needs_a_token_and_a_real_id(self) -> None:
         with tempfile.TemporaryDirectory() as d:

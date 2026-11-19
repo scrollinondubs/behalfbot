@@ -95,7 +95,7 @@ A drift apply reports the same version on both sides of the arrow. That is corre
 - **Never apply without explicit trigger.** This skill is reactive only.
 - **Never override BREAKING gate.** If the apply script refuses without `--force`, surface the refusal verbatim — do NOT auto-retry with `--force`. The operator must type that themselves.
 - **Run from the right working directory.** The apply script reads `$CHASSIS_HOME` from env; ensure it's set before invoking. In containerized installs, `$CHASSIS_HOME` is set by the dispatcher.
-- **Post output to alerts channel, not primary.** This is ops chatter, not principal-facing conversation. Use `DISCORD_ALERTS_CHANNEL_ID`.
+- **Post output to alerts channel, not primary.** This is ops chatter, not principal-facing conversation. Use `bash "$CHASSIS_ROOT/scripts/alert-post.sh" alerts @<file>`, which posts to `DISCORD_ALERTS_CHANNEL_ID` by default and honours `CHASSIS_ALERT_TRANSPORT`.
 - **Don't echo the changelog.** Operator can click the link in the original notification.
 
 ## Out of scope

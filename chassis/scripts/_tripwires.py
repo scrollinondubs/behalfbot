@@ -621,15 +621,16 @@ def run_due(store: Store, fetch: Fetch = fetch_url, notify: Notify | None = None
 def send_notification(text: str) -> bool:
     """Through chassis_alert in _alert.sh, so an install's existing alert route
     applies. TRIPWIRE_CHANNEL_ID sends to that Discord channel with the bot
-    token instead. Every message starts with our own prefix, so discord-post.sh
-    can never read one as an @file."""
+    token instead, through alert-post.sh so CHASSIS_ALERT_TRANSPORT still
+    applies. Every message starts with our own prefix, so neither poster can
+    ever read one as an @file."""
     env = os.environ.copy()
     channel = env.get("TRIPWIRE_CHANNEL_ID", "").strip()
     script = '. "$ALERT_LIB"; chassis_alert "$1"'
     if channel:
         if not channel.isdigit():
             return False
-        env["CHASSIS_ALERT_CMD"] = f"{SCRIPTS_DIR / 'discord-post.sh'} {channel}"
+        env["CHASSIS_ALERT_CMD"] = f"{SCRIPTS_DIR / 'alert-post.sh'} --discord-channel {channel} alerts"
         if not env.get("DISCORD_BOT_TOKEN"):
             home = env.get("CUSTOMER_HOME") or env.get("CHASSIS_HOME") or ""
             script = f'set -a; . "{home}/.env" >/dev/null 2>&1; set +a; {script}'

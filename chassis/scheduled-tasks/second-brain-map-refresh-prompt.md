@@ -36,6 +36,6 @@ Each entry links the doc in the backend's own link form, so the link resolves an
 
 ## Reporting
 
-Silent on success is wrong here: the installer should know the map changed under them. Post one short line to the alerts channel (display label `discord_channels.alerts_label` in `chassis.config.yaml`, runtime id `DISCORD_ALERTS_CHANNEL_ID` in `.env`) naming what was added and removed. If the only finding was a doc you decided not to add, post nothing and say why in your stdout report.
+Silent on success is wrong here: the installer should know the map changed under them. Post one short line to the alerts channel (display label `discord_channels.alerts_label` in `chassis.config.yaml`, runtime id `DISCORD_ALERTS_CHANNEL_ID` in `.env`) naming what was added and removed. Post it with `bash "$CHASSIS_ROOT/scripts/alert-post.sh" alerts @<file-with-the-message>`, which honours `CHASSIS_ALERT_TRANSPORT` (Discord, Matrix or both). If the script is missing or exits non-zero, fall back to the previous route (the discord MCP `reply` tool, or `discord-post.sh`, to that channel id). If the only finding was a doc you decided not to add, post nothing and say why in your stdout report.
 
 No em dashes in anything you write. Use " - ".

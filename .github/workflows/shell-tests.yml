@@ -69,6 +69,8 @@ on:
       - 'chassis/scripts/sync-claude-oauth-bridge.sh'
       - 'chassis/scripts/test-claude-oauth-bridge-alert.sh'
       - 'chassis/scripts/_alert.sh'
+      - 'chassis/scripts/alert-post.sh'
+      - 'chassis/scripts/test-alert-transport.sh'
       - '.github/workflows/shell-tests.yml'
   push:
     branches: [main]
@@ -131,6 +133,8 @@ on:
       - 'chassis/scripts/sync-claude-oauth-bridge.sh'
       - 'chassis/scripts/test-claude-oauth-bridge-alert.sh'
       - 'chassis/scripts/_alert.sh'
+      - 'chassis/scripts/alert-post.sh'
+      - 'chassis/scripts/test-alert-transport.sh'
       - '.github/workflows/shell-tests.yml'
   workflow_dispatch:
 
@@ -409,6 +413,18 @@ jobs:
       # the helper source unguarded and the bot-token delivery path removed.
       - run: bash chassis/scripts/test-claude-oauth-bridge-alert.sh
 
+  alert-transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # CHASSIS_ALERT_TRANSPORT (new-jaxity#756). The first cases prove an
+      # install that never set it still posts to Discord only, with the Matrix
+      # poster present and recording, so "nothing to do" is checked rather than
+      # assumed. Then matrix, the fallback to Discord when Matrix fails, both
+      # (success when either leg delivered), the transport read from .env for
+      # launchd callers, and caller values beating .env. Stubs only, no network.
+      - run: bash chassis/scripts/test-alert-transport.sh
+
   # ---------------------------------------------------------------------------
   # Everything above runs on ubuntu-latest: bash 5.x, GNU coreutils. That is
   # ONE of the two platforms this code runs on. The other is the operator's
@@ -553,6 +569,7 @@ jobs:
           bash:chassis/scripts/test-control-flags.sh
           bash:chassis/scripts/test-credential-expiry.sh
           bash:chassis/scripts/test-claude-oauth-bridge-alert.sh
+          bash:chassis/scripts/test-alert-transport.sh
           bash:plugins/dating/tests/test-emulator-state.sh
           bash:plugins/dating/tests/test-swipe-host-control-flags.sh
           bash:plugins/dating/tests/test-swipe-host-session-lifecycle.sh
