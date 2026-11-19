@@ -44,8 +44,9 @@ def event(body, sender=PRINCIPAL, age_s=5, msgtype="m.text", etype="m.room.messa
 class FakeMatrix:
     """`pages` is a list of chunks, one per forward poll."""
 
-    def __init__(self, pages=None, encrypted=False, fail_send=False):
+    def __init__(self, pages=None, encrypted=False, fail_send=False, server="synapse"):
         self.pages = list(pages or [])
+        self.server = server
         self.encrypted = encrypted
         self.fail_send = fail_send
         self.sent = []
@@ -55,7 +56,17 @@ class FakeMatrix:
     def messages(self, room_id, from_token=None, direction="f", limit=50):
         self.calls.append((room_id, from_token, direction))
         if direction == "b":
-            return {"start": "t0", "chunk": [event("halt", age_s=1)]}
+            if self.server == "conduwuit":
+                # i64-max sentinel start; end is the newest event's position.
+                return {"start": "9223372036854775807", "end": "t0", "chunk": [event("halt", age_s=1)]}
+            return {"start": "s_latest", "end": "t_before", "chunk": [event("halt", age_s=1)]}
+        if from_token == "9223372036854775807":
+            return {"chunk": []}
+        if from_token == "t_before":
+            # Synapse: paging forward from the backward end returns the newest event again.
+            return {"start": from_token, "end": "t0", "chunk": [event("halt", age_s=1)]}
+        if self.server == "conduwuit" and from_token == "t0" and not self.pages:
+            return {"chunk": []}
         chunk = self.pages.pop(0) if self.pages else []
         self._n += 1
         return {"start": from_token, "end": "t%d" % self._n, "chunk": chunk}
@@ -115,8 +126,20 @@ def test_cold_start_takes_position_and_acts_on_nothing(tmp_path):
     inst.poll_once()
     assert halt_flag(home) is None
     assert fake.sent == []
-    assert fake.calls == [(ROOM, None, "b")]
+    assert fake.calls == [(ROOM, None, "b"), (ROOM, "t_before", "f")]
     assert read(home / "state" / "matrix-control-listener-cursor.json") == {ROOM: "t0"}
+
+
+def test_cold_start_on_conduwuit_skips_the_sentinel_and_hears_the_next_command(tmp_path):
+    # Regression (new-jaxity#756): conduwuit answers a backward page with
+    # start = i64 max. Saving that made every later forward page empty.
+    inst, fake, home = make(tmp_path, primed=False, server="conduwuit")
+    inst.poll_once()
+    assert halt_flag(home) is None
+    assert read(home / "state" / "matrix-control-listener-cursor.json") == {ROOM: "t0"}
+    fake.pages = [[event("halt")]]
+    inst.poll_once()
+    assert halt_flag(home)["enabled"] is True
 
 
 def test_principal_halt_writes_the_shared_flag_and_acks(tmp_path):

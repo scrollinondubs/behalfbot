@@ -251,14 +251,21 @@ class MatrixListener(control.Listener):
         token = self.cursors.get(room)
         if not token:
             # First sight of this room: take the position, act on nothing.
+            # Use the backward page's `end` (the position of the newest event),
+            # not its `start`: conduwuit/continuwuity return a sentinel `start`
+            # (i64 max) that a forward page never moves past, so the listener
+            # went deaf (new-jaxity#756, 2026-11-19). Then page forward once
+            # and skip whatever comes back, so a server that returns the newest
+            # event again (Synapse) does not act on it.
             data = self.matrix.messages(room, direction="b", limit=1)
-            start = data.get("start")
-            if start:
-                self.cursors[room] = start
-                self._save_cursors()
-            else:
+            token = data.get("end") or data.get("start")
+            if not token:
                 log("ERROR: %s returned no pagination token - the kill switch cannot read this room "
                     "until it does" % room)
+                return
+            ahead = self.matrix.messages(room, from_token=token)
+            self.cursors[room] = ahead.get("end") or token
+            self._save_cursors()
             return
         data = self.matrix.messages(room, from_token=token)
         for ev in data.get("chunk") or []:
