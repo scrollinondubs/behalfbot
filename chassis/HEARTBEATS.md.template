@@ -533,7 +533,7 @@ criticality: critical
 Pulls daily spend from each billing API listed in
 `${CUSTOMER_HOME}/config/spend-services.json` into
 `state/projections/spend.db`, which the dashboard's Projections tab reads.
-Posts its own alert through `discord-post.sh` when a projection passes 1.5x the
+Posts its own alert through `alert-post.sh` when a projection passes 1.5x the
 median of the last 3 full periods and is $10 above it, or passes a `cap`; once
 per (service, period, level). A service with no key in `.env` is recorded as
 "needs key" and skipped. Always emits `count: 0`, so no model ever runs and the

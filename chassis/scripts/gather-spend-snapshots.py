@@ -5,7 +5,7 @@ then post an alert when a projection leaves its normal path.
 Runs as the `spend-snapshots` heartbeat every 6 hours. All vendor calls are
 GETs. Progress lines go to stderr (the dispatcher log); stdout carries only
 the JSON verdict, which always has count 0 so the dispatcher never invokes a
-model - the alert is posted from here, through discord-post.sh.
+model - the alert is posted from here, through alert-post.sh.
 
 Services come from $CUSTOMER_HOME/config/spend-services.json; see
 chassis/docs/dashboard.md for the providers and their fields. A service with
@@ -39,7 +39,7 @@ import _spend  # noqa: E402
 
 HTTP_TIMEOUT_S = 90
 USER_AGENT = "behalfbot-spend-snapshots/1.0 (+https://github.com/scrollinondubs/behalfbot)"
-DISCORD_POST = Path(__file__).resolve().parent / "discord-post.sh"
+ALERT_POST = Path(__file__).resolve().parent / "alert-post.sh"
 # Vendors revise recent days, so each run re-reads a short tail.
 REFRESH_TAIL_DAYS = 3
 VERCEL_CHUNK_DAYS = 8
@@ -524,11 +524,15 @@ def alert_target(cfg_settings: dict) -> tuple[str, str]:
 
 
 def post_discord(channel: str, text: str) -> None:
-    if not channel:
+    """Through alert-post.sh, so CHASSIS_ALERT_TRANSPORT applies. With the
+    default transport this is discord-post.sh to `channel`, as before."""
+    transport = os.environ.get("CHASSIS_ALERT_TRANSPORT", "discord").strip().lower() or "discord"
+    if not channel and transport == "discord":
         raise RuntimeError("no alert channel: set _settings.alert_channel_id or SPEND_ALERT_CHANNEL_ID")
-    r = subprocess.run(["bash", str(DISCORD_POST), channel, text], capture_output=True, text=True, timeout=60)
+    cmd = ["bash", str(ALERT_POST)] + (["--discord-channel", channel] if channel else []) + ["alerts", text]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
     if r.returncode != 0:
-        raise RuntimeError(f"discord-post.sh exit {r.returncode}: {(r.stderr or r.stdout).strip()[-160:]}")
+        raise RuntimeError(f"alert-post.sh exit {r.returncode}: {(r.stderr or r.stdout).strip()[-160:]}")
 
 
 def check_alerts(conn, services: dict, status: dict[str, str], now: datetime, dry_run: bool,

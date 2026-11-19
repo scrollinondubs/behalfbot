@@ -10,7 +10,7 @@ The weekly docker-prune heartbeat failed. The gather emitted `count > 0` with on
 ## Your job
 
 1. Classify the failure from `status` + `detail`.
-2. Post one concise alert to the install's alerts channel via the discord MCP `reply` tool: date, status tag, best-guess cause, fix suggestion. The display label is `discord_channels.alerts_label` in `${CHASSIS_HOME}/chassis.config.yaml`; the runtime channel ID is `DISCORD_ALERTS_CHANNEL_ID` in the install's `.env`.
+2. Post one concise alert to the install's alerts channel with `bash "$CHASSIS_ROOT/scripts/alert-post.sh" alerts @<file-with-the-message>`: date, status tag, best-guess cause, fix suggestion. The script honours `CHASSIS_ALERT_TRANSPORT` (Discord, Matrix or both). The display label is `discord_channels.alerts_label` in `${CHASSIS_HOME}/chassis.config.yaml`; the runtime channel ID is `DISCORD_ALERTS_CHANNEL_ID` in the install's `.env`. If the script is missing or exits non-zero, fall back to the previous route (the discord MCP `reply` tool, or `discord-post.sh`, to that channel id).
 3. If the same status fires for 2+ consecutive weeks, file-or-comment on the install's own repo (the `origin` remote of `${CUSTOMER_HOME}`, not the chassis upstream) using the dedup helper.
 
 ## What NOT to do

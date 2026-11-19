@@ -208,6 +208,7 @@ dispatcher tick.
 | `CHASSIS_ALERT_CMD` | unset | full command line to deliver alerts instead, e.g. `post-to-slack.sh ops` |
 | `CHASSIS_ALERT_CHANNEL` | `ops` | channel key for the webhook path, resolved by `post-to-channel.sh` |
 | `CHASSIS_ALERT_CHANNEL_ID` | unset | explicit Discord channel ID for the bot-token path |
+| `CHASSIS_ALERT_TRANSPORT` | `discord` | `matrix` or `both` sends steps 2 and 3 to Matrix instead or as well; see `chassis/docs/matrix-transport.md` |
 
 ## How the alert actually gets delivered
 

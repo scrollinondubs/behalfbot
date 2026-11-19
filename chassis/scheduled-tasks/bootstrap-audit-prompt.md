@@ -18,7 +18,7 @@ The transcript walks five known install gaps:
 
 1. **Read the transcript file** to see exactly which checks failed and what fix commands the audit suggested.
 2. **Triage by severity.** A missing `origin` or missing backup row is recoverable any time. A non-loaded LaunchDaemon means the bot has been silent on Discord since the failure started - higher priority.
-3. **Propose a fix plan** in a Discord message to the install's ops channel (`discord_channels.ops_label` in `chassis.config.yaml`; runtime ID in `DISCORD_OPS_CHANNEL_ID`). Include:
+3. **Propose a fix plan** to the install's ops channel (`discord_channels.ops_label` in `chassis.config.yaml`; runtime ID in `DISCORD_OPS_CHANNEL_ID`). Post it with `bash "$CHASSIS_ROOT/scripts/alert-post.sh" ops @<file-with-the-message>`, which honours `CHASSIS_ALERT_TRANSPORT` (Discord, Matrix or both). If the script is missing or exits non-zero, fall back to the previous route (the discord MCP `reply` tool, or `discord-post.sh`, to that channel id). Include:
    - Which gap failed
    - The fix command from the transcript
    - Whether you need the operator's `sudo` (LaunchDaemon installs do; backup row does not)

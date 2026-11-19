@@ -64,6 +64,10 @@ identity:
 #   CHASSIS_CONTROL_CHANNEL_IDS   - optional. Channels the kill switch listens on
 #                                   (comma or space separated). Defaults to
 #                                   DISCORD_PRIMARY_CHANNEL_ID.
+#   CHASSIS_ALERT_TRANSPORT       - optional. discord (default) | matrix | both.
+#                                   Matrix settings (CHASSIS_MATRIX_*) and the
+#                                   opt-in Matrix kill switch:
+#                                   chassis/docs/matrix-transport.md.
 #
 # Labels are user-facing strings for prompt prose (e.g. "#<primary>",
 # "#installer-devops"); they CAN live here since they're non-secret display strings.
