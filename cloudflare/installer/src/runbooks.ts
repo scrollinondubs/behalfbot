@@ -6,6 +6,7 @@ import localTest from '../../../runbooks/local-test.json' with { type: 'json' }
 import awsBackupHardening from '../../../runbooks/aws-backup-hardening.json' with { type: 'json' }
 import stripeGoldForSilver from '../../../runbooks/stripe-gold-for-silver.json' with { type: 'json' }
 import hetznerRescale from '../../../runbooks/hetzner-rescale.json' with { type: 'json' }
+import loomLibraryPurge from '../../../runbooks/loom-library-purge.json' with { type: 'json' }
 
 export interface Runbook {
   id: string
@@ -23,6 +24,7 @@ const ALL: Runbook[] = [
   awsBackupHardening as Runbook,
   stripeGoldForSilver as Runbook,
   hetznerRescale as Runbook,
+  loomLibraryPurge as Runbook,
 ]
 
 export function runbook(id: string): Runbook | null {
