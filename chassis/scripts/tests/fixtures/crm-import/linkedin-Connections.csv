@@ -1,0 +1,9 @@
+Notes:
+"When exporting your connection data, you may notice that some of the email addresses are missing. You will only see email addresses for connections who have allowed their connections to see or download their email address using this setting https://www.linkedin.com/psettings/privacy/email. You can learn more here https://www.linkedin.com/help/linkedin/answer/261"
+
+First Name,Last Name,URL,Email Address,Company,Position,Connected On
+Alba,Quintero,https://www.linkedin.com/in/alba-quintero-test,alba.q@example.com,Fictional Labs,Founder,03 Mar 2024
+Bram,Oosterveld,https://www.linkedin.com/in/bram-oosterveld-test,,"Made Up, Inc.",Engineer,11 Jan 2023
+Cleo,Varga,https://www.linkedin.com/in/cleo-varga-test,,,,20 Feb 2022
+,,https://www.linkedin.com/in/hidden-member-test,,,,01 Jan 2021
+Bram,Oosterveld,https://www.linkedin.com/in/bram-oosterveld-test/,,"Made Up, Inc.",Engineer,11 Jan 2023

@@ -11,6 +11,9 @@ import vaultwardenOrgForAgent from '../../../runbooks/vaultwarden-org-for-agent.
 import braveSearchApiKey from '../../../runbooks/brave-search-api-key.json' with { type: 'json' }
 import githubSignupForAgent from '../../../runbooks/github-signup-for-agent.json' with { type: 'json' }
 import linkedinConnectionsExport from '../../../runbooks/linkedin-connections-export.json' with { type: 'json' }
+import googleContactsExport from '../../../runbooks/google-contacts-export.json' with { type: 'json' }
+import outlookContactsExport from '../../../runbooks/outlook-contacts-export.json' with { type: 'json' }
+import icloudContactsExport from '../../../runbooks/icloud-contacts-export.json' with { type: 'json' }
 
 export interface Runbook {
   id: string
@@ -33,6 +36,9 @@ const ALL: Runbook[] = [
   braveSearchApiKey as Runbook,
   githubSignupForAgent as Runbook,
   linkedinConnectionsExport as Runbook,
+  googleContactsExport as Runbook,
+  outlookContactsExport as Runbook,
+  icloudContactsExport as Runbook,
 ]
 
 export function runbook(id: string): Runbook | null {

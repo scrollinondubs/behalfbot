@@ -1,0 +1,18 @@
+{
+  "id": "outlook-contacts-export",
+  "task": "Outlook.com or Outlook on the web (the person's own account): export all contacts as a CSV with Outlook's own Export contacts feature, so the bot can seed the BehalfBot CRM. No scraping",
+  "allow": ["outlook.live.com", "outlook.office.com", "outlook.cloud.microsoft"],
+  "start_url": "https://outlook.live.com/people/",
+  "steps": [
+    { "id": "signin", "human": "Sign in to your Outlook account. For a work or school account, go to outlook.office.com/people instead. Press Done when you see the People page." },
+    { "id": "export-dialog", "do": "On the toolbar choose Manage contacts > Export contacts, then All contacts. Do not press Export." },
+    { "id": "export", "human": "Press Export yourself, then Done. A contacts.csv lands in your Downloads folder." }
+  ],
+  "accept": "contacts.csv is in the person's Downloads. They send it to the bot, which runs chassis/scripts/crm_import.py on it, dry run first.",
+  "notes": [
+    "Only the People page: never open Mail, Calendar or a contact's detail pane.",
+    "Sign-in runs on login.live.com or login.microsoftonline.com, which are off the allow list, so the extension lets go of the tab while the person signs in.",
+    "Labels checked against Microsoft's 'Export contacts from Outlook.com or Outlook on the web' article on 2026-11-20. Desktop Outlook for Windows has its own File > Open & Export path, documented in chassis/skills/crm-contact-import.md.",
+    "No save_secret step: nothing here creates a credential."
+  ]
+}

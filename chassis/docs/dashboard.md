@@ -159,6 +159,12 @@ skips a contact already on the list, but `add_contact` always inserts, so an
 importer that runs more than once must match existing contacts itself (by
 email, phone or name) before adding new ones.
 
+To seed the CRM from exports the person already has (LinkedIn, Google,
+iCloud, Outlook, Facebook, Instagram), use `chassis/scripts/crm_import.py`:
+dry run by default, `--apply` to write, matching done as above. The optional
+onboarding offer, the export path per platform and the Autopilot runbooks
+that drive them are in `chassis/skills/crm-contact-import.md`.
+
 Like TripWires, `chassis/dashboard/core/crm.py` exposes
 `build_router(render, store)` for an install with its own dashboard app.
 `render(request, template, context, status_code)` gets one of the

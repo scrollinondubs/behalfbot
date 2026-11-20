@@ -497,6 +497,31 @@ test('aws-backup-hardening: pairs with the AWS console only, start page on the a
   assert.ok(!runbook('aws-backup-hardening').steps.some((s) => s.save_secret))
 })
 
+test('CRM contact exports: each pairs, starts on its allow list, keeps sign-in and mail off it, and leaves the final export to the person', async () => {
+  const { hostAllowed } = await import('../../../chrome-ext/policy.js')
+  const { runbook } = await import('../src/runbooks.ts')
+  const cases = {
+    'linkedin-connections-export': { off: ['https://www.google.com/'] },
+    'google-contacts-export': { off: ['https://accounts.google.com/signin', 'https://mail.google.com/mail/u/0/'] },
+    'outlook-contacts-export': { off: ['https://login.live.com/', 'https://login.microsoftonline.com/'] },
+    'icloud-contacts-export': { off: ['https://idmsa.apple.com/', 'https://p42-contacts.icloud.com/'] },
+  }
+  for (const [id, { off }] of Object.entries(cases)) {
+    const { res, code, w } = await setup(id)
+    assert.equal(res.status, 201, id)
+    const p = await (await w.request('POST', '/autopilot/pair', { body: { code } })).json()
+    assert.ok(hostAllowed(p.start_url, p.allow), `${id} start_url`)
+    for (const url of off) assert.ok(!hostAllowed(url, p.allow), `${id} must not allow ${url}`)
+    const steps = runbook(id).steps
+    assert.ok(!steps.some((s) => s.save_secret), `${id} saves no secret`)
+    assert.ok(steps.at(-1).human || id === 'linkedin-connections-export', `${id} ends on a human step`)
+  }
+  const li = runbook('linkedin-connections-export')
+  assert.match(JSON.stringify(li.steps), /larger data archive/)
+  assert.ok(li.steps.find((s) => s.id === 'request').human, 'Request archive is pressed by the person')
+  assert.match(li.accept, /ONLY Connections\.csv/)
+})
+
 // A JPEG-shaped base64 body with long alphanumeric runs, the kind the text
 // redactor's 64-character pattern would cut into.
 function fakeJpegB64(len = 4000) {

@@ -1,0 +1,18 @@
+{
+  "id": "google-contacts-export",
+  "task": "Google Contacts (the person's own account): export all contacts as a vCard file with Google's own Export feature, so the bot can seed the BehalfBot CRM. No scraping",
+  "allow": ["contacts.google.com"],
+  "start_url": "https://contacts.google.com/",
+  "steps": [
+    { "id": "signin", "human": "Sign in to the Google account whose contacts you want to bring over. Press Done when you see your contact list." },
+    { "id": "export-dialog", "do": "Open Export: tick any contact, then Selection actions > All, then More actions > Export. In the dialog choose vCard (the Google CSV option also works). Do not press Export." },
+    { "id": "export", "human": "Check the dialog says it will export your contacts. Press Export yourself, then Done. The file lands in your Downloads folder." }
+  ],
+  "accept": "A contacts.vcf (or contacts.csv) is in the person's Downloads. They send that file to the bot, which runs chassis/scripts/crm_import.py on it, dry run first.",
+  "notes": [
+    "Only the contacts list page: never open Gmail, other Google apps or a contact's detail page.",
+    "Sign-in runs on accounts.google.com, which is deliberately off the allow list, so the extension lets go of the tab while the person signs in.",
+    "Google's labels move: if Selection actions is not there, the left sidebar's Export entry opens the same dialog. Labels checked against support.google.com/contacts/answer/7199294 on 2026-11-20.",
+    "No save_secret step: nothing here creates a credential."
+  ]
+}
