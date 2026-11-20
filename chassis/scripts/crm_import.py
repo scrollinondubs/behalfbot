@@ -4,10 +4,12 @@
     crm_import.py FILE [--format auto|linkedin|google|outlook|vcard|facebook|instagram] [--apply]
 
 Reads one export file and matches every row against the contacts already in
-the CRM. Without --apply it only prints what it would do: new, duplicate,
-skipped. With --apply it adds the new contacts and, on a duplicate, fills an
-email, phone or notes field that is still empty. A field that already holds
-something is never changed.
+the CRM. Without --apply it only prints what it would do: new, enriched,
+unchanged, skipped. With --apply it adds the new contacts and enriches the
+matched ones: an empty email or phone is filled, and notes lines the contact
+does not have yet (source, profile, website, role, connected date, and an
+"also:" line for an email or phone that differs from the one on file) are
+appended. Nothing already stored is ever replaced or removed.
 
 Accepted files (procedure and where each comes from: chassis/skills/crm-contact-import.md):
   linkedin   Connections.csv from LinkedIn's data archive
@@ -22,7 +24,10 @@ the one contacts file is ever opened.
 
 Matching, in order: email; a social profile URL (LinkedIn, Instagram, ...);
 a phone number when the first names also agree; then the normalised name for
-rows that carry none of those (Facebook friends). A company website is kept
+rows that carry none of those (Facebook friends). A row that does carry one
+also merges into a contact typed in with only a name (no email, phone or
+profile line) when exactly one such contact has the same full name; with two
+or more it is added as new and counted as ambiguous. A company website is kept
 in notes but never matched on. Each new contact's notes
 get a "source:" line and, when the export has one, a "profile:" line, which
 is what a re-run matches on.
@@ -64,6 +69,7 @@ class Record:
     website: str | None = None
     company: str | None = None
     title: str | None = None
+    connected_on: str | None = None
 
 
 # ---- normalising ---------------------------------------------------------------
@@ -128,10 +134,9 @@ def _first(cell: str | None) -> str | None:
 
 # ---- reading files -------------------------------------------------------------
 
-def _read_text(path: Path) -> str:
-    data = path.read_bytes()
+def _decode(name: str, data: bytes) -> str:
     if len(data) > MAX_BYTES:
-        raise ExportFileError(f"{path.name} is larger than {MAX_BYTES // (1024 * 1024)} MB; is it the right file?")
+        raise ExportFileError(f"{name} is larger than {MAX_BYTES // (1024 * 1024)} MB; is it the right file?")
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return data.decode("utf-16")
     try:
@@ -192,7 +197,8 @@ def parse_linkedin(text: str) -> list[Record]:
     for r in rows:
         name = _clean(f"{r.get('First Name') or ''} {r.get('Last Name') or ''}")
         out.append(Record(name=name, email=_clean(r.get("Email Address")), profile=_clean(r.get("URL")),
-                          company=_clean(r.get("Company")), title=_clean(r.get("Position"))))
+                          company=_clean(r.get("Company")), title=_clean(r.get("Position")),
+                          connected_on=_clean(r.get("Connected On"))))
     return out
 
 
@@ -327,19 +333,30 @@ PARSERS = {"linkedin": parse_linkedin, "google": parse_google, "outlook": parse_
            "vcard": parse_vcard, "facebook": parse_facebook, "instagram": parse_instagram}
 
 
-def load(path: Path, fmt: str = "auto") -> tuple[str, list[Record]]:
-    if path.suffix.lower() == ".zip":
+def _refuse_zip(name: str) -> None:
+    if Path(name).suffix.lower() == ".zip":
         raise ExportFileError(
-            f"{path.name} is a whole archive. Unzip it and pass only the contacts file "
+            f"{name} is a whole archive. Unzip it and pass only the contacts file "
             "(for LinkedIn: Connections.csv). Archives also hold messages, which this never opens.")
-    if not path.is_file():
-        raise ExportFileError(f"{path} is not a file")
-    text = _read_text(path)
-    fmt = detect(path, text) if fmt == "auto" else fmt
+
+
+def load_bytes(name: str, data: bytes, fmt: str = "auto") -> tuple[str, list[Record]]:
+    """load() for bytes already in memory (an upload); name is only used for
+    its suffix and in messages."""
+    _refuse_zip(name)
+    text = _decode(name, data)
+    fmt = detect(Path(name), text) if fmt == "auto" else fmt
     try:
         return fmt, PARSERS[fmt](text)
     except (json.JSONDecodeError, AttributeError, TypeError) as e:
-        raise ExportFileError(f"{path.name} does not look like a {fmt} export: {e}") from None
+        raise ExportFileError(f"{name} does not look like a {fmt} export: {e}") from None
+
+
+def load(path: Path, fmt: str = "auto") -> tuple[str, list[Record]]:
+    _refuse_zip(path.name)
+    if not path.is_file():
+        raise ExportFileError(f"{path} is not a file")
+    return load_bytes(path.name, path.read_bytes(), fmt)
 
 
 # ---- matching and writing ------------------------------------------------------
@@ -398,16 +415,61 @@ def notes_for(rec: Record, source: str, today: date) -> str:
     role = " at ".join(x for x in (rec.title, rec.company) if x)
     if role:
         lines.append(f"role: {role}")
+    if rec.connected_on:
+        lines.append(f"connected: {rec.connected_on}")
     return "\n".join(lines)
 
 
-def run(store, records: list[Record], source: str, apply: bool, today: date | None = None) -> dict:
+def _has_line(notes: str, line: str) -> bool:
+    """A source line counts as present whatever its import date, so a re-run
+    on another day adds nothing."""
+    have = [x.strip().casefold() for x in notes.splitlines()]
+    want = line.strip().casefold()
+    if want.startswith("source: "):
+        prefix = want.split(" (imported", 1)[0]
+        return any(x == prefix or x.startswith(prefix + " (") for x in have)
+    return want in have
+
+
+def enrich(current: dict, rec: Record, source: str, today: date) -> dict:
+    """Changes for a matched contact: empty fields filled, new notes lines
+    appended. Never replaces or drops a stored value."""
+    fill: dict = {}
+    extra: list[str] = []
+    email = norm_email(rec.email)
+    if email:
+        if not current.get("email"):
+            fill["email"] = email
+        elif norm_email(current["email"]) != email:
+            extra.append(f"also: {email} ({source})")
+    if rec.phone and norm_phone(rec.phone):
+        if not current.get("phone"):
+            fill["phone"] = rec.phone
+        elif norm_phone(current["phone"]) != norm_phone(rec.phone):
+            extra.append(f"also: {rec.phone} ({source})")
+    notes = current.get("notes") or ""
+    new_lines = [ln for ln in notes_for(rec, source, today).splitlines() + extra if not _has_line(notes, ln)]
+    if new_lines:
+        fill["notes"] = "\n".join(([notes.rstrip()] if notes.strip() else []) + new_lines)
+    return fill
+
+
+def run(store, records: list[Record], source: str, apply: bool, today: date | None = None,
+        new_names: list[str] | None = None) -> dict:
+    """new_names, when given, collects the name of every contact counted as new."""
     today = today or date.today()
     existing = {int(c["id"]): dict(c) for c in store.contacts(limit=ALL_CONTACTS)}
     index = Index()
+    # Contacts typed in by hand with only a name: an exported row carrying
+    # an email, phone or profile is that person when exactly one shares the
+    # full name. Two or more is a guess, so the row is added as new.
+    name_only: dict[str, list[int]] = {}
     for cid, c in existing.items():
         index.add(cid, c.get("name"), c.get("email"), c.get("phone"), c.get("notes"))
-    counts = {"read": len(records), "new": 0, "duplicate": 0, "filled": 0,
+        if (norm_name(c.get("name")) and not norm_email(c.get("email")) and not norm_phone(c.get("phone"))
+                and not PROFILE_LINE.search(c.get("notes") or "")):
+            name_only.setdefault(norm_name(c.get("name")), []).append(cid)
+    counts = {"read": len(records), "new": 0, "duplicate": 0, "enriched": 0, "unchanged": 0, "ambiguous": 0,
               "skipped_no_name": 0, "skipped_invalid": 0}
     pending = -1
     for rec in records:
@@ -416,28 +478,32 @@ def run(store, records: list[Record], source: str, apply: bool, today: date | No
             continue
         email = norm_email(rec.email)
         cid = index.match(rec)
+        by_name_only = False
+        if cid is None and (email or norm_phone(rec.phone) or norm_url(rec.profile)):
+            same = name_only.get(norm_name(rec.name) or "", [])
+            if len(same) == 1:
+                cid, by_name_only = same[0], True
+            elif len(same) > 1:
+                counts["ambiguous"] += 1
         if cid is not None:
             counts["duplicate"] += 1
+            if by_name_only:
+                name_only.pop(norm_name(rec.name), None)
             current = existing.get(cid)
-            if current is None:
+            fill = enrich(current, rec, source, today) if current is not None else {}
+            if not fill:
+                counts["unchanged"] += 1
                 continue
-            fill = {}
-            if email and not current.get("email"):
-                fill["email"] = email
-            if rec.phone and not current.get("phone"):
-                fill["phone"] = rec.phone
-            if not current.get("notes"):
-                fill["notes"] = notes_for(rec, source, today)
-            if fill:
-                try:
-                    merged = crm.clean_contact({**current, **fill})
-                except crm.CrmError:
-                    continue
-                counts["filled"] += 1
-                if apply and cid > 0:
-                    store.update_contact(cid, merged)
-                current.update(merged)
-                index.add(cid, email=merged.get("email"), phone=merged.get("phone"), notes=merged.get("notes"))
+            try:
+                merged = crm.clean_contact({**current, **fill})
+            except crm.CrmError:
+                counts["unchanged"] += 1
+                continue
+            counts["enriched"] += 1
+            if apply and cid > 0:
+                store.update_contact(cid, merged)
+            current.update(merged)
+            index.add(cid, email=merged.get("email"), phone=merged.get("phone"), notes=merged.get("notes"))
             continue
         try:
             fields = crm.clean_contact({"name": rec.name, "email": email, "phone": rec.phone,
@@ -452,6 +518,8 @@ def run(store, records: list[Record], source: str, apply: bool, today: date | No
         existing[cid] = {"id": cid, **fields}
         index.add(cid, fields["name"], fields["email"], fields["phone"], fields["notes"])
         counts["new"] += 1
+        if new_names is not None:
+            new_names.append(fields["name"])
     return counts
 
 
@@ -461,10 +529,14 @@ def report(fmt: str, path: Path, counts: dict, apply: bool) -> str:
     lines = [
         f"{fmt}: {counts['read']} rows read from {path.name}",
         f"  new:       {counts['new']} ({verb})",
-        f"  duplicate: {counts['duplicate']} (already in the CRM or earlier in this file; "
-        f"{counts['filled']} {'had' if apply else 'would have'} an empty email, phone or notes field filled)",
+        f"  enriched:  {counts['enriched']} (already in the CRM or earlier in this file; "
+        f"{'gained' if apply else 'would gain'} an email, phone or notes lines)",
+        f"  unchanged: {counts['unchanged']} (already in the CRM with nothing new)",
         f"  skipped:   {skipped} (no name: {counts['skipped_no_name']}, invalid: {counts['skipped_invalid']})",
     ]
+    if counts.get("ambiguous"):
+        lines.insert(2, f"             {counts['ambiguous']} of these share a name with 2+ name-only contacts, "
+                        "so they are added rather than merged")
     lines.append("Imported." if apply else "Dry run: nothing written. Re-run with --apply to import.")
     return "\n".join(lines)
 

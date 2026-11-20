@@ -134,16 +134,20 @@ python3 chassis/scripts/crm_import.py ~/Downloads/Connections.csv --apply    # w
 It detects the format; `--format linkedin|google|outlook|vcard|facebook|instagram`
 overrides. It uses the same DSN variables as the CRM tab.
 
-1. Always dry run first and tell the person the counts: new, duplicate,
-   skipped. Apply only after they say yes.
+1. Always dry run first and tell the person the counts: new, enriched,
+   unchanged, skipped. Apply only after they say yes.
 2. Duplicates are matched on email, then a social profile URL (LinkedIn,
    Instagram and so on), then phone when the first names also agree, then the
    name for rows that have none of those. A company website is noted, never
-   matched on. A duplicate is never changed except to fill an email, phone or
-   notes field that is still empty.
+   matched on. A row that has one of those also matches a contact entered
+   with only a name, when exactly one has that full name (two or more:
+   added as new, reported as ambiguous). A matched contact is enriched, never
+   overwritten: an empty email or phone is filled, and notes lines it lacks
+   (source, profile, role, connected date, and `also: <email or phone>
+   (<source>)` when the export has a different one) are appended.
 3. New contacts get notes like `source: linkedin (imported 2026-11-20)`,
    `profile: https://linkedin.com/in/...` and `role: Founder at Acme`.
-   Re-running the same file adds nothing.
+   Re-running the same file, on any day, changes nothing.
 4. Once it is imported, offer to delete the copy they sent you (to the
    trash, not `rm`). The file holds other people's details.
 
