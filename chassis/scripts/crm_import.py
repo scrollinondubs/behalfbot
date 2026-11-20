@@ -22,7 +22,10 @@ the one contacts file is ever opened.
 
 Matching, in order: email; a social profile URL (LinkedIn, Instagram, ...);
 a phone number when the first names also agree; then the normalised name for
-rows that carry none of those (Facebook friends). A company website is kept
+rows that carry none of those (Facebook friends). A row that does carry one
+also merges into a contact typed in with only a name (no email, phone or
+profile line) when exactly one such contact has the same full name; with two
+or more it is added as new and counted as ambiguous. A company website is kept
 in notes but never matched on. Each new contact's notes
 get a "source:" line and, when the export has one, a "profile:" line, which
 is what a re-run matches on.
@@ -417,9 +420,16 @@ def run(store, records: list[Record], source: str, apply: bool, today: date | No
     today = today or date.today()
     existing = {int(c["id"]): dict(c) for c in store.contacts(limit=ALL_CONTACTS)}
     index = Index()
+    # Contacts typed in by hand with only a name: an exported row carrying
+    # an email, phone or profile is that person when exactly one shares the
+    # full name. Two or more is a guess, so the row is added as new.
+    name_only: dict[str, list[int]] = {}
     for cid, c in existing.items():
         index.add(cid, c.get("name"), c.get("email"), c.get("phone"), c.get("notes"))
-    counts = {"read": len(records), "new": 0, "duplicate": 0, "filled": 0,
+        if (norm_name(c.get("name")) and not norm_email(c.get("email")) and not norm_phone(c.get("phone"))
+                and not PROFILE_LINE.search(c.get("notes") or "")):
+            name_only.setdefault(norm_name(c.get("name")), []).append(cid)
+    counts = {"read": len(records), "new": 0, "duplicate": 0, "filled": 0, "ambiguous": 0,
               "skipped_no_name": 0, "skipped_invalid": 0}
     pending = -1
     for rec in records:
@@ -428,6 +438,13 @@ def run(store, records: list[Record], source: str, apply: bool, today: date | No
             continue
         email = norm_email(rec.email)
         cid = index.match(rec)
+        by_name_only = False
+        if cid is None and (email or norm_phone(rec.phone) or norm_url(rec.profile)):
+            same = name_only.get(norm_name(rec.name) or "", [])
+            if len(same) == 1:
+                cid, by_name_only = same[0], True
+            elif len(same) > 1:
+                counts["ambiguous"] += 1
         if cid is not None:
             counts["duplicate"] += 1
             current = existing.get(cid)
@@ -440,6 +457,10 @@ def run(store, records: list[Record], source: str, apply: bool, today: date | No
                 fill["phone"] = rec.phone
             if not current.get("notes"):
                 fill["notes"] = notes_for(rec, source, today)
+            elif by_name_only:
+                fill["notes"] = current["notes"].rstrip() + "\n" + notes_for(rec, source, today)
+            if by_name_only:
+                name_only.pop(norm_name(rec.name), None)
             if fill:
                 try:
                     merged = crm.clean_contact({**current, **fill})
@@ -479,6 +500,9 @@ def report(fmt: str, path: Path, counts: dict, apply: bool) -> str:
         f"{counts['filled']} {'had' if apply else 'would have'} an empty email, phone or notes field filled)",
         f"  skipped:   {skipped} (no name: {counts['skipped_no_name']}, invalid: {counts['skipped_invalid']})",
     ]
+    if counts.get("ambiguous"):
+        lines.insert(2, f"             {counts['ambiguous']} of these share a name with 2+ name-only contacts, "
+                        "so they are added rather than merged")
     lines.append("Imported." if apply else "Dry run: nothing written. Re-run with --apply to import.")
     return "\n".join(lines)
 

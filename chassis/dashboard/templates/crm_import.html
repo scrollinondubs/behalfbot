@@ -4,7 +4,7 @@
   <h2>Import preview <small>{{ filename }}</small></h2>
   <p class="muted small">Read as {{ format_label }}: {{ counts.read }} row{{ "" if counts.read == 1 else "s" }}. Nothing has been written yet.</p>
   <div class="stat-row crm-stats">
-    <div class="stat"><div class="stat-num">{{ counts.new }}</div><div class="stat-label">New</div></div>
+    <div class="stat"><div class="stat-num">{{ counts.new }}</div><div class="stat-label">New</div>{% if counts.ambiguous %}<div class="muted small">{{ counts.ambiguous }} ambiguous: name shared by 2+ name-only contacts</div>{% endif %}</div>
     <div class="stat"><div class="stat-num">{{ counts.duplicate }}</div><div class="stat-label">Already here</div><div class="muted small">{{ counts.filled }} would get an empty field filled</div></div>
     <div class="stat"><div class="stat-num">{{ skipped }}</div><div class="stat-label">Skipped</div><div class="muted small">{{ counts.skipped_no_name }} no name, {{ counts.skipped_invalid }} invalid</div></div>
   </div>
@@ -15,7 +15,7 @@
   </ul>
   {% if more %}<p class="muted small">and {{ more }} more.</p>{% endif %}
   {% endif %}
-  <p class="muted small">Existing contacts keep what they have; a duplicate only gets an empty email, phone or notes field filled. This preview expires in {{ ttl_minutes }} minutes.</p>
+  <p class="muted small">Existing contacts keep what they have; a duplicate only gets an empty email, phone or notes field filled. A contact entered with only a name counts as the same person when it is the only one with that full name. This preview expires in {{ ttl_minutes }} minutes.</p>
   <div class="crm-actions">
     <form method="post" action="{{ prefix }}/import/confirm">
       <input type="hidden" name="token" value="{{ token }}">

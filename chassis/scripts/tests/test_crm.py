@@ -436,6 +436,18 @@ class Import(TabBase):
                          "/crm?imported=linkedin&new=0&duplicate=4&filled=0&skipped=1")
         self.assertEqual(len(self.store.contacts()), 3)
 
+    def test_name_only_contact_is_merged_and_ambiguous_names_are_flagged(self) -> None:
+        alba = self.store.add_contact(crm.clean_contact({"name": "Alba Quintero"}))
+        for _ in range(2):
+            self.store.add_contact(crm.clean_contact({"name": "Cleo Varga"}))
+        got = self.upload("Connections.csv", (IMPORT_FIX / "linkedin-Connections.csv").read_bytes())
+        self.assertIn('<div class="stat-num">2</div><div class="stat-label">New</div>', got.text)
+        self.assertIn("1 ambiguous: name shared by 2+ name-only contacts", got.text)
+        self.post("/crm/import/confirm", {"token": self.token(got.text)})
+        self.assertEqual(self.store.contact(alba)["email"], "alba.q@example.com")
+        self.assertEqual(sum(1 for c in self.store.contacts() if c["name"] == "Alba Quintero"), 1)
+        self.assertEqual(sum(1 for c in self.store.contacts() if c["name"] == "Cleo Varga"), 3)
+
     def test_each_export_format_is_detected_from_an_upload(self) -> None:
         for fixture, label in (("google-contacts.csv", "Google Contacts CSV"), ("outlook-contacts.csv", "Outlook CSV"),
                                ("contacts.vcf", "vCard"), ("facebook-your_friends.json", "Facebook friends JSON"),
