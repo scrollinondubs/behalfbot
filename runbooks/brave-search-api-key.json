@@ -1,0 +1,17 @@
+{
+  "id": "brave-search-api-key",
+  "task": "Brave Search API dashboard (Sean's account): create one additional API key on the existing subscription for a second assistant (Jill) and store it",
+  "allow": ["api-dashboard.search.brave.com"],
+  "start_url": "https://api-dashboard.search.brave.com/app/keys",
+  "steps": [
+    { "id": "signin", "human": "Sign in to the Brave Search API dashboard in this tab. Press Done when you see API Keys." },
+    { "id": "inspect", "do": "API Keys page: report the existing keys (names only) and which subscription/plan they belong to. Change nothing." },
+    { "id": "create", "do": "Add API key: name it as Jax gives in the chat (e.g. jill), on the existing free plan. Do not change plans or billing." },
+    { "id": "save-key", "do": "Reveal the new key and save it with save_secret under the name Jax gives in the chat. Never print it." }
+  ],
+  "accept": "A new key named for the assistant exists on the existing plan, and Jax has it in Vaultwarden. No plan or billing change.",
+  "notes": [
+    "If creating a key would require a paid plan or a new card, stop and hand it to Sean.",
+    "Sign-in may use a magic link sent to Sean's email; that happens outside the tab."
+  ]
+}
