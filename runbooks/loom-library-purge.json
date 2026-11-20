@@ -1,0 +1,21 @@
+{
+  "id": "loom-library-purge",
+  "task": "Loom (Sean's own account): list every video in the library so Jax can archive any it has not already saved, then delete all of them and empty Loom's trash",
+  "allow": ["www.loom.com", "loom.com"],
+  "start_url": "https://www.loom.com/looms/videos",
+  "steps": [
+    { "id": "signin", "human": "Sign in to Loom in this tab. Press Done when you see your video library." },
+    { "id": "inventory", "do": "Open My Videos (and each folder and space Sean owns). Scroll to the end of every list and report each video's share id and title. Change nothing." },
+    { "id": "archive-gate", "do": "Wait in the chat. Jax archives every reported id outside the browser and says when the archive is complete and verified." },
+    { "id": "select", "do": "Library: use bulk select to select videos for deletion, one page or folder at a time. Do not press Delete." },
+    { "id": "delete", "human": "Check the selection. Press Delete yourself and confirm, then Done. Repeat with Jax until the library is empty." },
+    { "id": "empty-trash", "human": "Open Loom's Trash, press Delete forever / Empty trash yourself and confirm, then Done." }
+  ],
+  "accept": "My Videos, every folder and the Trash are empty. Jax spot-checks a few share URLs and gets Loom's not-found page.",
+  "notes": [
+    "Every delete is a human step: Jax selects, Sean presses the button.",
+    "Sign-in may run on id.atlassian.com, which is deliberately off the allow list, so the extension lets go of the tab while the person signs in.",
+    "Videos are archived from their public share URLs outside the browser, so the extension never downloads anything.",
+    "No save_secret step: nothing here creates a credential."
+  ]
+}
