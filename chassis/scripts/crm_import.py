@@ -4,10 +4,12 @@
     crm_import.py FILE [--format auto|linkedin|google|outlook|vcard|facebook|instagram] [--apply]
 
 Reads one export file and matches every row against the contacts already in
-the CRM. Without --apply it only prints what it would do: new, duplicate,
-skipped. With --apply it adds the new contacts and, on a duplicate, fills an
-email, phone or notes field that is still empty. A field that already holds
-something is never changed.
+the CRM. Without --apply it only prints what it would do: new, enriched,
+unchanged, skipped. With --apply it adds the new contacts and enriches the
+matched ones: an empty email or phone is filled, and notes lines the contact
+does not have yet (source, profile, website, role, connected date, and an
+"also:" line for an email or phone that differs from the one on file) are
+appended. Nothing already stored is ever replaced or removed.
 
 Accepted files (procedure and where each comes from: chassis/skills/crm-contact-import.md):
   linkedin   Connections.csv from LinkedIn's data archive
@@ -67,6 +69,7 @@ class Record:
     website: str | None = None
     company: str | None = None
     title: str | None = None
+    connected_on: str | None = None
 
 
 # ---- normalising ---------------------------------------------------------------
@@ -194,7 +197,8 @@ def parse_linkedin(text: str) -> list[Record]:
     for r in rows:
         name = _clean(f"{r.get('First Name') or ''} {r.get('Last Name') or ''}")
         out.append(Record(name=name, email=_clean(r.get("Email Address")), profile=_clean(r.get("URL")),
-                          company=_clean(r.get("Company")), title=_clean(r.get("Position"))))
+                          company=_clean(r.get("Company")), title=_clean(r.get("Position")),
+                          connected_on=_clean(r.get("Connected On"))))
     return out
 
 
@@ -411,7 +415,43 @@ def notes_for(rec: Record, source: str, today: date) -> str:
     role = " at ".join(x for x in (rec.title, rec.company) if x)
     if role:
         lines.append(f"role: {role}")
+    if rec.connected_on:
+        lines.append(f"connected: {rec.connected_on}")
     return "\n".join(lines)
+
+
+def _has_line(notes: str, line: str) -> bool:
+    """A source line counts as present whatever its import date, so a re-run
+    on another day adds nothing."""
+    have = [x.strip().casefold() for x in notes.splitlines()]
+    want = line.strip().casefold()
+    if want.startswith("source: "):
+        prefix = want.split(" (imported", 1)[0]
+        return any(x == prefix or x.startswith(prefix + " (") for x in have)
+    return want in have
+
+
+def enrich(current: dict, rec: Record, source: str, today: date) -> dict:
+    """Changes for a matched contact: empty fields filled, new notes lines
+    appended. Never replaces or drops a stored value."""
+    fill: dict = {}
+    extra: list[str] = []
+    email = norm_email(rec.email)
+    if email:
+        if not current.get("email"):
+            fill["email"] = email
+        elif norm_email(current["email"]) != email:
+            extra.append(f"also: {email} ({source})")
+    if rec.phone and norm_phone(rec.phone):
+        if not current.get("phone"):
+            fill["phone"] = rec.phone
+        elif norm_phone(current["phone"]) != norm_phone(rec.phone):
+            extra.append(f"also: {rec.phone} ({source})")
+    notes = current.get("notes") or ""
+    new_lines = [ln for ln in notes_for(rec, source, today).splitlines() + extra if not _has_line(notes, ln)]
+    if new_lines:
+        fill["notes"] = "\n".join(([notes.rstrip()] if notes.strip() else []) + new_lines)
+    return fill
 
 
 def run(store, records: list[Record], source: str, apply: bool, today: date | None = None,
@@ -429,7 +469,7 @@ def run(store, records: list[Record], source: str, apply: bool, today: date | No
         if (norm_name(c.get("name")) and not norm_email(c.get("email")) and not norm_phone(c.get("phone"))
                 and not PROFILE_LINE.search(c.get("notes") or "")):
             name_only.setdefault(norm_name(c.get("name")), []).append(cid)
-    counts = {"read": len(records), "new": 0, "duplicate": 0, "filled": 0, "ambiguous": 0,
+    counts = {"read": len(records), "new": 0, "duplicate": 0, "enriched": 0, "unchanged": 0, "ambiguous": 0,
               "skipped_no_name": 0, "skipped_invalid": 0}
     pending = -1
     for rec in records:
@@ -447,30 +487,23 @@ def run(store, records: list[Record], source: str, apply: bool, today: date | No
                 counts["ambiguous"] += 1
         if cid is not None:
             counts["duplicate"] += 1
-            current = existing.get(cid)
-            if current is None:
-                continue
-            fill = {}
-            if email and not current.get("email"):
-                fill["email"] = email
-            if rec.phone and not current.get("phone"):
-                fill["phone"] = rec.phone
-            if not current.get("notes"):
-                fill["notes"] = notes_for(rec, source, today)
-            elif by_name_only:
-                fill["notes"] = current["notes"].rstrip() + "\n" + notes_for(rec, source, today)
             if by_name_only:
                 name_only.pop(norm_name(rec.name), None)
-            if fill:
-                try:
-                    merged = crm.clean_contact({**current, **fill})
-                except crm.CrmError:
-                    continue
-                counts["filled"] += 1
-                if apply and cid > 0:
-                    store.update_contact(cid, merged)
-                current.update(merged)
-                index.add(cid, email=merged.get("email"), phone=merged.get("phone"), notes=merged.get("notes"))
+            current = existing.get(cid)
+            fill = enrich(current, rec, source, today) if current is not None else {}
+            if not fill:
+                counts["unchanged"] += 1
+                continue
+            try:
+                merged = crm.clean_contact({**current, **fill})
+            except crm.CrmError:
+                counts["unchanged"] += 1
+                continue
+            counts["enriched"] += 1
+            if apply and cid > 0:
+                store.update_contact(cid, merged)
+            current.update(merged)
+            index.add(cid, email=merged.get("email"), phone=merged.get("phone"), notes=merged.get("notes"))
             continue
         try:
             fields = crm.clean_contact({"name": rec.name, "email": email, "phone": rec.phone,
@@ -496,8 +529,9 @@ def report(fmt: str, path: Path, counts: dict, apply: bool) -> str:
     lines = [
         f"{fmt}: {counts['read']} rows read from {path.name}",
         f"  new:       {counts['new']} ({verb})",
-        f"  duplicate: {counts['duplicate']} (already in the CRM or earlier in this file; "
-        f"{counts['filled']} {'had' if apply else 'would have'} an empty email, phone or notes field filled)",
+        f"  enriched:  {counts['enriched']} (already in the CRM or earlier in this file; "
+        f"{'gained' if apply else 'would gain'} an email, phone or notes lines)",
+        f"  unchanged: {counts['unchanged']} (already in the CRM with nothing new)",
         f"  skipped:   {skipped} (no name: {counts['skipped_no_name']}, invalid: {counts['skipped_invalid']})",
     ]
     if counts.get("ambiguous"):

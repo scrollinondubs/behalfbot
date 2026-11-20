@@ -362,8 +362,8 @@ class Tab(TabBase):
         self.assertIn('enctype="multipart/form-data"', page)
 
     def test_import_result_line_takes_only_known_formats_and_numbers(self) -> None:
-        self.assertIn("Imported from vCard: 2 added, 1 already here, 0 skipped.",
-                      self.client.get("/crm?imported=vcard&new=2&duplicate=1&skipped=0").text)
+        self.assertIn("Imported from vCard: 2 added, 1 enriched, 4 unchanged, 0 skipped.",
+                      self.client.get("/crm?imported=vcard&new=2&enriched=1&unchanged=4&skipped=0").text)
         self.assertNotIn("Imported from", self.client.get("/crm?imported=<b>x</b>&new=1").text)
         self.assertNotIn("Imported from", self.client.get("/crm?imported=linkedin&new=lots").text)
 
@@ -404,7 +404,7 @@ class Import(TabBase):
         got = self.upload("Connections.csv", csv)
         self.assertEqual(got.status_code, 200)
         self.assertIn("Read as LinkedIn Connections.csv: 5 rows", got.text)
-        for num, label in ((3, "New"), (1, "Already here"), (1, "Skipped")):
+        for num, label in ((3, "New"), (0, "Enriched"), (1, "Unchanged"), (1, "Skipped")):
             self.assertIn(f'<div class="stat-num">{num}</div><div class="stat-label">{label}</div>', got.text)
         for name in ("Alba Quintero", "Bram Oosterveld", "Cleo Varga"):
             self.assertIn(f"<li>{name}</li>", got.text)
@@ -417,11 +417,11 @@ class Import(TabBase):
         done = self.post("/crm/import/confirm", {"token": token})
         self.assertEqual(done.status_code, 303)
         self.assertEqual(done.headers["location"],
-                         "/crm?imported=linkedin&new=3&duplicate=1&filled=0&skipped=1")
+                         "/crm?imported=linkedin&new=3&enriched=0&unchanged=1&skipped=1")
         self.assertEqual(sorted(c["name"] for c in self.store.contacts()),
                          ["Alba Quintero", "Bram Oosterveld", "Cleo Varga"])
         self.assertEqual(self.stashed(), [])
-        self.assertIn("Imported from LinkedIn Connections.csv: 3 added, 1 already here, 1 skipped.",
+        self.assertIn("Imported from LinkedIn Connections.csv: 3 added, 0 enriched, 1 unchanged, 1 skipped.",
                       self.client.get(done.headers["location"]).text)
 
         again = self.post("/crm/import/confirm", {"token": token})
@@ -431,9 +431,9 @@ class Import(TabBase):
 
         second = self.upload("Connections.csv", csv)
         self.assertIn('<div class="stat-num">0</div><div class="stat-label">New</div>', second.text)
-        self.assertIn('<div class="stat-num">4</div><div class="stat-label">Already here</div>', second.text)
+        self.assertIn('<div class="stat-num">4</div><div class="stat-label">Unchanged</div>', second.text)
         self.assertEqual(self.post("/crm/import/confirm", {"token": self.token(second.text)}).headers["location"],
-                         "/crm?imported=linkedin&new=0&duplicate=4&filled=0&skipped=1")
+                         "/crm?imported=linkedin&new=0&enriched=0&unchanged=4&skipped=1")
         self.assertEqual(len(self.store.contacts()), 3)
 
     def test_name_only_contact_is_merged_and_ambiguous_names_are_flagged(self) -> None:

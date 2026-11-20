@@ -136,7 +136,7 @@ def build_router(render: Callable = _default_render, store: crm.Store | None = N
         if qp.get("imported") not in ci.FORMATS:
             return None
         try:
-            nums = {k: int(qp.get(k) or 0) for k in ("new", "duplicate", "filled", "skipped")}
+            nums = {k: int(qp.get(k) or 0) for k in ("new", "enriched", "unchanged", "skipped")}
         except ValueError:
             return None
         return {"label": FORMAT_LABELS[qp["imported"]], **nums}
@@ -315,8 +315,8 @@ def build_router(render: Callable = _default_render, store: crm.Store | None = N
         counts = await run_in_threadpool(ci.run, db, records, fmt, True)
         skipped = counts["skipped_no_name"] + counts["skipped_invalid"]
         return go("?" + urllib.parse.urlencode({
-            "imported": fmt, "new": counts["new"], "duplicate": counts["duplicate"],
-            "filled": counts["filled"], "skipped": skipped}))
+            "imported": fmt, "new": counts["new"], "enriched": counts["enriched"],
+            "unchanged": counts["unchanged"], "skipped": skipped}))
 
     @router.post("/import/cancel")
     @guarded

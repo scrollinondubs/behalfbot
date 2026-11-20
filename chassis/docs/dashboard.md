@@ -169,7 +169,8 @@ The same importer sits behind the small **Import** control next to the
 contact count on `/crm`. Upload one `.csv`, `.vcf` or `.json` export (up to
 10 MB; a `.zip` is refused, unzip it and pick the contacts file). The tab
 detects the format, runs the dry run and shows how many contacts are new,
-already there (and how many of those would get an empty field filled) and
+already there and would be enriched (empty email or phone filled, new notes
+lines appended, nothing replaced), already there with nothing new, and
 skipped, with a few of the new names. **Confirm import** applies it and
 returns to Contacts with a one-line result. The upload is kept server-side
 between the two steps, never re-sent by the browser: one file per preview,
