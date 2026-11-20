@@ -1,0 +1,23 @@
+BEGIN:VCARD
+VERSION:3.0
+FN:Gael Moreau
+N:Moreau;Gael;;;
+EMAIL;type=INTERNET;type=HOME;type=pref:gael@example.com
+TEL;type=CELL;type=VOICE;type=pref:+33 6 00 00 00 05
+ORG:Invented SARL;
+TITLE:Chef
+NOTE:Long note that is folded across
+  two lines\, with an escaped comma
+END:VCARD
+BEGIN:VCARD
+VERSION:3.0
+N:Ibsen;Hedda;;;
+item1.EMAIL;type=INTERNET:hedda@example.org
+item1.X-ABLabel:_$!<Other>!$_
+END:VCARD
+BEGIN:VCARD
+VERSION:2.1
+N;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:Sz=C3=A9p;J=C3=A1nos;;;
+FN;CHARSET=UTF-8;ENCODING=QUOTED-PRINTABLE:J=C3=A1nos Sz=C3=A9p
+TEL;CELL:+36 20 000 0006
+END:VCARD

@@ -85,7 +85,7 @@ For V1 case studies we hand-author the artifacts directly from an interview. Onc
 |---|---|---|
 | `admin` | yes | rescheduling, travel, event research, email drafting |
 | `briefing` | yes | daily digest |
-| `crm` | `<yes/no>` | `<second-brain>` CRM integration |
+| `crm` | `<yes/no>` | `<second-brain>` CRM integration. Once the CRM tab works, offer the optional contact import (`chassis/skills/crm-contact-import.md`) |
 | `outreach` | `<yes/no>` | `<scope>` |
 | `dating` | `<yes/no>` | requires explicit opt-in + Android emulator |
 | `bfl` | `<yes/no>` | Body for Life pipeline; confirm installer is doing BFL |

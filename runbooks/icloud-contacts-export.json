@@ -1,0 +1,19 @@
+{
+  "id": "icloud-contacts-export",
+  "task": "iCloud Contacts (the person's own Apple account): export all contacts as one vCard file with iCloud's own Export vCard feature, so the bot can seed the BehalfBot CRM. Covers iPhone contacts and WhatsApp contacts, which live in the phone's address book. No scraping",
+  "allow": ["www.icloud.com"],
+  "start_url": "https://www.icloud.com/contacts/",
+  "steps": [
+    { "id": "signin", "human": "Sign in with your Apple Account (and approve the code on your device). Press Done when you see your contacts." },
+    { "id": "select-all", "do": "Open the select menu at the top of the contact list and choose Select All Contacts. Do not open any contact's card." },
+    { "id": "export", "human": "Open the Actions menu and choose Export vCard yourself, then Done. One .vcf with all the selected contacts lands in your Downloads folder." }
+  ],
+  "accept": "A .vcf is in the person's Downloads. They send it to the bot, which runs chassis/scripts/crm_import.py on it, dry run first.",
+  "notes": [
+    "Only the Contacts app: never open Mail, Photos, Drive or Find My.",
+    "Sign-in happens inside icloud.com with Apple's own two-factor prompt; it is a human step and the extension is detached during it.",
+    "Contacts must be syncing to iCloud on the person's iPhone (Settings > [name] > iCloud > Contacts) for this file to hold them. If not, use the iPhone or Mac path in chassis/skills/crm-contact-import.md.",
+    "Labels checked against Apple's 'Import, export, or print contacts on iCloud.com' guide on 2026-11-20.",
+    "No save_secret step: nothing here creates a credential."
+  ]
+}

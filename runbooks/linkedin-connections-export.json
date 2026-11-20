@@ -1,17 +1,18 @@
 {
   "id": "linkedin-connections-export",
-  "task": "LinkedIn (the person's own account): request LinkedIn's official data export of Connections, so the CSV can be imported into the BehalfBot CRM. Uses LinkedIn's own 'Get a copy of your data' feature, no scraping",
+  "task": "LinkedIn (the person's own account): request LinkedIn's official data archive, which is the only export that still includes Connections, so Connections.csv can seed the BehalfBot CRM. Uses LinkedIn's own 'Get a copy of your data' feature, no scraping",
   "allow": ["www.linkedin.com", "linkedin.com"],
   "start_url": "https://www.linkedin.com/mypreferences/d/download-my-data",
   "steps": [
     { "id": "signin", "human": "Make sure you are signed in to LinkedIn in this tab. Press Done when you see 'Get a copy of your data'." },
-    { "id": "select", "do": "Choose 'Want something in particular? Select the data files you're most interested in' and tick Connections only. Do not request the full archive." },
-    { "id": "request", "human": "Check that only Connections is ticked. Press Request archive yourself (re-enter your password if asked), then Done." },
-    { "id": "wait", "do": "Report the status LinkedIn shows (usually ready within about 10 minutes, sent to the account email). Stop there." }
+    { "id": "select", "do": "Choose the first option, 'Download larger data archive'. The 'select particular files' list no longer offers Connections, so do not use it. Do not press Request archive." },
+    { "id": "request", "human": "Check that 'Download larger data archive' is selected. Press Request archive yourself (re-enter your password if asked), then Done." },
+    { "id": "wait", "do": "Report the status LinkedIn shows. The archive goes to the account email and can take up to 24 hours. Stop there." }
   ],
-  "accept": "LinkedIn shows a pending or ready Connections export. The person downloads the zip from LinkedIn's email and sends Connections.csv to Jax for the CRM import.",
+  "accept": "LinkedIn shows the archive as requested or ready. When the email arrives the person downloads the zip, unzips it on their own computer and sends ONLY Connections.csv to the bot, never the zip: the archive also holds their messages. The bot runs chassis/scripts/crm_import.py on it, dry run first.",
   "notes": [
-    "Never open messaging, profiles of other people or search: only the settings data-export page.",
+    "As of 2026-11-20 the 'Want something in particular?' list offers only Articles, Invitations, Profile, Recommendations and Registration; Connections comes only with the larger archive.",
+    "Never open messaging, search or other people's profiles: only the settings data-export page.",
     "No scraping and no paging through connections: LinkedIn's own export avoids the anti-automation risk.",
     "The download happens outside the extension; nothing is saved by the driver."
   ]

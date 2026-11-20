@@ -190,7 +190,7 @@ Read the relevant skill before task-specific work. Claude Code loads skills from
 | `.claude/skills/build-plans/SKILL.md` | A build {{INSTALLER_NAME}} must decide on first: write an html-plan (plugin `html-plan@claude-community`, enabled in `.claude/settings.json`) |
 | `.claude/skills/<plugin skill>` | Linked from `vendored-plugins/`; one per fetched, non-dormant plugin that ships a skill |
 
-Chassis procedure docs (`chassis/skills/pacman.md`, `chassis/skills/tripwires.md`, `chassis/skills/chassis-update.md`) are read from the chassis tree when their trigger comes up.
+Chassis procedure docs (`chassis/skills/pacman.md`, `chassis/skills/tripwires.md`, `chassis/skills/chassis-update.md`, `chassis/skills/crm-contact-import.md`) are read from the chassis tree when their trigger comes up.
 
 Writing in {{INSTALLER_NAME}}'s voice needs a voice guide built from their own writing. The chassis cannot ship one; add it as a `brand-voice` skill under `.claude/skills/` once there are samples, and list it here.
 

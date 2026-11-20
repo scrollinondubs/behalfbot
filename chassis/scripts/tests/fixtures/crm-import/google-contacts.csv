@@ -1,0 +1,4 @@
+First Name,Middle Name,Last Name,Phonetic First Name,Phonetic Middle Name,Phonetic Last Name,Name Prefix,Name Suffix,Nickname,File As,Organization Name,Organization Title,Organization Department,Birthday,Notes,Photo,Labels,E-mail 1 - Label,E-mail 1 - Value,E-mail 2 - Label,E-mail 2 - Value,Phone 1 - Label,Phone 1 - Value,Website 1 - Label,Website 1 - Value
+Dario,,Pellegrini,,,,,,,,Nowhere Co,CTO,,,,,* myContacts,* Work,dario@example.com ::: dario.p@example.org,,,Mobile,+351 910 000 001,,
+Elif,,Arslan,,,,,,,,,,,,,,* myContacts,,,,,Mobile,+44 7700 900002,,
+,,,,,,,,,,Placeholder Bakery,,,,,,* myContacts,* Work,orders@example.net,,,,,,
