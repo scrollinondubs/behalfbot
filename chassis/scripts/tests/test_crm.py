@@ -13,8 +13,10 @@ Run:
 """
 from __future__ import annotations
 
+import importlib.util
 import itertools
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -36,8 +38,10 @@ try:
     HAVE_FASTAPI = True
 except ImportError:
     HAVE_FASTAPI = False
+HAVE_MULTIPART = any(importlib.util.find_spec(m) for m in ("python_multipart", "multipart"))
 
 PG_DSN = os.environ.get("CHASSIS_TEST_PG_DSN", "").strip()
+IMPORT_FIX = SCRIPTS / "tests" / "fixtures" / "crm-import"
 
 
 class Cleaning(unittest.TestCase):
@@ -246,8 +250,9 @@ class TabBase(unittest.TestCase):
         from fastapi import FastAPI
         from core import crm as tab
         self.store = self.make_store()
+        self.stash = home / "import-stash"
         app = FastAPI()
-        app.include_router(tab.build_router(store=self.store), prefix="/crm")
+        app.include_router(tab.build_router(store=self.store, import_dir=self.stash), prefix="/crm")
         self.client = TestClient(app, follow_redirects=False)
 
     def post(self, path: str, data: dict, **kw):
@@ -266,7 +271,8 @@ class Tab(TabBase):
         self.store.add_member(lid, cid)
         posts = ["/crm/contacts", f"/crm/contacts/{cid}", f"/crm/contacts/{cid}/delete", "/crm/lists",
                  f"/crm/lists/{lid}", f"/crm/lists/{lid}/delete", f"/crm/lists/{lid}/members",
-                 f"/crm/lists/{lid}/members/{cid}", f"/crm/lists/{lid}/members/{cid}/remove"]
+                 f"/crm/lists/{lid}/members/{cid}", f"/crm/lists/{lid}/members/{cid}/remove",
+                 "/crm/import", "/crm/import/confirm", "/crm/import/cancel"]
         for path in posts:
             for headers in ({}, {"origin": "https://evil.example"}, {"sec-fetch-site": "cross-site"}):
                 with self.subTest(path=path, headers=headers):
@@ -350,6 +356,23 @@ class Tab(TabBase):
         self.assertIsNotNone(self.store.contact(cid))
         self.assertEqual(self.client.get(f"/crm/lists/{lid}").status_code, 404)
 
+    def test_contacts_page_offers_import_even_when_empty(self) -> None:
+        page = self.client.get("/crm").text
+        self.assertIn('action="/crm/import"', page)
+        self.assertIn('enctype="multipart/form-data"', page)
+
+    def test_import_result_line_takes_only_known_formats_and_numbers(self) -> None:
+        self.assertIn("Imported from vCard: 2 added, 1 already here, 0 skipped.",
+                      self.client.get("/crm?imported=vcard&new=2&duplicate=1&skipped=0").text)
+        self.assertNotIn("Imported from", self.client.get("/crm?imported=<b>x</b>&new=1").text)
+        self.assertNotIn("Imported from", self.client.get("/crm?imported=linkedin&new=lots").text)
+
+    def test_upload_without_python_multipart_says_what_to_install(self) -> None:
+        with mock.patch("core.crm._multipart_installed", return_value=False):
+            got = self.client.post("/crm/import", files={"file": ("c.csv", b"x", "text/csv")}, headers=self.SAME)
+        self.assertEqual(got.status_code, 503)
+        self.assertIn("python-multipart", got.text)
+
     def test_authored_text_is_escaped(self) -> None:
         cid = self.store.add_contact(crm.clean_contact({"name": "<script>alert(1)</script>"}))
         lid = self.store.add_list(crm.clean_list({"name": "<img src=x onerror=alert(1)>"}))
@@ -359,6 +382,113 @@ class Tab(TabBase):
                 text = self.client.get(path).text
                 self.assertNotIn("<script>alert(1)", text)
                 self.assertNotIn("<img src=x", text)
+
+
+@unittest.skipUnless(HAVE_FASTAPI and HAVE_MULTIPART, "needs fastapi, httpx and python-multipart")
+class Import(TabBase):
+    """Upload a contacts export, preview the dry run, confirm, through the tab."""
+
+    def upload(self, name: str, data: bytes, headers: dict | None = None):
+        return self.client.post("/crm/import", files={"file": (name, data, "application/octet-stream")},
+                                headers=self.SAME if headers is None else headers)
+
+    def stashed(self) -> list[Path]:
+        return sorted(self.stash.iterdir()) if self.stash.exists() else []
+
+    @staticmethod
+    def token(page: str) -> str:
+        return re.search(r'name="token" value="([^"]+)"', page).group(1)
+
+    def test_import_previews_then_applies_once_then_finds_nothing_new(self) -> None:
+        csv = (IMPORT_FIX / "linkedin-Connections.csv").read_bytes()
+        got = self.upload("Connections.csv", csv)
+        self.assertEqual(got.status_code, 200)
+        self.assertIn("Read as LinkedIn Connections.csv: 5 rows", got.text)
+        for num, label in ((3, "New"), (1, "Already here"), (1, "Skipped")):
+            self.assertIn(f'<div class="stat-num">{num}</div><div class="stat-label">{label}</div>', got.text)
+        for name in ("Alba Quintero", "Bram Oosterveld", "Cleo Varga"):
+            self.assertIn(f"<li>{name}</li>", got.text)
+        self.assertEqual(self.store.contacts(), [])
+        self.assertEqual(len(self.stashed()), 1)
+        self.assertEqual(self.stashed()[0].stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.stash.stat().st_mode & 0o777, 0o700)
+
+        token = self.token(got.text)
+        done = self.post("/crm/import/confirm", {"token": token})
+        self.assertEqual(done.status_code, 303)
+        self.assertEqual(done.headers["location"],
+                         "/crm?imported=linkedin&new=3&duplicate=1&filled=0&skipped=1")
+        self.assertEqual(sorted(c["name"] for c in self.store.contacts()),
+                         ["Alba Quintero", "Bram Oosterveld", "Cleo Varga"])
+        self.assertEqual(self.stashed(), [])
+        self.assertIn("Imported from LinkedIn Connections.csv: 3 added, 1 already here, 1 skipped.",
+                      self.client.get(done.headers["location"]).text)
+
+        again = self.post("/crm/import/confirm", {"token": token})
+        self.assertEqual(again.status_code, 400)
+        self.assertIn("expired or was already applied", again.text)
+        self.assertEqual(len(self.store.contacts()), 3)
+
+        second = self.upload("Connections.csv", csv)
+        self.assertIn('<div class="stat-num">0</div><div class="stat-label">New</div>', second.text)
+        self.assertIn('<div class="stat-num">4</div><div class="stat-label">Already here</div>', second.text)
+        self.assertEqual(self.post("/crm/import/confirm", {"token": self.token(second.text)}).headers["location"],
+                         "/crm?imported=linkedin&new=0&duplicate=4&filled=0&skipped=1")
+        self.assertEqual(len(self.store.contacts()), 3)
+
+    def test_each_export_format_is_detected_from_an_upload(self) -> None:
+        for fixture, label in (("google-contacts.csv", "Google Contacts CSV"), ("outlook-contacts.csv", "Outlook CSV"),
+                               ("contacts.vcf", "vCard"), ("facebook-your_friends.json", "Facebook friends JSON"),
+                               ("instagram-following.json", "Instagram followers/following JSON")):
+            with self.subTest(fixture):
+                got = self.upload(fixture, (IMPORT_FIX / fixture).read_bytes())
+                self.assertEqual(got.status_code, 200)
+                self.assertIn(f"Read as {label}:", got.text)
+
+    def test_zip_other_types_unknown_csv_and_oversize_are_refused_and_nothing_is_kept(self) -> None:
+        from core import crm as tab
+        cases = [("linkedin.zip", b"PK\x03\x04", 400, "whole archive"),
+                 ("notes.txt", b"hello", 400, "not a .csv, .vcf or .json"),
+                 ("people.csv", b"Who,When\nAna,today\n", 400, "cannot tell what export people.csv is"),
+                 ("big.csv", b"x" * (tab.IMPORT_MAX_BYTES + 1), 413, "larger than 10 MB")]
+        for name, data, status, message in cases:
+            with self.subTest(name):
+                got = self.upload(name, data)
+                self.assertEqual(got.status_code, status)
+                self.assertIn(message, got.text)
+                self.assertNotIn("--format", got.text)
+        self.assertEqual(self.client.post("/crm/import", data={"x": "1"}, headers=self.SAME).status_code, 400)
+        self.assertEqual(self.stashed(), [])
+        self.assertEqual(self.store.contacts(), [])
+
+    def test_foreign_upload_is_refused_before_anything_is_read(self) -> None:
+        csv = (IMPORT_FIX / "linkedin-Connections.csv").read_bytes()
+        for headers in ({}, {"origin": "https://evil.example"}, {"sec-fetch-site": "cross-site"}):
+            with self.subTest(headers=headers):
+                self.assertEqual(self.upload("Connections.csv", csv, headers).status_code, 403)
+        self.assertEqual(self.stashed(), [])
+        token = self.token(self.upload("Connections.csv", csv).text)
+        self.assertEqual(self.client.post("/crm/import/confirm", data={"token": token},
+                                          headers={"origin": "https://evil.example"}).status_code, 403)
+        self.assertEqual(self.store.contacts(), [])
+        self.assertEqual(len(self.stashed()), 1)
+
+    def test_cancel_expiry_and_bad_tokens_leave_the_crm_alone(self) -> None:
+        csv = (IMPORT_FIX / "linkedin-Connections.csv").read_bytes()
+        token = self.token(self.upload("Connections.csv", csv).text)
+        self.assertEqual(self.post("/crm/import/cancel", {"token": token}).headers["location"], "/crm")
+        self.assertEqual(self.stashed(), [])
+        self.assertEqual(self.post("/crm/import/confirm", {"token": token}).status_code, 400)
+
+        token = self.token(self.upload("Connections.csv", csv).text)
+        old = 1_000_000_000
+        os.utime(self.stashed()[0], (old, old))
+        self.assertEqual(self.post("/crm/import/confirm", {"token": token}).status_code, 400)
+        self.assertEqual(self.stashed(), [])
+        for bad in ("", "../../etc/passwd", "x" * 200):
+            with self.subTest(bad):
+                self.assertEqual(self.post("/crm/import/confirm", {"token": bad}).status_code, 400)
+        self.assertEqual(self.store.contacts(), [])
 
 
 @unittest.skipUnless(HAVE_FASTAPI, "needs fastapi and httpx")
@@ -382,6 +512,12 @@ class Mounted(unittest.TestCase):
                     self.assertIn("CHASSIS_PG_DSN", got.text)
             got = client.post("/crm/contacts", data={"name": "Ana"}, headers={"origin": "http://testserver"})
             self.assertEqual(got.status_code, 503)
+            if HAVE_MULTIPART:
+                csv = (IMPORT_FIX / "linkedin-Connections.csv").read_bytes()
+                got = client.post("/crm/import", files={"file": ("Connections.csv", csv, "text/csv")},
+                                  headers={"origin": "http://testserver"})
+                self.assertEqual(got.status_code, 503)
+                self.assertIn("CHASSIS_PG_DSN", got.text)
             self.assertIn('href="/crm"', client.get("/briefings").text)
 
     def test_router_mounts_in_another_app_with_its_own_renderer(self) -> None:

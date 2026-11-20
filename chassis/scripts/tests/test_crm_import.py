@@ -66,6 +66,12 @@ class Detect(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(records(name)[0], fmt)
 
+    def test_bytes_in_memory_read_the_same_as_the_file(self) -> None:
+        data = (FIX / "linkedin-Connections.csv").read_bytes()
+        self.assertEqual(ci.load_bytes("Connections.csv", data), records("linkedin-Connections.csv"))
+        with self.assertRaisesRegex(ci.ExportFileError, "whole archive"):
+            ci.load_bytes("export.zip", data)
+
     def test_zip_is_refused_without_opening_it(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "Complete_LinkedInDataExport.zip"
@@ -123,7 +129,9 @@ class Run(unittest.TestCase):
     def test_dry_run_counts_and_writes_nothing(self) -> None:
         store = MemStore()
         _, recs = records("linkedin-Connections.csv")
-        counts = ci.run(store, recs, "linkedin", apply=False, today=TODAY)
+        new_names: list[str] = []
+        counts = ci.run(store, recs, "linkedin", apply=False, today=TODAY, new_names=new_names)
+        self.assertEqual(new_names, ["Alba Quintero", "Bram Oosterveld", "Cleo Varga"])
         self.assertEqual(store.writes, 0)
         self.assertEqual(store.rows, {})
         # Bram appears twice (trailing slash on the second URL): one new, one duplicate.

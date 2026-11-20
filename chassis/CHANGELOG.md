@@ -18,6 +18,8 @@ Semver:
 
 ## Unreleased
 
+- **Import contacts from the dashboard.** The CRM Contacts page has a small **Import** control beside the contact count. Upload a LinkedIn `Connections.csv`, Google or Outlook CSV, vCard, or Facebook / Instagram JSON (10 MB cap, `.zip` refused); the tab auto-detects the format with `chassis/scripts/crm_import.py`, previews new / already-here / skipped counts and a sample of new names, and writes only on **Confirm import**. The upload is stashed server-side under a random token (0600, private dir, 15-minute expiry, deleted on confirm or cancel), so confirming twice applies once. `crm_import.py` gains `load_bytes()` and an optional `new_names` collector on `run()`; the CLI is unchanged. **Existing installs:** run `python3 -m pip install -r chassis/dashboard/requirements.txt` for the dashboard's python (adds `python-multipart>=0.0.31`) and restart the dashboard. Without it only the upload is unavailable and says so.
+
 - **Matrix kill switch went deaf on conduwuit/continuwuity homeservers.** On first sight of a room the listener saved the backward page's `start`, which those servers return as an i64-max sentinel that a forward page never moves past, so `halt` and `resume` from Matrix were never seen (new-jaxity#756, 2026-11-19). It now saves the newest event's position (`end`) and pages forward once, skipping whatever comes back, which also covers Synapse. Covered by a regression test that fails against the old code. **Existing installs:** a listener already armed on one of these servers keeps the bad cursor; delete `state/matrix-control-listener-cursor.json` and restart the container.
 
 ### Added

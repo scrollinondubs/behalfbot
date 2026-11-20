@@ -7,3 +7,6 @@ fastapi>=0.110,<1
 uvicorn>=0.29,<1
 jinja2>=3.1,<4
 pyyaml>=6,<7
+# multipart/form-data parsing for the CRM tab's contacts-export upload.
+# Floor is the last release with a security fix (0.0.31).
+python-multipart>=0.0.31,<1

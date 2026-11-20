@@ -6,8 +6,21 @@
     <button class="btn" type="submit">Search</button>
     {% if q %}<a class="btn subtle" href="{{ prefix }}">Clear</a>{% endif %}
   </form>
+  {% if imported %}
+  <p class="crm-done" role="status">Imported from {{ imported.label }}: {{ imported.new }} added, {{ imported.duplicate }} already here{% if imported.filled %} ({{ imported.filled }} had an empty field filled){% endif %}, {{ imported.skipped }} skipped.</p>
+  {% endif %}
+  <div class="crm-countline">
+    <span class="muted small">{% if contacts %}{{ contacts|length }} contact{{ "" if contacts|length == 1 else "s" }}{% if q %} matching "{{ q }}"{% endif %}{% elif q %}No contacts match "{{ q }}".{% else %}No contacts yet. Add one below or import a file.{% endif %}</span>
+    <details class="crm-import">
+      <summary>Import</summary>
+      <form method="post" action="{{ prefix }}/import" enctype="multipart/form-data">
+        <input type="file" name="file" accept=".csv,.vcf,.json" required aria-label="Contacts export file">
+        <button class="btn small-btn" type="submit">Preview</button>
+        <span class="muted small">LinkedIn Connections.csv, Google or Outlook CSV, vCard, Facebook / Instagram JSON. Up to {{ max_mb }} MB, no .zip. Nothing is written until you confirm.</span>
+      </form>
+    </details>
+  </div>
   {% if contacts %}
-  <p class="muted small">{{ contacts|length }} contact{{ "" if contacts|length == 1 else "s" }}{% if q %} matching "{{ q }}"{% endif %}</p>
   <table class="status-table crm-table">
     <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>WhatsApp</th><th>Lists</th></tr></thead>
     <tbody>
@@ -22,8 +35,6 @@
     {% endfor %}
     </tbody>
   </table>
-  {% else %}
-  <p class="muted">{% if q %}No contacts match "{{ q }}".{% else %}No contacts yet. Add one below.{% endif %}</p>
   {% endif %}
 </section>
 

@@ -128,10 +128,9 @@ def _first(cell: str | None) -> str | None:
 
 # ---- reading files -------------------------------------------------------------
 
-def _read_text(path: Path) -> str:
-    data = path.read_bytes()
+def _decode(name: str, data: bytes) -> str:
     if len(data) > MAX_BYTES:
-        raise ExportFileError(f"{path.name} is larger than {MAX_BYTES // (1024 * 1024)} MB; is it the right file?")
+        raise ExportFileError(f"{name} is larger than {MAX_BYTES // (1024 * 1024)} MB; is it the right file?")
     if data[:2] in (b"\xff\xfe", b"\xfe\xff"):
         return data.decode("utf-16")
     try:
@@ -327,19 +326,30 @@ PARSERS = {"linkedin": parse_linkedin, "google": parse_google, "outlook": parse_
            "vcard": parse_vcard, "facebook": parse_facebook, "instagram": parse_instagram}
 
 
-def load(path: Path, fmt: str = "auto") -> tuple[str, list[Record]]:
-    if path.suffix.lower() == ".zip":
+def _refuse_zip(name: str) -> None:
+    if Path(name).suffix.lower() == ".zip":
         raise ExportFileError(
-            f"{path.name} is a whole archive. Unzip it and pass only the contacts file "
+            f"{name} is a whole archive. Unzip it and pass only the contacts file "
             "(for LinkedIn: Connections.csv). Archives also hold messages, which this never opens.")
-    if not path.is_file():
-        raise ExportFileError(f"{path} is not a file")
-    text = _read_text(path)
-    fmt = detect(path, text) if fmt == "auto" else fmt
+
+
+def load_bytes(name: str, data: bytes, fmt: str = "auto") -> tuple[str, list[Record]]:
+    """load() for bytes already in memory (an upload); name is only used for
+    its suffix and in messages."""
+    _refuse_zip(name)
+    text = _decode(name, data)
+    fmt = detect(Path(name), text) if fmt == "auto" else fmt
     try:
         return fmt, PARSERS[fmt](text)
     except (json.JSONDecodeError, AttributeError, TypeError) as e:
-        raise ExportFileError(f"{path.name} does not look like a {fmt} export: {e}") from None
+        raise ExportFileError(f"{name} does not look like a {fmt} export: {e}") from None
+
+
+def load(path: Path, fmt: str = "auto") -> tuple[str, list[Record]]:
+    _refuse_zip(path.name)
+    if not path.is_file():
+        raise ExportFileError(f"{path} is not a file")
+    return load_bytes(path.name, path.read_bytes(), fmt)
 
 
 # ---- matching and writing ------------------------------------------------------
@@ -401,7 +411,9 @@ def notes_for(rec: Record, source: str, today: date) -> str:
     return "\n".join(lines)
 
 
-def run(store, records: list[Record], source: str, apply: bool, today: date | None = None) -> dict:
+def run(store, records: list[Record], source: str, apply: bool, today: date | None = None,
+        new_names: list[str] | None = None) -> dict:
+    """new_names, when given, collects the name of every contact counted as new."""
     today = today or date.today()
     existing = {int(c["id"]): dict(c) for c in store.contacts(limit=ALL_CONTACTS)}
     index = Index()
@@ -452,6 +464,8 @@ def run(store, records: list[Record], source: str, apply: bool, today: date | No
         existing[cid] = {"id": cid, **fields}
         index.add(cid, fields["name"], fields["email"], fields["phone"], fields["notes"])
         counts["new"] += 1
+        if new_names is not None:
+            new_names.append(fields["name"])
     return counts
 
 

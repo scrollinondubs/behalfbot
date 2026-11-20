@@ -165,6 +165,20 @@ dry run by default, `--apply` to write, matching done as above. The optional
 onboarding offer, the export path per platform and the Autopilot runbooks
 that drive them are in `chassis/skills/crm-contact-import.md`.
 
+The same importer sits behind the small **Import** control next to the
+contact count on `/crm`. Upload one `.csv`, `.vcf` or `.json` export (up to
+10 MB; a `.zip` is refused, unzip it and pick the contacts file). The tab
+detects the format, runs the dry run and shows how many contacts are new,
+already there (and how many of those would get an empty field filled) and
+skipped, with a few of the new names. **Confirm import** applies it and
+returns to Contacts with a one-line result. The upload is kept server-side
+between the two steps, never re-sent by the browser: one file per preview,
+mode 0600, in a private directory under the system temp dir, named by a
+random token. Confirm or Cancel deletes it, and anything older than 15
+minutes is swept on the next upload. Uploads need `python-multipart` on the
+dashboard host (in `chassis/dashboard/requirements.txt`); without it the
+Import control explains what to install and the rest of the tab works.
+
 Like TripWires, `chassis/dashboard/core/crm.py` exposes
 `build_router(render, store)` for an install with its own dashboard app.
 `render(request, template, context, status_code)` gets one of the
