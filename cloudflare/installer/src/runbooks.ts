@@ -10,6 +10,7 @@ import loomLibraryPurge from '../../../runbooks/loom-library-purge.json' with { 
 import vaultwardenOrgForAgent from '../../../runbooks/vaultwarden-org-for-agent.json' with { type: 'json' }
 import braveSearchApiKey from '../../../runbooks/brave-search-api-key.json' with { type: 'json' }
 import githubSignupForAgent from '../../../runbooks/github-signup-for-agent.json' with { type: 'json' }
+import linkedinConnectionsExport from '../../../runbooks/linkedin-connections-export.json' with { type: 'json' }
 
 export interface Runbook {
   id: string
@@ -31,6 +32,7 @@ const ALL: Runbook[] = [
   vaultwardenOrgForAgent as Runbook,
   braveSearchApiKey as Runbook,
   githubSignupForAgent as Runbook,
+  linkedinConnectionsExport as Runbook,
 ]
 
 export function runbook(id: string): Runbook | null {
