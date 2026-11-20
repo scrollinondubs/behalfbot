@@ -20,8 +20,10 @@ Accepted files (procedure and where each comes from: chassis/skills/crm-contact-
 A .zip is refused: archives such as LinkedIn's also hold messages, so only
 the one contacts file is ever opened.
 
-Matching, in order: email, phone, profile URL, then the normalised name for
-rows that carry none of those (Facebook friends). Each new contact's notes
+Matching, in order: email; a social profile URL (LinkedIn, Instagram, ...);
+a phone number when the first names also agree; then the normalised name for
+rows that carry none of those (Facebook friends). A company website is kept
+in notes but never matched on. Each new contact's notes
 get a "source:" line and, when the export has one, a "profile:" line, which
 is what a re-run matches on.
 
@@ -59,6 +61,7 @@ class Record:
     email: str | None = None
     phone: str | None = None
     profile: str | None = None
+    website: str | None = None
     company: str | None = None
     title: str | None = None
 
@@ -101,6 +104,21 @@ def norm_url(url: str | None) -> str | None:
     if not host:
         return None
     return f"https://{host}{path}"
+
+
+PROFILE_HOSTS = ("linkedin.com", "instagram.com", "facebook.com", "x.com", "twitter.com", "github.com")
+
+
+def split_url(url: str | None) -> dict:
+    """A personal profile on a social site identifies one person; any other
+    URL (a company site) is kept as a website and never matched on."""
+    u = norm_url(url)
+    if not u:
+        return {}
+    host = urlsplit(u).netloc
+    if urlsplit(u).path and any(host == h or host.endswith("." + h) for h in PROFILE_HOSTS):
+        return {"profile": u}
+    return {"website": u}
 
 
 def _first(cell: str | None) -> str | None:
@@ -193,7 +211,7 @@ def parse_google(text: str) -> list[Record]:
         title = _clean(r.get("Organization Title")) or _clean(r.get("Organization 1 - Title"))
         url = next((_first(v) for k, v in r.items() if k and re.fullmatch(r"Website \d+ - Value", k) and _first(v)), None)
         out.append(Record(name=name or company or email, email=email, phone=phone,
-                          profile=url, company=company, title=title))
+                          company=company, title=title, **split_url(url)))
     return out
 
 
@@ -208,7 +226,7 @@ def parse_outlook(text: str) -> list[Record]:
                       if _clean(r.get(k))), None)
         company = _clean(r.get("Company"))
         out.append(Record(name=name or company or email, email=email, phone=phone,
-                          profile=_clean(r.get("Web Page")), company=company, title=_clean(r.get("Job Title"))))
+                          company=company, title=_clean(r.get("Job Title")), **split_url(r.get("Web Page"))))
     return out
 
 
@@ -262,7 +280,7 @@ def _vcard_record(card: dict[str, list[str]]) -> Record:
     org = _clean(_vcard_unescape(card["ORG"][0].split(";")[0])) if card.get("ORG") else None
     email = one("EMAIL")
     return Record(name=name or org or email, email=email, phone=one("TEL"),
-                  profile=one("URL"), company=org, title=one("TITLE"))
+                  company=org, title=one("TITLE"), **split_url(one("URL")))
 
 
 def _meta_text(value) -> str | None:
@@ -329,30 +347,44 @@ def load(path: Path, fmt: str = "auto") -> tuple[str, list[Record]]:
 PROFILE_LINE = re.compile(r"^profile:\s*(\S+)\s*$", re.M)
 
 
+def _first_word(name: str | None) -> str:
+    n = norm_name(name)
+    return n.lstrip("@").split(" ")[0] if n else ""
+
+
 class Index:
     def __init__(self) -> None:
+        self.names: dict[int, str | None] = {}
         self.by_email: dict[str, int] = {}
-        self.by_phone: dict[str, int] = {}
+        self.by_phone: dict[str, list[int]] = {}
         self.by_profile: dict[str, int] = {}
         self.by_name: dict[str, int] = {}
 
-    def add(self, cid: int, name=None, email=None, phone=None, notes=None, profile=None) -> None:
-        for table, key in ((self.by_email, norm_email(email)), (self.by_phone, norm_phone(phone)),
-                           (self.by_name, norm_name(name))):
-            if key:
-                table.setdefault(key, cid)
-        urls = [profile] if profile else []
-        urls += PROFILE_LINE.findall(notes or "")
-        for u in urls:
+    def add(self, cid: int, name=None, email=None, phone=None, notes=None) -> None:
+        if name:
+            self.names[cid] = name
+        if norm_email(email):
+            self.by_email.setdefault(norm_email(email), cid)
+        if norm_phone(phone):
+            self.by_phone.setdefault(norm_phone(phone), []).append(cid)
+        if norm_name(name):
+            self.by_name.setdefault(norm_name(name), cid)
+        for u in PROFILE_LINE.findall(notes or ""):
             if norm_url(u):
                 self.by_profile.setdefault(norm_url(u), cid)
 
     def match(self, rec: Record) -> int | None:
-        for table, key in ((self.by_email, norm_email(rec.email)), (self.by_phone, norm_phone(rec.phone)),
-                           (self.by_profile, norm_url(rec.profile))):
-            if key and key in table:
-                return table[key]
-        if not (norm_email(rec.email) or norm_phone(rec.phone) or norm_url(rec.profile)):
+        email, phone, profile = norm_email(rec.email), norm_phone(rec.phone), norm_url(rec.profile)
+        if email and email in self.by_email:
+            return self.by_email[email]
+        if profile and profile in self.by_profile:
+            return self.by_profile[profile]
+        # A shared landline or switchboard is not one person: a phone match
+        # also needs the first names to agree.
+        for cid in self.by_phone.get(phone or "", []):
+            if _first_word(self.names.get(cid)) == _first_word(rec.name):
+                return cid
+        if not (email or phone or profile):
             return self.by_name.get(norm_name(rec.name) or "")
         return None
 
@@ -361,6 +393,8 @@ def notes_for(rec: Record, source: str, today: date) -> str:
     lines = [f"source: {source} (imported {today.isoformat()})"]
     if norm_url(rec.profile):
         lines.append(f"profile: {norm_url(rec.profile)}")
+    if norm_url(rec.website):
+        lines.append(f"website: {norm_url(rec.website)}")
     role = " at ".join(x for x in (rec.title, rec.company) if x)
     if role:
         lines.append(f"role: {role}")

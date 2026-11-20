@@ -176,6 +176,27 @@ class Run(unittest.TestCase):
         counts = ci.run(store, records("google-contacts.csv")[1], "google", apply=False, today=TODAY)
         self.assertEqual((counts["new"], counts["duplicate"]), (2, 1))
 
+    def test_shared_phone_or_company_site_does_not_merge_two_people(self) -> None:
+        store = MemStore()
+        site = ci.split_url("https://www.sample-studio.example/")
+        self.assertEqual(site, {"website": "https://sample-studio.example"})
+        rows = [ci.Record(name="Nadia Okafor", email="nadia@example.com", phone="+351 210 000 100", **site),
+                ci.Record(name="Omar Lindqvist", email="omar@example.com", phone="+351 210 000 100", **site),
+                ci.Record(name="Pia Lindqvist", phone="210000100")]
+        counts = ci.run(store, rows, "google", apply=True, today=TODAY)
+        self.assertEqual((counts["new"], counts["duplicate"], counts["filled"]), (3, 0, 0))
+        self.assertEqual(store.by_name("Nadia Okafor")["email"], "nadia@example.com")
+        self.assertIn("website: https://sample-studio.example", store.by_name("Omar Lindqvist")["notes"])
+        self.assertNotIn("profile:", store.by_name("Omar Lindqvist")["notes"])
+
+    def test_social_urls_in_address_books_count_as_profiles(self) -> None:
+        self.assertEqual(ci.split_url("linkedin.com/in/alba-quintero-test/"),
+                         {"profile": "https://linkedin.com/in/alba-quintero-test"})
+        store = MemStore()
+        ci.run(store, records("linkedin-Connections.csv")[1], "linkedin", apply=True, today=TODAY)
+        rec = ci.Record(name="Alba Q", **ci.split_url("https://www.linkedin.com/in/alba-quintero-test"))
+        self.assertEqual(ci.run(store, [rec], "vcard", apply=False, today=TODAY)["duplicate"], 1)
+
     def test_over_long_fields_are_skipped_not_fatal(self) -> None:
         store = MemStore()
         counts = ci.run(store, [ci.Record(name="x" * 5000), ci.Record(name="Ok Person")], "vcard", apply=True, today=TODAY)

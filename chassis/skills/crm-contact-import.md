@@ -14,20 +14,19 @@ own account.
 
 Say it in your own words, keeping these points. A version to start from:
 
-> Your CRM is ready. If you'd like, I can fill it with the people you already
-> know: LinkedIn connections, Google or iCloud contacts, Outlook, Facebook
-> friends or Instagram followers. Each platform has its own export. I can
-> open the page and get it ready in your browser, and you press the final
-> request button yourself. Then you send me the one contacts file and I show
-> you what I'd add before anything is written.
+> Your CRM is set up. If you want, I can fill it with people you already
+> know from LinkedIn, Google or iCloud contacts, Outlook, Facebook or
+> Instagram. Each one has its own export. I'll open the right page in your
+> browser and set it up, and you press the last request button yourself.
+> Then send me the contacts file and I'll show you what I'd add before I
+> write anything.
 >
-> What I read: names, and where the export has them, emails, phone numbers,
-> profile links, company and job title. Some exports (LinkedIn, Facebook,
-> Instagram) arrive as a zip that also holds your messages. Unzip it on your
-> computer and send me only the contacts file. I never open the archive
-> itself or anything in it besides that file.
+> What I read: names, plus emails, phone numbers, profile links, company and
+> job title where the export has them. LinkedIn, Facebook and Instagram send
+> a zip that also holds your messages. Unzip it on your computer and send me
+> just the contacts file. I don't open the zip or anything else in it.
 >
-> Totally optional. Want to do any of them, and which first?
+> You can skip this. If you want to do it, which one first?
 
 If they say no or not now, drop it. Don't bring it up again unless they ask.
 
@@ -114,6 +113,13 @@ so the person follows it with you on a call or chat:
    - Instagram: `connections/followers_and_following/followers_1.json` (and
      `followers_2.json` and so on if there are more) and `following.json`
 
+The menu path above matches Facebook's help page as of 2026-11-20. The
+category names and the file paths inside the zip are from past exports and
+may have moved; if the file isn't there, ask them to search the unzipped
+folder for `friends` or `followers` and send the JSON they find. The
+importer accepts both the older Instagram shape (handle in `value`) and the
+newer one (handle in `title`).
+
 Tell them up front what they get: Facebook friends come as names only;
 Instagram as handles only (the contact is named `@handle` with the profile
 link). Neither has emails or phone numbers.
@@ -130,9 +136,11 @@ overrides. It uses the same DSN variables as the CRM tab.
 
 1. Always dry run first and tell the person the counts: new, duplicate,
    skipped. Apply only after they say yes.
-2. Duplicates are matched on email, then phone, then profile URL, then the
-   name for rows that have none of those. A duplicate is never changed except
-   to fill an email, phone or notes field that is still empty.
+2. Duplicates are matched on email, then a social profile URL (LinkedIn,
+   Instagram and so on), then phone when the first names also agree, then the
+   name for rows that have none of those. A company website is noted, never
+   matched on. A duplicate is never changed except to fill an email, phone or
+   notes field that is still empty.
 3. New contacts get notes like `source: linkedin (imported 2026-11-20)`,
    `profile: https://linkedin.com/in/...` and `role: Founder at Acme`.
    Re-running the same file adds nothing.
