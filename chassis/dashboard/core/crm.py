@@ -153,6 +153,10 @@ def build_router(render: Callable = _default_render, store: crm.Store | None = N
     @router.get("")
     @guarded
     def index(request: Request):
+        try:
+            sweep_stash(create=False)
+        except RuntimeError:
+            pass
         return contacts_page(request)
 
     @router.post("/contacts")
@@ -201,7 +205,9 @@ def build_router(render: Callable = _default_render, store: crm.Store | None = N
 
     # ---- import from a contacts export (chassis/scripts/crm_import.py)
 
-    def sweep_stash() -> Path:
+    def sweep_stash(create: bool = True) -> Path | None:
+        if not create and not stash_root.is_dir():
+            return None
         root = _private_dir(stash_root)
         cutoff = time.time() - IMPORT_TTL_SECONDS
         for f in root.iterdir():

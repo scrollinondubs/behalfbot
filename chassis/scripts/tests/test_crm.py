@@ -458,6 +458,11 @@ class Import(TabBase):
                 self.assertIn(message, got.text)
                 self.assertNotIn("--format", got.text)
         self.assertEqual(self.client.post("/crm/import", data={"x": "1"}, headers=self.SAME).status_code, 400)
+        # Over the Content-Length ceiling: refused before the form is parsed,
+        # which is why the missing-package check never gets a say.
+        with mock.patch("core.crm._multipart_installed", return_value=False):
+            got = self.upload("huge.csv", b"x" * (tab.IMPORT_MAX_BYTES + tab.MAX_FORM_BYTES + 1))
+        self.assertEqual(got.status_code, 413)
         self.assertEqual(self.stashed(), [])
         self.assertEqual(self.store.contacts(), [])
 
@@ -472,6 +477,22 @@ class Import(TabBase):
                                           headers={"origin": "https://evil.example"}).status_code, 403)
         self.assertEqual(self.store.contacts(), [])
         self.assertEqual(len(self.stashed()), 1)
+
+    def test_uploaded_names_and_filename_are_escaped(self) -> None:
+        csv = (b"First Name,Last Name,URL,Email Address,Company,Position,Connected On\n"
+               b"<script>alert(1)</script>,X,https://www.linkedin.com/in/x-test,,,,01 Jan 2024\n")
+        got = self.upload("<img src=x onerror=alert(1)>.csv", csv)
+        self.assertEqual(got.status_code, 200)
+        self.assertNotIn("<script>alert(1)", got.text)
+        self.assertNotIn("<img src=x", got.text)
+        refused = self.upload("<img src=x onerror=alert(1)>.zip", b"PK")
+        self.assertNotIn("<img src=x", refused.text)
+
+    def test_abandoned_previews_are_swept_when_contacts_load(self) -> None:
+        self.upload("Connections.csv", (IMPORT_FIX / "linkedin-Connections.csv").read_bytes())
+        os.utime(self.stashed()[0], (1_000_000_000, 1_000_000_000))
+        self.client.get("/crm")
+        self.assertEqual(self.stashed(), [])
 
     def test_cancel_expiry_and_bad_tokens_leave_the_crm_alone(self) -> None:
         csv = (IMPORT_FIX / "linkedin-Connections.csv").read_bytes()
