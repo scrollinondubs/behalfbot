@@ -1,0 +1,18 @@
+{
+  "id": "github-signup-for-agent",
+  "task": "GitHub: create a personal account for a second assistant (Jill) using the assistant's own email, then store its password",
+  "allow": ["github.com"],
+  "start_url": "https://github.com/signup",
+  "steps": [
+    { "id": "signed-out", "human": "If this tab shows you signed in to GitHub, open the signup in a private window or sign out of GitHub first. Press Done on the signup page." },
+    { "id": "form", "do": "Fill the signup form with the email, username and a generated password Jax gives in the chat. Save the password with save_secret before submitting. Country Portugal. Untick marketing email." },
+    { "id": "captcha", "human": "Solve the verification puzzle and press Create account yourself, then Done." },
+    { "id": "verify-code", "do": "Enter the launch code Jax reads from the assistant's inbox and gives in the chat." },
+    { "id": "finish", "do": "Skip the personalization questions. Stop at the dashboard and report the account username." }
+  ],
+  "accept": "github.com/<username> exists with a verified email, and the password is in Vaultwarden. Jax adds 2FA later from its own side.",
+  "notes": [
+    "The account is the assistant's, on its own email, not Sean's.",
+    "The puzzle and the Create account press are human steps."
+  ]
+}

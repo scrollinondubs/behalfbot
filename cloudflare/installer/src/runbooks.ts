@@ -7,6 +7,9 @@ import awsBackupHardening from '../../../runbooks/aws-backup-hardening.json' wit
 import stripeGoldForSilver from '../../../runbooks/stripe-gold-for-silver.json' with { type: 'json' }
 import hetznerRescale from '../../../runbooks/hetzner-rescale.json' with { type: 'json' }
 import loomLibraryPurge from '../../../runbooks/loom-library-purge.json' with { type: 'json' }
+import vaultwardenOrgForAgent from '../../../runbooks/vaultwarden-org-for-agent.json' with { type: 'json' }
+import braveSearchApiKey from '../../../runbooks/brave-search-api-key.json' with { type: 'json' }
+import githubSignupForAgent from '../../../runbooks/github-signup-for-agent.json' with { type: 'json' }
 
 export interface Runbook {
   id: string
@@ -25,6 +28,9 @@ const ALL: Runbook[] = [
   stripeGoldForSilver as Runbook,
   hetznerRescale as Runbook,
   loomLibraryPurge as Runbook,
+  vaultwardenOrgForAgent as Runbook,
+  braveSearchApiKey as Runbook,
+  githubSignupForAgent as Runbook,
 ]
 
 export function runbook(id: string): Runbook | null {

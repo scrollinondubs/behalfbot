@@ -1,0 +1,21 @@
+{
+  "id": "vaultwarden-org-for-agent",
+  "task": "Self-hosted Vaultwarden (vault.grid7.com): create an organization with a collection for a second assistant (Jill), invite the assistant's account to it as a User with access to that collection only",
+  "allow": ["vault.grid7.com"],
+  "start_url": "https://vault.grid7.com/#/vault",
+  "steps": [
+    { "id": "signin", "human": "Sign in to your vault in this tab (master password + 2FA). Press Done when you see your vault." },
+    { "id": "org-check", "do": "Look under Organizations / New organization. If an organization named in the chat already exists, report it and skip to collection." },
+    { "id": "org-create", "do": "Create the organization with the name and billing email Jax gives in the chat (free, self-hosted). Fill the form but do not submit." },
+    { "id": "org-save", "human": "Check the organization form against the chat. Press Submit yourself, then Done." },
+    { "id": "collection", "do": "In the new organization, create the collection Jax names in the chat (e.g. Jill). Save it." },
+    { "id": "invite-form", "do": "Members > Invite member: the assistant's email from the chat, role User, access to that one collection only (can view, no manage). Fill the form but do not send." },
+    { "id": "invite-send", "human": "Check the invite: role User, one collection only. Press Save yourself, then Done." }
+  ],
+  "accept": "The organization and collection exist, and the assistant's email shows as Invited with role User and access to that one collection.",
+  "notes": [
+    "Creating the org and sending the invite are human steps.",
+    "Jax registers the assistant's own Vaultwarden account from its inbox outside this browser, then Sean confirms the member in a later session.",
+    "No save_secret step: nothing here creates a credential Jax needs to keep."
+  ]
+}
