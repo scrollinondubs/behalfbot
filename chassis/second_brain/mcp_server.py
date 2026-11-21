@@ -10,7 +10,7 @@ the fix ratified in the second-brain cutover plan: one chassis-owned server,
 registered under the fixed name `secondbrain` on every install running
 `second_brain.mode: adapter`, resolving its backend at startup via
 `chassis.second_brain.get_adapter()`. The per-backend complexity lives in the
-adapter classes (siyuan.py / notion.py / obsidian.py), not in per-backend MCP
+adapter classes (siyuan.py / notion.py / obsidian.py / joplin.py), not in per-backend MCP
 surfaces.
 
 In adapter mode the native backend MCP server is NOT registered at all - tool
@@ -27,7 +27,7 @@ Tools (mirroring the NotesAdapter protocol in base.py):
     get_deeplink(doc_id) -> url
 
 Doc ids are backend-specific opaque strings (SiYuan block id, Notion page id,
-Obsidian vault-relative path). Callers must treat them as opaque - pass back
+Obsidian vault-relative path, Joplin note id). Callers must treat them as opaque - pass back
 what a tool returned, never construct one.
 
 Runtime
@@ -102,8 +102,9 @@ def create_doc(parent: str, title: str, body: str) -> dict[str, str]:
     """Create a new doc/page under `parent` in the second brain.
 
     `parent` is backend-specific (SiYuan hpath like '/Briefings', Notion parent
-    page id, Obsidian vault-relative directory like 'Briefings/'); empty string
-    means the configured default location. Returns the new doc's id and a
+    page id, Obsidian vault-relative directory like 'Briefings/', Joplin notebook
+    id or notebook title path like 'Projects/Client X'); empty string means the
+    configured default location. Returns the new doc's id and a
     clickable deeplink.
     """
     notes = _notes()

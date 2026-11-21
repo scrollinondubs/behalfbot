@@ -45,6 +45,8 @@ class NotesAdapter(Protocol):
           - SiYuan: hpath like `/Briefings` or block id like `20260507083000-abcd123`
           - Notion: parent page id (32-char uuid)
           - Obsidian: vault-relative directory like `Briefings/`
+          - Joplin: notebook id (32 hex) or title path like `Projects/Client X`;
+            missing notebooks on the path are created
         """
         ...
 
@@ -82,6 +84,7 @@ class NotesAdapter(Protocol):
             The per-install host is never hardcoded - see siyuan.py.
           - Notion: `https://www.notion.so/<workspace>/<page-id-without-hyphens>`
           - Obsidian: `obsidian://open?vault=<vault>&file=<path>`
+          - Joplin: `joplin://x-callback-url/openNote?id=<id>` (desktop app only)
         """
         ...
 
@@ -226,7 +229,7 @@ class SecondBrainAdapter(Protocol):
     backend classes directly from plugin code (couples the plugin to a backend).
     """
 
-    backend: str  # 'siyuan' | 'notion' | 'obsidian'
+    backend: str  # 'siyuan' | 'notion' | 'obsidian' | 'joplin'
     notes: NotesAdapter
     database: DatabaseAdapter
 

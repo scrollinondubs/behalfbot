@@ -17,6 +17,8 @@ asserts which second-brain servers land in the output:
                            headless container install does not run). Obsidian
                            installs are adapter-mode-only.
     (obsidian, adapter) -> secondbrain only
+    (joplin,   direct)  -> joplin only
+    (joplin,   adapter) -> secondbrain only, with the JOPLIN_* env added
 
 Plus the compatibility case that protects existing installs: a config with NO
 mode key renders exactly like mode: direct.
@@ -42,7 +44,7 @@ _spec = importlib.util.spec_from_file_location("hydrate_mcp_json", HYDRATOR_PATH
 hydrator = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(hydrator)
 
-SECOND_BRAIN_SERVERS = {"siyuan", "notion", "secondbrain"}
+SECOND_BRAIN_SERVERS = {"siyuan", "notion", "joplin", "secondbrain"}
 
 
 def _render(backend: str, mode: str | None) -> dict:
@@ -81,6 +83,38 @@ class McpJsonRenderMatrixTest(unittest.TestCase):
         self._assert_second_brain_servers(
             _render("obsidian", "adapter"), {"secondbrain"}
         )
+
+    def test_joplin_direct(self) -> None:
+        with mock.patch.dict("os.environ", {}, clear=True):
+            servers = _render("joplin", "direct")
+        self._assert_second_brain_servers(servers, {"joplin"})
+        entry = servers["joplin"]
+        self.assertEqual(entry["command"], "uvx")
+        self.assertEqual(entry["args"], ["--from", "joplin-mcp==0.10.0", "joplin-mcp-server"])
+        self.assertEqual(set(entry["env"]), {"JOPLIN_HOST", "JOPLIN_PORT"})  # token dropped: unresolved
+
+    def test_joplin_adapter_gets_joplin_env(self) -> None:
+        servers = _render("joplin", "adapter")
+        self._assert_second_brain_servers(servers, {"secondbrain"})
+        env = servers["secondbrain"]["env"]
+        self.assertIn("JOPLIN_HOST", env)
+        self.assertIn("JOPLIN_PORT", env)
+
+    def test_other_backends_get_no_joplin_env(self) -> None:
+        for backend in ("siyuan", "notion", "obsidian"):
+            env = _render(backend, "adapter")["secondbrain"]["env"]
+            self.assertFalse([k for k in env if k.startswith("JOPLIN_")], backend)
+
+    def test_joplin_render_with_full_env(self) -> None:
+        template = hydrator.load_json(str(TEMPLATE_PATH))
+        env = {"JOPLIN_TOKEN": "t", "JOPLIN_HOST": "host.docker.internal", "JOPLIN_PORT": "41184"}
+        for mode, server in (("direct", "joplin"), ("adapter", "secondbrain")):
+            config = {"second_brain": {"backend": "joplin", "mode": mode}}
+            with mock.patch.dict("os.environ", {}, clear=True):
+                hydrated, unresolved = hydrator.hydrate(config, template, env=env)
+            got = hydrated["mcpServers"][server]["env"]
+            self.assertEqual({k: got[k] for k in env}, env)
+            self.assertFalse({"JOPLIN_TOKEN", "JOPLIN_HOST", "JOPLIN_PORT"} & unresolved)
 
     def test_missing_mode_means_direct(self) -> None:
         # Installs that predate the mode key must see zero change.

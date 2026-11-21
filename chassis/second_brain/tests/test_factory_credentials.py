@@ -338,5 +338,94 @@ class NotionCredentialResolutionTest(unittest.TestCase):
                 self.assertIn("NOTION_API_TOKEN", str(ctx.exception))
 
 
+def _shipped_as_joplin(raw: str, joplin_block: str = "", notes_root: str = '"Second Brain"') -> str:
+    """The REAL shipped config, backend flipped to joplin, notes_root filled.
+
+    The shipped notes_root is `TBD_at_install`, which the Joplin branch refuses
+    on purpose, so the happy-path fixture fills it the way an install would.
+    """
+    patched, count = re.subn(
+        r"^(\s*)backend:\s*\w+.*$",
+        lambda m: f"{m.group(1)}backend: joplin" + joplin_block,
+        raw,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    assert count == 1, "expected exactly one second_brain.backend key in chassis.config.yaml"
+    patched, count = re.subn(r"notes_root: TBD_at_install", f"notes_root: {notes_root}", patched, count=1)
+    assert count == 1, "expected the shipped notes_root: TBD_at_install line"
+    return patched
+
+
+class JoplinCredentialResolutionTest(unittest.TestCase):
+    """Joplin gets the guards SiYuan and Notion earned the hard way, from day one."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="sb-factory-joplin-")
+        self.tmp_dir = Path(self._tmp.name)
+        self.addCleanup(self._tmp.cleanup)
+        self.shipped_raw = SHIPPED_CONFIG.read_text(encoding="utf-8")
+        self.config_path = self._write("shipped-joplin.yaml", _shipped_as_joplin(self.shipped_raw))
+
+    def _write(self, name: str, text: str) -> Path:
+        path = self.tmp_dir / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def _build(self, env: dict, path: Path | None = None):
+        with mock.patch.dict("os.environ", env, clear=True):
+            return get_adapter(path or self.config_path)
+
+    def test_env_reaches_the_adapter(self) -> None:
+        adapter = self._build({"JOPLIN_TOKEN": FAKE_TOKEN, "JOPLIN_HOST": "host.docker.internal",
+                               "JOPLIN_PORT": "41190"})
+        self.assertEqual(adapter.backend, "joplin")
+        self.assertEqual(adapter.notes._token, FAKE_TOKEN)
+        self.assertEqual(adapter.notes._base_url, "http://host.docker.internal:41190")
+        self.assertEqual(adapter.notes._root, "Second Brain")
+
+    def test_defaults_to_localhost_41184(self) -> None:
+        adapter = self._build({"JOPLIN_TOKEN": FAKE_TOKEN})
+        self.assertEqual(adapter.notes._base_url, "http://localhost:41184")
+
+    def test_unhydrated_host_and_port_count_as_unset(self) -> None:
+        # The adapter server gets these through .mcp.json, where an unset var
+        # survives as the literal `<JOPLIN_HOST>`. That must not become a URL.
+        adapter = self._build({"JOPLIN_TOKEN": FAKE_TOKEN, "JOPLIN_HOST": "<JOPLIN_HOST>",
+                               "JOPLIN_PORT": "<JOPLIN_PORT>"})
+        self.assertEqual(adapter.notes._base_url, "http://localhost:41184")
+
+    def test_missing_token_raises(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self._build({})
+        self.assertIn("JOPLIN_TOKEN", str(ctx.exception))
+
+    def test_unhydrated_token_raises(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            self._build({"JOPLIN_TOKEN": "<JOPLIN_TOKEN>"})
+        self.assertIn("placeholder", str(ctx.exception))
+
+    def test_tbd_notes_root_is_refused_not_created(self) -> None:
+        path = self._write("tbd.yaml", _shipped_as_joplin(self.shipped_raw, notes_root="TBD_at_install"))
+        with self.assertRaises(ValueError) as ctx:
+            self._build({"JOPLIN_TOKEN": FAKE_TOKEN}, path)
+        self.assertIn("root notebook", str(ctx.exception))
+
+    def test_yaml_block_overrides_env(self) -> None:
+        override = (
+            "\n  joplin:"
+            "\n    base_url: https://joplin.invalid:443"
+            "\n    token: yaml-wins"
+            "\n    notebook: 0123456789abcdef0123456789abcdef"
+            "\n    deeplink_template: https://x.invalid/?id="
+        )
+        path = self._write("override.yaml", _shipped_as_joplin(self.shipped_raw, override))
+        adapter = self._build({"JOPLIN_TOKEN": FAKE_TOKEN, "JOPLIN_HOST": "ignored"}, path)
+        self.assertEqual(adapter.notes._base_url, "https://joplin.invalid:443")
+        self.assertEqual(adapter.notes._token, "yaml-wins")
+        self.assertEqual(adapter.notes._root, "0123456789abcdef0123456789abcdef")
+        self.assertEqual(adapter.notes.get_deeplink("ab" * 16), "https://x.invalid/?id=" + "ab" * 16)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

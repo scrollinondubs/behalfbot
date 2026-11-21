@@ -25,7 +25,7 @@ A fresh install gets a half-written `_MAP` from the second-brain seed (`python3 
 | Drift check | `chassis/scripts/gather-second-brain-map-drift.sh` | Free, daily |
 | Refresh | `chassis/scheduled-tasks/second-brain-map-refresh-prompt.md` | A model run, only when the check finds drift |
 
-All three call `chassis/scripts/second-brain-map.py`, which reads through the second-brain adapter, so they work on SiYuan, Notion and Obsidian.
+All three call `chassis/scripts/second-brain-map.py`, which reads through the second-brain adapter, so they work on SiYuan, Notion, Obsidian and Joplin.
 
 ## Configure
 
@@ -49,8 +49,9 @@ second_brain:
 | SiYuan | an hpath in the configured notebook (`/Projects`), a doc block id, or `notebook:<id>` when each PARA area is its own notebook |
 | Notion | the parent page id |
 | Obsidian | a vault directory (`Projects/`) |
+| Joplin | a notebook title path (`Projects`, `/Projects/Clients`) or notebook id |
 
-Credentials are the ones the adapter already reads (`SIYUAN_URL` / `SIYUAN_TOKEN`, `NOTION_API_TOKEN`, the Obsidian vault path). The hook runs with Claude Code's environment, which usually lacks them, so the script fills any unset var from the install's `.env`. On SiYuan it also retries loopback and the docker host gateway when the configured URL refuses the connection, because `.env` usually holds the container's view of the kernel and the hook runs on the host.
+Credentials are the ones the adapter already reads (`SIYUAN_URL` / `SIYUAN_TOKEN`, `NOTION_API_TOKEN`, the Obsidian vault path, `JOPLIN_TOKEN` / `JOPLIN_HOST` / `JOPLIN_PORT`). The hook runs with Claude Code's environment, which usually lacks them, so the script fills any unset var from the install's `.env`. On SiYuan and Joplin it also retries loopback and the docker host gateway when the configured URL refuses the connection, because `.env` usually holds the container's view of the kernel and the hook runs on the host.
 
 ## Register the hook
 
@@ -93,6 +94,6 @@ Shipped commented out in `HEARTBEATS.md.template` as `second-brain-map-refresh`.
 | `stale_ref_in_map` | The map links a doc that is not first-level under any root (moved, archived or deleted) |
 | `probe_failed` | The check could not run; `detail` says why. A root that cannot be listed suppresses `stale_ref_in_map`, since every link into it would otherwise look stale |
 
-Linking is matched per backend: SiYuan by block id in `((...))` refs, Notion by page id, Obsidian by `[[name]]` or `[[path]]` and markdown links to `.md` files.
+Linking is matched per backend: SiYuan by block id in `((...))` refs, Notion by page id, Obsidian by `[[name]]` or `[[path]]` and markdown links to `.md` files, Joplin by note id in `[Title](:/<id>)` links.
 
 **Known limit:** the adapter MCP (`second_brain.mode: adapter`) has no tool to edit a doc in place, so on an adapter-mode install without the backend's native MCP, the refresh run posts the lines to change instead of making the edit.

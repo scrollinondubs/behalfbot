@@ -31,7 +31,7 @@ Once the file lands, restart Claude Code so it re-reads. The manual hydration wa
 |---|---|---|
 | **Always-on** (no auth) | `memory`, `playwright`, `context7` | Every install. Keep. |
 | **Always-on with config** | `github` | Every install touches GitHub. Provision agent-side PAT. |
-| **Pick one** (second-brain) | `siyuan` OR `notion` OR `secondbrain` | Per `chassis.config.yaml.second_brain.backend` + `second_brain.mode`. Mode `direct` (default): the backend's native server. Mode `adapter`: the chassis-owned `secondbrain` server INSTEAD, and the native server is not registered. Obsidian has no native server - obsidian installs need `mode: adapter` for any second-brain MCP surface. |
+| **Pick one** (second-brain) | `siyuan` OR `notion` OR `joplin` OR `secondbrain` | Per `chassis.config.yaml.second_brain.backend` + `second_brain.mode`. Mode `direct` (default): the backend's native server. Mode `adapter`: the chassis-owned `secondbrain` server INSTEAD, and the native server is not registered. Obsidian has no native server - obsidian installs need `mode: adapter` for any second-brain MCP surface. Joplin's native server (`joplin-mcp`) needs the Joplin Data API running on the host; see `docs/second-brain-adapters.md#joplin`. |
 | **Google** (headless installs) | `gmail`, `google-calendar`, `google-sheets` | Per `chassis.config.yaml.modules.google.*`. All default off. The only path to Google on a box you reach over SSH - Claude's hosted connectors need a browser and never complete remotely. |
 | **Optional, opt-in** | `brave-search`, `tavily`, `turso`, `amplitude`, `n8n`, `loom`, `remarkable`, `oura`, `frame0` | Per `chassis.config.yaml.modules.*` flags. Delete entries you don't activate. |
 

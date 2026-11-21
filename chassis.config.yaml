@@ -124,7 +124,7 @@ surfaces:
     - id: <installer>-private               # Reserved for sensitive workflows (Venice-pattern)
 
 second_brain:
-  backend: notion                           # notion | siyuan | obsidian
+  backend: notion                           # notion | siyuan | obsidian | joplin
   mode: direct                              # direct | adapter
                                             # direct  = register the backend's own MCP server and keep
                                             #           today's behavior (the default, also assumed when
@@ -136,6 +136,12 @@ second_brain:
                                             #           Note: obsidian has no native MCP server today,
                                             #           so obsidian installs only get a second-brain
                                             #           MCP surface in adapter mode.
+                                            #           joplin works in both; prefer adapter
+                                            #           when the Data API comes from the
+                                            #           headless terminal client, whose
+                                            #           search index never builds (the
+                                            #           native server's find_notes then
+                                            #           returns nothing).
   workspace: <installer-notion-workspace>   # Real workspace_id via Vaultwarden
   organization_pattern: para               # Tiago Forte: Projects / Areas / Resources / Archives
   databases:
@@ -157,7 +163,8 @@ second_brain:
     roots: {}                               # label: container, for the drift heartbeat only.
                                             # E.g. projects: "/Projects" (SiYuan hpath),
                                             # "notebook:<id>" (SiYuan notebook per area),
-                                            # a Notion parent page id, or "Projects/" (Obsidian)
+                                            # a Notion parent page id, or "Projects/" (Obsidian),
+                                            # or a notebook title path like "Projects" (Joplin)
 
   # ---------------------------------------------------------------------------
   # Per-backend blocks - OPTIONAL OVERRIDES ONLY. Leave them commented out.
@@ -169,6 +176,9 @@ second_brain:
   #   notion   -> NOTION_API_TOKEN
   #   obsidian -> no credential; vault_path below is required (it is a path,
   #               not a secret)
+  #   joplin   -> JOPLIN_TOKEN, JOPLIN_HOST, JOPLIN_PORT. Root notebook comes
+  #               from databases.notes_root: a notebook id, or a title path
+  #               like "Second Brain" (created on first write)
   #
   # Uncomment a key only to override the default. NEVER put a real token in
   # this file - it is committed. Use a ${VAR} reference if you must name one.
@@ -202,6 +212,14 @@ second_brain:
   #   vault_path: /home/<installer>/second-brain   # REQUIRED for the obsidian backend
   #   vault_name: second-brain                     # For obsidian:// deeplinks; defaults to dir name
   #   read_only: false                             # true for a pull-only vault clone
+
+  # joplin:
+  #   base_url: http://localhost:41184        # Default: http://$JOPLIN_HOST:$JOPLIN_PORT. Needs
+  #                                           # the Joplin Data API: desktop app with the Web
+  #                                           # Clipper service on, or `joplin server start`.
+  #   token: ${JOPLIN_TOKEN}                  # Default: env JOPLIN_TOKEN. Empty = hard error.
+  #   notebook: "Second Brain"                # Default: second_brain.databases.notes_root
+  #   deeplink_template: joplin://x-callback-url/openNote?id=   # Opens Joplin desktop only
 
 modules:
   admin: true                               # Rescheduling, travel, event research, email drafting

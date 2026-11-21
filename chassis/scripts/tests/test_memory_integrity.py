@@ -112,14 +112,17 @@ class SecondBrainRefTest(IntegrityCase):
     def test_shapes_per_backend(self) -> None:
         self.write_doc(
             "Good: siyuan:20240101120000-abc1234, notion:0123456789abcdef0123456789abcdef, "
-            "obsidian:Projects/Plan.md.\n"
-            "Bad: siyuan:/Projects/Plan, notion:Plan, obsidian:/abs/path.md, obsidian:../up.md.\n"
+            "obsidian:Projects/Plan.md, joplin:fedcba9876543210fedcba9876543210.\n"
+            "Bad: siyuan:/Projects/Plan, notion:Plan, obsidian:/abs/path.md, obsidian:../up.md, "
+            "joplin:Priorities.\n"
             "Not refs: siyuan://blocks/x, `siyuan:<id>`.\n"
         )
         d = self.run_json()
         self.assertEqual(self.pointers(d, "bad_second_brain_ref"),
-                         ["siyuan:/Projects/Plan", "notion:Plan", "obsidian:/abs/path.md", "obsidian:../up.md"])
-        self.assertEqual(d["meta"]["second_brain_refs"], {"siyuan": 1, "notion": 1, "obsidian": 1})
+                         ["siyuan:/Projects/Plan", "notion:Plan", "obsidian:/abs/path.md", "obsidian:../up.md",
+                          "joplin:Priorities"])
+        self.assertEqual(d["meta"]["second_brain_refs"],
+                         {"siyuan": 1, "notion": 1, "obsidian": 1, "joplin": 1})
 
     def test_probe_is_off_by_default(self) -> None:
         self.write_doc("siyuan:20240101120000-abc1234\n")
