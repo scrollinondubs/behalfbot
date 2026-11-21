@@ -63,7 +63,7 @@
       "_role": "second-brain backend (direct mode, option C) - notebooks of markdown notes over the Joplin Data API",
       "_enable_when": "chassis.config.yaml.second_brain.backend == 'joplin' && chassis.config.yaml.second_brain.mode != 'adapter'",
       "_install_note": "PyPI joplin-mcp (github.com/alondmnt/joplin-mcp, MIT), pinned. NOT the server in the Joplin forum announcement (jakubfrieb/mcp-joplin): that one is clone-only, and the `joplin-mcp-server` name on npm and PyPI belongs to two other, unrelated authors. `uvx` ships in the chassis image.",
-      "_host_note": "Needs the Joplin Data API running somewhere: Joplin DESKTOP with the Web Clipper service enabled (app must be open, GUI session), or the headless terminal client via `joplin server start` (experimental per Joplin). Both bind 127.0.0.1. From the chassis container set JOPLIN_HOST=host.docker.internal (works on Colima/Docker Desktop for Mac; plain Linux Docker cannot reach a loopback-bound host service).",
+      "_host_note": "Needs the Joplin Data API running somewhere: Joplin DESKTOP with the Web Clipper service enabled (app must be open, GUI session), or the headless terminal client via `joplin server start` (experimental per Joplin). Both bind 127.0.0.1. From the chassis container set JOPLIN_HOST=host.docker.internal (verified on Colima; Docker Desktop and Linux Docker untested, and Linux Docker usually cannot reach a loopback-bound host service).",
       "command": "uvx",
       "args": ["--from", "joplin-mcp==0.10.0", "joplin-mcp-server"],
       "env": {

@@ -21,9 +21,9 @@ Both bind 127.0.0.1 only. Joplin Server and Joplin Cloud (the SYNC targets)
 do not serve this API at all - they are reached by the client, never by us.
 From inside the chassis container the API is on the HOST: set
 JOPLIN_HOST=host.docker.internal. Verified on Colima (macOS), which forwards
-that name to the host loopback. Plain Docker on Linux does NOT forward to a
-loopback-bound service; run the terminal client inside the container or put
-a relay in front of it.
+that name to the host loopback. Docker Desktop and Linux Docker are untested;
+Linux Docker usually cannot reach a loopback-bound host service, so run the
+terminal client inside the container or put a relay in front of it.
 
 Data model mapping
 ==================

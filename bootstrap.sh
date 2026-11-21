@@ -263,6 +263,7 @@ hydrate_env() {
     log "    tokens staged under \$CUSTOMER_HOME/secrets/google/."
     log "    Consent needs a browser: docs/installer-homework.md section 4."
     log "  + per-plugin: NOTION_API_TOKEN (if siyuan/notion=notion),"
+    log "    JOPLIN_TOKEN, JOPLIN_HOST, JOPLIN_PORT (if second_brain.backend=joplin),"
     log "    BRAVE_API_KEY (if research enabled), STRAVA_*, OURA_TOKEN (if BFL),"
     log "    TURSO_* (if turso), etc."
     log ""
@@ -289,6 +290,9 @@ hydrate_env() {
 
 # === PER-PLUGIN (only the ones enabled in chassis.config.yaml) ===
 # NOTION_API_TOKEN=...
+# JOPLIN_TOKEN=...
+# JOPLIN_HOST=host.docker.internal
+# JOPLIN_PORT=41184
 # BRAVE_API_KEY=...
 # STRAVA_ACCESS_TOKEN=...
 # STRAVA_REFRESH_TOKEN=...
