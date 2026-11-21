@@ -10,7 +10,7 @@
   <p class="crm-done" role="status">Imported from {{ imported.label }}: {{ imported.new }} added, {{ imported.enriched }} enriched, {{ imported.unchanged }} unchanged, {{ imported.skipped }} skipped.</p>
   {% endif %}
   <div class="crm-countline">
-    <span class="muted small">{% if contacts %}{{ contacts|length }} contact{{ "" if contacts|length == 1 else "s" }}{% if q %} matching "{{ q }}"{% endif %}{% elif q %}No contacts match "{{ q }}".{% else %}No contacts yet. Add one below or import a file.{% endif %}</span>
+    <span class="muted small">{% if total %}{{ "{:,}".format(total) }} contact{{ "" if total == 1 else "s" }}{% if q %} matching "{{ q }}"{% endif %}{% if pages > 1 %}, showing {{ "{:,}".format(first) }}-{{ "{:,}".format(last) }} of {{ "{:,}".format(total) }}{% endif %}{% elif q %}No contacts match "{{ q }}".{% else %}No contacts yet. Add one below or import a file.{% endif %}</span>
     <details class="crm-import">
       <summary>Import</summary>
       <form method="post" action="{{ prefix }}/import" enctype="multipart/form-data">
@@ -35,6 +35,13 @@
     {% endfor %}
     </tbody>
   </table>
+  {% if pages > 1 %}
+  <nav class="crm-pager" aria-label="Contact pages">
+    {% if prev_url %}<a class="btn subtle" href="{{ prev_url }}" rel="prev">Prev</a>{% endif %}
+    <span class="muted small">Page {{ page }} of {{ pages }}</span>
+    {% if next_url %}<a class="btn subtle" href="{{ next_url }}" rel="next">Next</a>{% endif %}
+  </nav>
+  {% endif %}
   {% endif %}
 </section>
 

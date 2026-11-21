@@ -151,6 +151,59 @@ class Failures(unittest.TestCase):
         self.assertTrue(conn.committed and conn.closed)
 
 
+class RecordingConn(FakeConn):
+    """Keeps every statement and hands back one canned row."""
+
+    def __init__(self, row: dict) -> None:
+        super().__init__()
+        self.row, self.calls = row, []
+
+    def cursor(self):
+        conn = self
+
+        class Cur:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def execute(self, sql, params=()):
+                conn.calls.append((sql, tuple(params)))
+
+            def fetchone(self):
+                return conn.row
+
+            def fetchall(self):
+                return [conn.row]
+        return Cur()
+
+
+class ContactQueries(unittest.TestCase):
+    @staticmethod
+    def where(sql: str) -> str:
+        return sql[sql.index("FROM crm_contacts c"):].split(" ORDER BY")[0]
+
+    def test_count_uses_the_same_filter_as_the_listing(self) -> None:
+        conn = RecordingConn({"n": 2165})
+        store = crm.Store(lambda: conn)
+        self.assertEqual(store.count_contacts(), 2165)
+        store.contacts("ana", limit=500, offset=1000)
+        store.count_contacts("ana")
+        (count_all, _), (listing, lparams), (count_q, cparams) = conn.calls
+        self.assertNotIn("WHERE", count_all)
+        self.assertEqual(self.where(listing), self.where(count_q))
+        self.assertIn("ILIKE", count_q)
+        self.assertEqual(cparams, ("%ana%",) * 5)
+        self.assertEqual(lparams, ("%ana%",) * 5 + (500, 1000))
+        self.assertIn("LIMIT %s OFFSET %s", listing)
+
+    def test_negative_offset_is_clamped(self) -> None:
+        conn = RecordingConn({})
+        crm.Store(lambda: conn).contacts(offset=-5)
+        self.assertEqual(conn.calls[0][1][-1], 0)
+
+
 class MemoryStore(crm.Store):
     """Same interface as crm.Store, held in dicts, for the tab tests."""
 
@@ -160,10 +213,13 @@ class MemoryStore(crm.Store):
         self.m: dict[tuple[int, int], dict] = {}
         self.ids = itertools.count(1)
 
-    def contacts(self, q="", limit=1000):
+    def contacts(self, q="", limit=1000, offset=0):
         out = [{**c, "list_count": sum(1 for (_, cid) in self.m if cid == c["id"])} for c in self.c.values()
                if not q or any(q.lower() in (c.get(f) or "").lower() for f in crm.CONTACT_FIELDS)]
-        return sorted(out, key=lambda c: (c["name"].lower(), c["id"]))[:limit]
+        return sorted(out, key=lambda c: (c["name"].lower(), c["id"]))[offset:offset + limit]
+
+    def count_contacts(self, q=""):
+        return len(self.contacts(q, limit=len(self.c)))
 
     def contact(self, contact_id):
         return self.c.get(contact_id)
@@ -355,6 +411,44 @@ class Tab(TabBase):
         self.assertIsNone(self.store.get_list(lid))
         self.assertIsNotNone(self.store.contact(cid))
         self.assertEqual(self.client.get(f"/crm/lists/{lid}").status_code, 404)
+
+    def test_count_is_the_true_total_and_pages_keep_the_search(self) -> None:
+        from core import crm as tab
+        per = tab.CONTACTS_PER_PAGE
+        for i in range(per * 2 + 3):
+            self.store.add_contact(crm.clean_contact({"name": f"Person {i:04d}", "notes": "vip" if i % 2 else None}))
+        page = self.client.get("/crm").text
+        self.assertIn(f"{per * 2 + 3:,} contacts, showing 1-{per:,} of {per * 2 + 3:,}", page)
+        self.assertIn("Person 0000", page)
+        self.assertNotIn(f"Person {per:04d}", page)
+        self.assertIn('href="/crm?page=2" rel="next"', page)
+        self.assertNotIn('rel="prev"', page)
+
+        page = self.client.get("/crm?page=3").text
+        self.assertIn(f"showing {per * 2 + 1:,}-{per * 2 + 3:,} of {per * 2 + 3:,}", page)
+        self.assertIn(f"Person {per * 2 + 2:04d}", page)
+        self.assertIn('href="/crm?page=2" rel="prev"', page)
+        self.assertNotIn('rel="next"', page)
+        for bad in ("99", "0", "-1", "x"):
+            with self.subTest(page=bad):
+                self.assertIn("Page", self.client.get(f"/crm?page={bad}").text)
+        self.assertIn("Page 3 of 3", self.client.get("/crm?page=99").text)
+        self.assertIn("Page 1 of 3", self.client.get("/crm?page=x").text)
+
+        matches = (per * 2 + 3) // 2
+        page = self.client.get("/crm?q=vip&page=2").text
+        self.assertIn(f'{matches:,} contacts matching "vip", showing {per + 1:,}-{matches:,} of {matches:,}', page)
+        self.assertIn('href="/crm?q=vip" rel="prev"', page)
+        self.assertNotIn('rel="next"', page)
+
+    def test_small_result_shows_the_count_without_a_pager(self) -> None:
+        for name in ("Ana", "Bo"):
+            self.store.add_contact(crm.clean_contact({"name": name}))
+        page = self.client.get("/crm").text
+        self.assertIn("2 contacts<", page.replace("</span>", "<"))
+        self.assertNotIn("showing", page)
+        self.assertNotIn("crm-pager", page.split("</style>")[-1])
+        self.assertIn("1 contact matching", self.client.get("/crm?q=bo").text)
 
     def test_contacts_page_offers_import_even_when_empty(self) -> None:
         page = self.client.get("/crm").text
@@ -618,6 +712,10 @@ class Postgres(TabBase):
         self.assertEqual((m["status"], m["headcount"], m["last_followup_on"]), ("yes", 2, date(2026, 4, 20)))
         self.assertEqual(s.lists()[0]["headcount_yes"], 2)
         self.assertEqual(s.contacts("+1 555")[0]["list_count"], 1)
+        bo = s.add_contact(crm.clean_contact({"name": "Bo", "notes": "met at Picnic"}))
+        self.assertEqual((s.count_contacts(), s.count_contacts("picnic"), s.count_contacts("nobody")), (2, 1, 0))
+        self.assertEqual([c["name"] for c in s.contacts(limit=1, offset=1)], ["Bo"])
+        self.assertTrue(s.delete_contact(bo))
         with self.assertRaises(crm.CrmError):
             s.update_member(lid, cid, {"status": "attending"})
         with self.assertRaises(crm.CrmError):

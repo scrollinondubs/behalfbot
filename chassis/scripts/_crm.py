@@ -183,21 +183,32 @@ class Store:
 
     # contacts
 
-    def contacts(self, q: str = "", limit: int = 1000) -> list[dict]:
-        where, params = "", []
-        if q.strip():
-            needle = f"%{q.strip()}%"
-            where = ("WHERE c.name ILIKE %s OR c.email ILIKE %s OR c.phone ILIKE %s "
-                     "OR c.whatsapp ILIKE %s OR c.notes ILIKE %s")
-            params = [needle] * 5
+    @staticmethod
+    def _contact_filter(q: str) -> tuple[str, list]:
+        if not q.strip():
+            return "", []
+        needle = f"%{q.strip()}%"
+        return ("WHERE c.name ILIKE %s OR c.email ILIKE %s OR c.phone ILIKE %s "
+                "OR c.whatsapp ILIKE %s OR c.notes ILIKE %s"), [needle] * 5
+
+    def contacts(self, q: str = "", limit: int = 1000, offset: int = 0) -> list[dict]:
+        where, params = self._contact_filter(q)
 
         def go(cur):
             cur.execute(
                 "SELECT c.id, c.name, c.email, c.phone, c.whatsapp, c.notes, "
                 "(SELECT count(*) FROM crm_memberships m WHERE m.contact_id = c.id) AS list_count "
-                f"FROM crm_contacts c {where} ORDER BY lower(c.name), c.id LIMIT %s",
-                (*params, limit))
+                f"FROM crm_contacts c {where} ORDER BY lower(c.name), c.id LIMIT %s OFFSET %s",
+                (*params, limit, max(0, offset)))
             return cur.fetchall()
+        return self._run(go)
+
+    def count_contacts(self, q: str = "") -> int:
+        where, params = self._contact_filter(q)
+
+        def go(cur):
+            cur.execute(f"SELECT count(*) AS n FROM crm_contacts c {where}", tuple(params))
+            return int(cur.fetchone()["n"])
         return self._run(go)
 
     def contact(self, contact_id: int) -> dict | None:
