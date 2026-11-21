@@ -35,6 +35,7 @@ $CHASSIS_HOME's copy):
           projects: "/Projects"           #   SiYuan: hpath, doc id, or notebook:<id>
           areas: "/Areas"                 #   Notion: parent page id
           resources: "/Resources"         #   Obsidian: vault directory
+                                          #   Joplin: notebook title path or id
 
 Credentials come from the environment the adapter already reads (SIYUAN_TOKEN,
 NOTION_API_TOKEN, ...). A hook runs with Claude Code's environment, which
@@ -51,6 +52,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 _PACKAGE_PARENT = Path(__file__).resolve().parents[2]
 if str(_PACKAGE_PARENT) not in sys.path:
@@ -78,6 +80,12 @@ BACKEND_HINTS = {
     "obsidian": (
         "Check that the vault at second_brain.obsidian.vault_path exists and is "
         "mounted where this session runs."
+    ),
+    "joplin": (
+        "Check that the Joplin Data API is running (desktop app with the Web "
+        "Clipper service on, or `joplin server start`), that JOPLIN_HOST and "
+        "JOPLIN_PORT point at it from where this session runs, and that "
+        "JOPLIN_TOKEN is set."
     ),
 }
 
@@ -173,17 +181,30 @@ def _is_connection_failure(exc: Exception) -> bool:
     return "request failed" in msg and "HTTP Error" not in msg
 
 
+def _fallback_urls(adapter: Any) -> tuple[str, ...]:
+    if adapter.backend == "siyuan":
+        return SIYUAN_FALLBACK_URLS
+    if adapter.backend == "joplin":
+        # Same two views as SiYuan, on whatever port the install configured:
+        # .env usually holds JOPLIN_HOST=host.docker.internal for the
+        # container, and that name does not resolve on a macOS host.
+        port = urlparse(adapter.notes._base_url).port or 41184
+        return (f"http://127.0.0.1:{port}", f"http://host.docker.internal:{port}")
+    return ()
+
+
 def with_url_fallback(adapter: Any, call: Callable[[], Any]) -> Any:
-    """Run `call`; on a SiYuan connection failure retry against the other URLs."""
+    """Run `call`; on a SiYuan or Joplin connection failure retry the other URLs."""
     try:
         return call()
     except Exception as exc:
-        if adapter.backend != "siyuan" or not _is_connection_failure(exc):
+        fallbacks = _fallback_urls(adapter)
+        if not fallbacks or not _is_connection_failure(exc):
             raise
         notes = adapter.notes
         tried = [notes._base_url]
         last = exc
-        for url in SIYUAN_FALLBACK_URLS:
+        for url in fallbacks:
             if url in tried:
                 continue
             tried.append(url)
@@ -194,7 +215,7 @@ def with_url_fallback(adapter: Any, call: Callable[[], Any]) -> Any:
                 if not _is_connection_failure(retry_exc):
                     raise
                 last = retry_exc
-        raise RuntimeError(f"SiYuan unreachable at {', '.join(tried)} ({last})") from exc
+        raise RuntimeError(f"{adapter.backend} unreachable at {', '.join(tried)} ({last})") from exc
 
 
 def read_map(adapter: Any, doc_id: str) -> str:
@@ -283,6 +304,9 @@ def linked_ids(backend: str, text: str) -> set[str]:
         for target in re.findall(r"\]\(([^)\s]+\.md)\)", text):
             out.add(target)
         return out
+    if backend == "joplin":
+        # Joplin's own note link, as the app inserts it: [title](:/<id>).
+        return set(re.findall(r"\]\(:/([0-9a-f]{32})(?:#[^)]*)?\)", text))
     return set()
 
 

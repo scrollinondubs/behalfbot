@@ -2,7 +2,7 @@
 
 Provides a backend-agnostic interface for chassis scripts that need to read or
 write durable notes/structured rows. Pick the backend in `chassis.config.yaml`
-under `second_brain.backend` (one of: `siyuan`, `notion`, `obsidian`).
+under `second_brain.backend` (one of: `siyuan`, `notion`, `obsidian`, `joplin`).
 
 Typical use:
 

@@ -10,7 +10,7 @@ This replaces the old `WRITING_RULES.md` (scrollinondubs/behalfbot#219). The tax
 
 | Layer | Home | Holds |
 |---|---|---|
-| Long-term facts | The second brain, through the adapter (SiYuan, Obsidian or Notion; `docs/second-brain-adapters.md`) | The installer's world: people, projects, decisions, plans, priorities |
+| Long-term facts | The second brain, through the adapter (SiYuan, Obsidian, Notion or Joplin; `docs/second-brain-adapters.md`) | The installer's world: people, projects, decisions, plans, priorities |
 | Infrastructure facts | `docs/` in the install repo | How this install is built and run: hosts, mounts, quirks |
 | Procedures | `skills/` in the install repo | How to do a recurring task |
 | Constitution | `CLAUDE.md` | Identity, hard limits, where to look. Kept small |
@@ -92,7 +92,7 @@ These exclusions hold even when the installer explicitly asks to save. If they a
 A pointer only works if it survives the thing it points at being renamed or moved, so pointers have a fixed shape.
 
 **Second brain: `<backend>:<doc id>`, never a title or a path of names.**
-- `siyuan:20240101120000-abc1234` (block id), `notion:0123456789abcdef0123456789abcdef` (page id), `obsidian:Projects/Plan.md` (vault-relative path).
+- `siyuan:20240101120000-abc1234` (block id), `notion:0123456789abcdef0123456789abcdef` (page id), `obsidian:Projects/Plan.md` (vault-relative path), `joplin:0123456789abcdef0123456789abcdef` (note id).
 - The id is what `mcp__secondbrain__create_doc` returns and what `read_doc` accepts. Treat it as opaque.
 - Never "the Priorities doc" or `/Projects/Plan`. Titles and hpaths change; ids do not (Obsidian's id is its path, so a rename there is a real move, and the checker will see the dead ref).
 - The backend prefix tells a reader which store resolves it, and lets an install that switches backend find every stale pointer with one grep.
@@ -154,7 +154,7 @@ The reference install learned this when a session concluded a component had neve
 - the project or area doc it belongs to, and
 - every person, company, place or concept doc it names.
 
-Use the backend's own link form (`((<block id> 'Title'))` on SiYuan, `[[Note]]` on Obsidian, a page mention on Notion), so the link resolves and backlinks work. If a named doc does not exist, create it in the same session with real content, read its id back from the backend, then link it. Never invent an id: a dead link looks exactly like a live one. Before reporting the write as done, check the links landed (on SiYuan, `SELECT count(*) FROM refs WHERE root_id = '<doc id>'`; 0 means the write is unlinked).
+Use the backend's own link form (`((<block id> 'Title'))` on SiYuan, `[[Note]]` on Obsidian, a page mention on Notion, `[Title](:/<note id>)` on Joplin), so the link resolves and backlinks work. If a named doc does not exist, create it in the same session with real content, read its id back from the backend, then link it. Never invent an id: a dead link looks exactly like a live one. Before reporting the write as done, check the links landed (on SiYuan, `SELECT count(*) FROM refs WHERE root_id = '<doc id>'`; 0 means the write is unlinked).
 
 Why: keyword search misses nicknames and synonyms, which is how the search failure above happened; a link is exact, and backlinks for any doc are one query away. On the reference install fewer than one doc in five linked to anything before this rule, because installers do not hand-link and nothing else did. Do not link for density: a few links in the right places beat many, because a session follows them one hop at a time.
 

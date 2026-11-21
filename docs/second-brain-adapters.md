@@ -13,7 +13,7 @@ A second brain has both prose and structured semantics. We split them into two c
 | `notes` | Briefings, content stubs, daily logs, Pacman proposals, free-form prose | Page/block APIs |
 | `database` | LP CRM rows, deal pipelines, contacts, tasks, scheduling | Database / property APIs |
 
-Notion implements both natively. SiYuan and Obsidian implement `notes` natively and raise `NotImplementedError` on `database`. Faking `database` via structured frontmatter index files in Obsidian is a possible follow-up.
+Notion implements both natively. SiYuan, Obsidian and Joplin implement `notes` natively and raise `NotImplementedError` on `database`. Faking `database` via structured frontmatter index files in Obsidian is a possible follow-up.
 
 ## V1 backends
 
@@ -22,6 +22,7 @@ Notion implements both natively. SiYuan and Obsidian implement `notes` natively 
 | `siyuan` | ✅ V1 (notes only; `database` raises `NotImplementedError`) | Sean's primary; HTTP kernel API + SQL search |
 | `notion` | ✅ V1 (both surfaces) | V1 installer #1 primary; Notion REST API |
 | `obsidian` | ✅ V1 (notes only; `database` raises `NotImplementedError`) | Direct file IO on the vault directory; read-only vaults first-class ([#55](https://github.com/scrollinondubs/behalfbot/issues/55)) |
+| `joplin` | ✅ (notes only; `database` raises `NotImplementedError`) | Joplin Data API (port 41184), served by Joplin desktop or the headless terminal client. See [Joplin](#joplin) |
 
 ## Configuration
 
@@ -40,6 +41,9 @@ Pick the backend in `chassis.config.yaml`.
 | notion | `NOTION_API_TOKEN` | `second_brain.notion.token` | none - **empty token raises `ValueError` at startup** |
 | notion | - | `second_brain.notion.notes_root` | `second_brain.databases.notes_root`; empty raises `ValueError` |
 | obsidian | - (no credential) | `second_brain.obsidian.vault_path` | none - required |
+| joplin | `JOPLIN_TOKEN` | `second_brain.joplin.token` | none - **empty token raises `ValueError` at startup** |
+| joplin | `JOPLIN_HOST` + `JOPLIN_PORT` | `second_brain.joplin.base_url` | `http://localhost:41184`; an unhydrated `<JOPLIN_HOST>` counts as unset |
+| joplin | - | `second_brain.joplin.notebook` | `second_brain.databases.notes_root` (notebook id or title path); empty or `TBD_at_install` raises `ValueError` |
 
 Resolution is: **YAML key if set, else env var, else the documented default.** A YAML value of `${SIYUAN_TOKEN}` that expands to nothing counts as unset and falls through rather than shadowing the env var.
 
@@ -134,6 +138,39 @@ Custom plugin date formats (anything other than `YYYY-MM-DD`) are not supported 
 
 `${VAR}` references resolve against `os.environ` at import time; chassis bootstrap loads `.env` before any plugin imports the adapter.
 
+### Joplin
+
+```yaml
+second_brain:
+  backend: joplin
+  mode: adapter                     # see "Which mode" below
+  databases:
+    notes_root: "Second Brain"      # root notebook: id, or title path created on first write
+```
+
+`.env` carries `JOPLIN_TOKEN`, `JOPLIN_HOST` and `JOPLIN_PORT`, the names the native `joplin-mcp` server reads, so both modes share one source.
+
+**Where the API comes from.** Joplin has no cloud API. The adapter talks to the Joplin Data API, which is served on the install host by one of:
+
+- **Joplin desktop** with Tools > Options > Web Clipper > "Enable Web Clipper Service" on. The token is on the same screen under "Advanced options". The app must stay open, which on a Mac means a logged-in GUI session.
+- **The Joplin terminal client** (npm `joplin`), headless: `joplin --profile ~/.joplin-api server start`, token from `joplin --profile ~/.joplin-api config api.token`. Joplin calls this "an experimental feature" and wants a profile no other client opens at the same time. Point that profile's sync target at the installer's Joplin Server / Joplin Cloud / Dropbox and it becomes a headless replica of their notes.
+
+Joplin Server and Joplin Cloud are sync targets only. They do not serve the Data API, so the chassis cannot use them directly.
+
+Both servers bind `127.0.0.1`. From inside the chassis container set `JOPLIN_HOST=host.docker.internal`. Verified on Colima (macOS), which forwards that name to the host loopback. Plain Docker on Linux does not reach a loopback-only host port; run the terminal client inside the container or put a relay in front of it. The SessionStart map hook runs on the host, so `second-brain-map.py` retries `127.0.0.1` and `host.docker.internal` on the configured port, the same fallback SiYuan gets.
+
+**Data model.** A note is a doc; its id is 32 lowercase hex chars. A notebook is a container, not a doc: notes cannot hold notes. PARA maps onto notebooks (`Projects`, `Areas`, `Resources`, `Archive`). `parent` in `create_doc` / `list_children` is a notebook id or a `/`-separated title path from the top of the notebook tree (`Projects/Client X`), and `""` is the root notebook. `create_doc` creates missing notebooks on the path and refuses a duplicate note title in the target notebook. Two sibling notebooks with the same title make a path ambiguous, and the adapter refuses rather than guessing. Tags have no slot in the `NotesAdapter` contract and are left alone.
+
+**Search is client-side.** Joplin's `/search` endpoint reads a full-text index the desktop app builds asynchronously, so a note written a moment ago is not findable yet. Under the terminal client's `server start` the index never got built at all: a title that existed returned zero hits for two minutes. The seeder's idempotency check searches for a sentinel it may have just written, so `search` scans notes over the API instead, as a case-insensitive substring match on title and body ranked like Obsidian's (title 2, body 1, newest first within a score). Every call reads all notes, capped at 20000, which is fine over loopback for a personal notebook.
+
+**Links.** `link_blocks(from, to)` appends Joplin's own note link `[title](:/<id>)`, the form the app inserts. The map drift check matches on the same form. There are no block-level ids, so links point at notes.
+
+**Deeplinks** are `joplin://x-callback-url/openNote?id=<id>`. They open Joplin desktop and do nothing on a phone. Override with `second_brain.joplin.deeplink_template`.
+
+**Token in the URL.** The Data API only accepts the token as a `token=` query parameter. Adapter and smoke-check error messages are built from the request path, never the URL, and any echo of the token in a response body is scrubbed.
+
+**Which mode.** Direct mode registers `joplin-mcp` (PyPI, `alondmnt/joplin-mcp`, pinned to 0.10.0, run through `uvx`): 19 tools by default including tags, with deletes off. Its `find_notes` goes through Joplin's own search, so on the headless terminal client it returns nothing. Use adapter mode there. On desktop, direct mode works, with the index-lag caveat. This is not the server in the Joplin forum announcement (`jakubfrieb/mcp-joplin`), which is install-from-clone only, and the `joplin-mcp-server` name on npm and PyPI belongs to two other, unrelated authors.
+
 ## Usage
 
 ```python
@@ -188,6 +225,7 @@ All three backends implement `list_recent(since, until, min_content_len, limit)`
 | SiYuan | `blocks.updated` (kernel-local clock) | second | `SUM(LENGTH(content))` over the doc's child blocks via correlated subquery - the doc row's own `content` column holds only the TITLE (verified against a live kernel: max 81 chars over 283 docs), so it cannot be used for length filtering | cleanest of the three; block timestamps reflect actual edits |
 | Obsidian | filesystem mtime of `*.md` | filesystem-dependent | file size in bytes (frontmatter and markdown syntax count toward it; multi-byte characters count per byte) | NOISIEST: a git pull, iCloud resync, or any sync tool that rewrites files produces false "activity". Treat hits as candidates, not facts |
 | Notion | `last_edited_time` via `/search`, descending scan with client-side windowing (the endpoint has no timestamp filter) | MINUTE - Notion truncates seconds, so edits at a window boundary can fall on either side | reconstructed-markdown length of the first 100 blocks; costs one extra API call per candidate page, so leave at 0 unless needed | only pages shared with the integration are visible; scan is capped at 500 pages per call |
+| Joplin | `user_updated_time` via `GET /notes` sorted newest first, stopping once past the window | millisecond | markdown body length in characters (title excluded) | `user_updated_time` is the edit time Joplin shows and does not move on sync, unlike `updated_time`. Trashed notes are excluded. `raw` carries `hpath` as `/Notebook/Sub/Title` |
 
 ### SiYuan's SQL index is eventually consistent
 
@@ -237,6 +275,7 @@ Empty and missing are kept distinct on every backend: a parent that exists and h
 |---|---|---|---|
 | SiYuan | one SQL query over `blocks` where `type='d'`, `hpath LIKE '<parent>/%'` and `NOT LIKE '<parent>/%/%'` | hpath (`/1 Projects`), doc block id, or `""`/`"/"` for the notebook root | Scoped to ONE notebook (`box`), unlike `search`/`list_recent`, which are whole-brain - hpath is only unique within a notebook, and the notebook chosen is the one the parent itself lives in. The prefix is re-checked in Python because sqlite's LIKE is ASCII case-insensitive and `_`/`%` in the parent path are live wildcards that SiYuan will not let us escape (a doc named `_MAP` is the motivating case). SQL scan capped at 2000 rows. Subject to the same eventually-consistent index lag documented above |
 | Obsidian | `iterdir()` on one directory, `*.md` only | vault-relative directory (`1 Projects`, `1 Projects/`), `""` for the vault root | Subdirectories are NOT returned - a folder has no id that `read_doc` or `get_deeplink` would accept, so a recursive walk drives itself from its own directory listing on this backend. Non-note files (PDFs, `.canvas`) are skipped. A `read_only: true` vault lists normally; this is a read |
+| Joplin | paginated `GET /folders/{id}/notes` | notebook id, title path (`Projects`, `/Projects/Client X`), or `""` for the root notebook | Sub-notebooks are NOT returned, for the same reason Obsidian skips folders: a notebook has no id `read_doc` accepts. Trashed notes are excluded |
 | Notion | paginated `GET /blocks/{id}/children`, keeping `child_page` blocks | page id, or `""` for the configured `notes_root` | `child_database` children are skipped - a database belongs to the `DatabaseAdapter` surface and `read_doc` cannot render one. Notion's document order is DISCARDED in favour of title order; the source block is preserved under `raw`. A 404 is ambiguous: Notion returns it both for "no such page" and for "page not shared with the integration". Pagination capped at 1000 blocks, and all children are fetched before sorting |
 
 ## `second_brain.mode` and the `secondbrain` MCP server
@@ -245,7 +284,7 @@ Empty and missing are kept distinct on every backend: a parent that exists and h
 
 ```yaml
 second_brain:
-  backend: siyuan     # siyuan | notion | obsidian
+  backend: siyuan     # siyuan | notion | obsidian | joplin
   mode: direct        # direct | adapter (direct is the default, and what a missing key means)
 ```
 
@@ -260,6 +299,7 @@ Backend support per mode:
 |---|---|---|
 | siyuan | `siyuan` MCP server (`siyuan-mcp@1.0.4`) | `secondbrain` |
 | notion | `notion` MCP server (`@suekou/mcp-notion-server`) | `secondbrain` |
+| joplin | `joplin` MCP server (`joplin-mcp==0.10.0` via `uvx`); its `find_notes` returns nothing on the headless terminal client | `secondbrain` |
 | obsidian | NO second-brain MCP surface - no suitable native server exists (community options require the Obsidian desktop app + Local REST API plugin, which headless container installs do not run) | `secondbrain` |
 
 Obsidian installs are therefore adapter-mode-only if they want a second-brain MCP surface at all.
@@ -291,4 +331,4 @@ Obsidian landed in V1 via [#55](https://github.com/scrollinondubs/behalfbot/issu
 2. Obsidian `database` surface faked via structured frontmatter index files, if an installer needs it.
 3. Obsidian Local REST API plugin integration (live-app features like block-level linking), if direct file IO proves insufficient.
 
-Until then, the adapters above cover the V1 installer set (SiYuan / Notion / Obsidian).
+Until then, the adapters above cover the installer set (SiYuan / Notion / Obsidian / Joplin).

@@ -39,6 +39,11 @@ Per-backend semantics
              token answers "Auth failed [session]" on every real call, and
              that is precisely the failure a smoke test exists to catch.
   notion   - GET /v1/users/me, unchanged from the inline check.
+  joplin   - GET /ping (must answer `JoplinClipperServer`), then an
+             authenticated GET /folders. The ping alone proves something is
+             listening; only the second call proves the token works, and a
+             wrong token is the likeliest install mistake after "the desktop
+             app is not running".
 
 Missing/unknown backend or missing config is SKIP, not FAIL: a chassis install
 is allowed to run without a second brain.
@@ -50,6 +55,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -169,10 +175,50 @@ def check_notion(backend_config: dict[str, Any]) -> tuple[str, str]:
     return "PASS", f"Notion API reached, bot id {bot_id}"
 
 
+def check_joplin(backend_config: dict[str, Any]) -> tuple[str, str]:
+    def env(name: str) -> str:
+        value = os.environ.get(name, "").strip()
+        # A `<NAME>` the hydrator could not fill is unset, not a hostname.
+        return "" if value.startswith("<") and value.endswith(">") else value
+
+    host, port = env("JOPLIN_HOST"), env("JOPLIN_PORT")
+    base_url = (
+        str(backend_config.get("base_url") or "").strip()
+        or f"http://{host or 'localhost'}:{port or '41184'}"
+    ).rstrip("/")
+    token = str(backend_config.get("token") or "").strip() or env("JOPLIN_TOKEN")
+    if not token:
+        return "SKIP", "JOPLIN_TOKEN not set"
+    try:
+        with urllib.request.urlopen(base_url + "/ping", timeout=HTTP_TIMEOUT) as resp:
+            pong = resp.read().decode("utf-8", errors="replace").strip()
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as e:
+        return "FAIL", (
+            f"Joplin Data API unreachable at {base_url} ({type(e).__name__}). Is Joplin "
+            f"desktop running with the Web Clipper service on, or `joplin server start`?"
+        )
+    if pong != "JoplinClipperServer":
+        return "FAIL", f"{base_url}/ping did not answer like Joplin (got {pong[:60]!r})"
+    # The token is a query parameter, so the URL is never put in a message.
+    query = urllib.parse.urlencode({"token": token, "fields": "id", "limit": 1})
+    try:
+        with urllib.request.urlopen(f"{base_url}/folders?{query}", timeout=HTTP_TIMEOUT) as resp:
+            json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        hint = " - JOPLIN_TOKEN is wrong" if e.code == 403 else ""
+        return "FAIL", f"Joplin Data API rejected the token: HTTP {e.code}{hint}"
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        return "FAIL", f"Joplin Data API call failed ({type(e).__name__})"
+    except json.JSONDecodeError:
+        return "FAIL", f"Joplin Data API at {base_url} returned non-JSON"
+    return "PASS", f"Joplin Data API reached at {base_url}, token accepted"
+
+
 CHECKS = {
     "obsidian": check_obsidian,
     "siyuan": check_siyuan,
     "notion": check_notion,
+    "joplin": check_joplin,
 }
 
 

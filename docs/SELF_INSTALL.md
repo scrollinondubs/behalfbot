@@ -12,7 +12,7 @@ Before you start:
 
 - **Linux or macOS host** with Docker + Compose plugin installed
 - **Claude Code CLI** installed and logged in (`claude --version` should print a version)
-- **A second-brain backend account** (Notion, SiYuan, or Obsidian) - you'll point chassis at it later
+- **A second-brain backend account** (Notion, SiYuan, Obsidian, or Joplin) - you'll point chassis at it later
 - **Discord, Telegram, or Slack workspace** where the chassis can talk to you
 - **A bot identity** distinct from your personal accounts:
   - GitHub user (for the agent's commits, separate from yours)

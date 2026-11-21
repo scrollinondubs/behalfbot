@@ -14,6 +14,7 @@ Chassis-supplied template. Customer install copies this file to
       NOT a name-based hpath - see the double-parent incident below.
     - Notion: the parent page id (32-char uuid).
     - Obsidian: a vault-relative directory (`Daily Logs/`).
+    - Joplin: a notebook id or title path (`Daily Logs`).
   This replaces the old `{{ CUSTOMER_DAILY_LOG_PARENT_ID }}` +
   `{{ CUSTOMER_DAILY_LOG_NOTEBOOK_ID }}` pair (2026-07-19). Two vars existed
   because SiYuan needs a notebook AND a parent; the adapter's `create_doc`
@@ -29,7 +30,7 @@ that payload, synthesizes it into a structured log, and writes it to the
 install's second brain.
 
 Backend-neutral by construction: every tool call below is `mcp__secondbrain__*`,
-the chassis-owned server that resolves SiYuan / Notion / Obsidian at startup.
+the chassis-owned server that resolves SiYuan / Notion / Obsidian / Joplin at startup.
 Do NOT reach for `mcp__siyuan__*` here even on a SiYuan install - in adapter
 mode it is not registered, and naming it is what made this prompt SiYuan-only.
 
@@ -64,7 +65,7 @@ as the "context" for this prompt. It has this shape:
     { "to": "...", "subject": "...", "excerpt": "...", "date": "..." }
   ],
   "gmail_scan_deferred": true|false,
-  "second_brain_backend": "siyuan|notion|obsidian",
+  "second_brain_backend": "siyuan|notion|obsidian|joplin",
   "second_brain_activity": [
     { "id": "...", "hpath": "/...", "title": "...", "len": N,
       "updated_at": "...", "excerpt": "...", "deeplink": "..." }

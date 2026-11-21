@@ -165,7 +165,7 @@ def get_mode(config_path: Path | None = None) -> str:
 def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
     """Return the adapter configured in chassis.config.yaml.
 
-    Reads `second_brain.backend` and the matching backend block (siyuan / notion / obsidian).
+    Reads `second_brain.backend` and the matching backend block (siyuan / notion / obsidian / joplin).
     Resolves `${VAR}` env-var references against the chassis .env (assumed loaded
     by the caller — chassis bootstrap does this in its launchd-equivalent unit).
     """
@@ -175,7 +175,7 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
     if not backend:
         raise ValueError(
             "chassis.config.yaml is missing second_brain.backend. "
-            "Set it to one of: siyuan, notion, obsidian."
+            "Set it to one of: siyuan, notion, obsidian, joplin."
         )
     backend_config = sb_config.get(backend) or {}
     if backend == "siyuan":
@@ -298,7 +298,61 @@ def get_adapter(config_path: Path | None = None) -> SecondBrainAdapter:
             frontmatter_tags=backend_config.get("frontmatter_tags"),
             daily_notes_dir=_first_set(backend_config.get("daily_notes_dir")),
         )
+    if backend == "joplin":
+        from chassis.second_brain.joplin import (
+            DEFAULT_BASE_URL,
+            DEFAULT_DEEPLINK_TEMPLATE,
+            JoplinAdapter,
+        )
+
+        # ONE source for both modes: JOPLIN_TOKEN / JOPLIN_HOST / JOPLIN_PORT
+        # are the names the native joplin-mcp server reads, so direct mode and
+        # adapter mode share them. A `<NAME>` the hydrator could not fill counts
+        # as unset here, so it falls back to the default instead of becoming a
+        # hostname.
+        def _env(name: str) -> str:
+            value = os.environ.get(name, "")
+            return "" if _is_unhydrated_placeholder(value) else value
+
+        databases = sb_config.get("databases") or {}
+        host = _first_set(_env("JOPLIN_HOST"))
+        port = _first_set(_env("JOPLIN_PORT"))
+        base_url = _first_set(
+            backend_config.get("base_url"),
+            f"http://{host or 'localhost'}:{port or '41184'}" if (host or port) else "",
+            DEFAULT_BASE_URL,
+        )
+        token = _first_set(backend_config.get("token"), os.environ.get("JOPLIN_TOKEN"))
+        root = _first_set(backend_config.get("notebook"), databases.get("notes_root"))
+        if token and _is_unhydrated_placeholder(token):
+            raise ValueError(
+                f"Joplin adapter token is the unhydrated placeholder {token!r}, not a "
+                "credential. Set JOPLIN_TOKEN in the chassis .env and re-run "
+                "hydrate-mcp-json.py."
+            )
+        if not token:
+            raise ValueError(
+                "Joplin adapter has no API token. Set JOPLIN_TOKEN in the chassis .env "
+                "(desktop: Tools > Options > Web Clipper > Advanced options; terminal "
+                "client: `joplin config api.token`), or second_brain.joplin.token in "
+                "chassis.config.yaml to override it. The Data API answers 403 without it."
+            )
+        if not root or root.strip().upper().startswith("TBD"):
+            raise ValueError(
+                "Joplin adapter has no root notebook. Set second_brain.databases.notes_root "
+                "in chassis.config.yaml to a notebook title path (e.g. \"Second Brain\", "
+                "created on first write) or a notebook id, or second_brain.joplin.notebook "
+                f"to override it. Got {root!r}."
+            )
+        return JoplinAdapter(
+            base_url=base_url,
+            token=token,
+            root_notebook=root,
+            deeplink_template=_first_set(
+                backend_config.get("deeplink_template"), DEFAULT_DEEPLINK_TEMPLATE
+            ),
+        )
     raise ValueError(
         f"Unsupported second_brain.backend={backend!r}. "
-        f"Supported backends: siyuan, notion, obsidian."
+        f"Supported backends: siyuan, notion, obsidian, joplin."
     )

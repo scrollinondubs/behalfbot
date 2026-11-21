@@ -189,6 +189,66 @@ class NotionCheckTest(unittest.TestCase):
         self.assertEqual(status, "FAIL")
 
 
+class JoplinCheckTest(unittest.TestCase):
+    def _responses(self, *bodies):
+        out = []
+        for body in bodies:
+            if isinstance(body, Exception):
+                out.append(body)
+                continue
+            resp = mock.MagicMock()
+            resp.read.return_value = body
+            ctx = mock.MagicMock()
+            ctx.__enter__.return_value = resp
+            out.append(ctx)
+        return out
+
+    def test_no_token_skips(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            status, msg = checker.check_joplin({})
+        self.assertEqual(status, "SKIP")
+        self.assertIn("JOPLIN_TOKEN not set", msg)
+
+    def test_ping_and_token_pass(self) -> None:
+        with mock.patch.dict(os.environ, {"JOPLIN_TOKEN": "s3cr3t-x", "JOPLIN_HOST": "h", "JOPLIN_PORT": "41190"}, clear=True), \
+             mock.patch.object(checker.urllib.request, "urlopen",
+                               side_effect=self._responses(b"JoplinClipperServer", b'{"items":[]}')) as urlopen:
+            status, msg = checker.check_joplin({})
+        self.assertEqual(status, "PASS")
+        self.assertIn("http://h:41190", msg)
+        self.assertNotIn("s3cr3t-x", msg)
+        self.assertIn("token=s3cr3t-x", urlopen.call_args_list[1][0][0])
+
+    def test_something_else_on_the_port_fails(self) -> None:
+        with mock.patch.dict(os.environ, {"JOPLIN_TOKEN": "tok"}, clear=True), \
+             mock.patch.object(checker.urllib.request, "urlopen",
+                               side_effect=self._responses(b"<html>nginx</html>")):
+            status, msg = checker.check_joplin({})
+        self.assertEqual(status, "FAIL")
+        self.assertIn("did not answer like Joplin", msg)
+
+    def test_wrong_token_fails_and_is_not_echoed(self) -> None:
+        import io
+        import urllib.error
+        err = urllib.error.HTTPError("http://localhost:41184/folders?token=secret-tok", 403,
+                                     "Forbidden", {}, io.BytesIO(b"{}"))
+        with mock.patch.dict(os.environ, {"JOPLIN_TOKEN": "secret-tok"}, clear=True), \
+             mock.patch.object(checker.urllib.request, "urlopen",
+                               side_effect=self._responses(b"JoplinClipperServer", err)):
+            status, msg = checker.check_joplin({})
+        self.assertEqual(status, "FAIL")
+        self.assertIn("JOPLIN_TOKEN is wrong", msg)
+        self.assertNotIn("secret-tok", msg)
+
+    def test_unreachable_fails_with_the_fix(self) -> None:
+        with mock.patch.dict(os.environ, {"JOPLIN_TOKEN": "tok", "JOPLIN_HOST": "<JOPLIN_HOST>"}, clear=True), \
+             mock.patch.object(checker.urllib.request, "urlopen", side_effect=OSError("refused")):
+            status, msg = checker.check_joplin({})
+        self.assertEqual(status, "FAIL")
+        self.assertIn("http://localhost:41184", msg)  # placeholder host counted as unset
+        self.assertIn("server start", msg)
+
+
 class DispatchTest(unittest.TestCase):
     def _run_main(self, sb_config: dict) -> tuple[str, str]:
         with mock.patch.object(checker, "load_second_brain_config", return_value=sb_config), \

@@ -626,7 +626,7 @@ seed_second_brain_content() {
     # new-jaxity#257. Writes a small PARA + Priorities + Mental Models +
     # Introspection-template starter set through the second-brain adapter
     # interface (chassis/second_brain/base.py), so it works unmodified
-    # whichever of siyuan/notion/obsidian this install configured. Idempotent
+    # whichever of siyuan/notion/obsidian/joplin this install configured. Idempotent
     # by construction (chassis/second_brain/seed.py) - safe to re-run on a
     # re-install, a no-op if the sentinel doc from a prior run is still there.
     #

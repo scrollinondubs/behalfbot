@@ -61,7 +61,7 @@ Default MCP set (chassis core):
 - `memory` (knowledge graph — `@modelcontextprotocol/server-memory`)
 - `github` (issue queue + PR ops)
 - `discord` (channel intake + reply)
-- Whatever the second-brain backend is (notion / siyuan / obsidian)
+- Whatever the second-brain backend is (notion / siyuan / obsidian / joplin)
 
 Plugin-added MCPs:
 - BFL plugin: nothing chassis-side; the script set is direct

@@ -14,7 +14,7 @@ What it checks, all from text alone:
   - bare #N GitHub refs with no owner/repo
   - notes-store links ([Title](file.md), [[note]]) that do not resolve
   - orphan notes no MEMORY.md or index-*.md line reaches
-  - second-brain refs (siyuan:, notion:, obsidian:) whose id is badly formed
+  - second-brain refs (siyuan:, notion:, obsidian:, joplin:) whose id is badly formed
 
 Whether a well-formed second-brain id still resolves is a question only the
 backend can answer, so it is the adapter's job, not this script's:
@@ -56,7 +56,7 @@ SHORT_ISSUE = re.compile(r"(?<![\w/.-])([A-Za-z][A-Za-z0-9_.-]*[A-Za-z0-9])#(\d+
 NOT_A_REPO = {"pr", "pull", "issue", "issues", "gh"}
 MD_LINK = re.compile(r"\[[^\]]*\]\(([^)\s#]+\.md)(?:#[^)]*)?\)")
 WIKI_LINK = re.compile(r"\[\[([A-Za-z0-9_.-]+)\]\]")
-SB_REF = re.compile(r"(?<![\w/-])(siyuan|notion|obsidian):(?!//)([^\s`'\")\]>]+)")
+SB_REF = re.compile(r"(?<![\w/-])(siyuan|notion|obsidian|joplin):(?!//)([^\s`'\")\]>]+)")
 PLACEHOLDER = re.compile(r"[*<>{}]|YYYY|MM-DD|XXX|\.\.\.")
 FENCE = re.compile(r"^\s*(```|~~~)")
 
@@ -64,11 +64,13 @@ FENCE = re.compile(r"^\s*(```|~~~)")
 SB_SHAPES = {
     "siyuan": re.compile(r"^\d{14}-[a-z0-9]{7}$"),
     "notion": re.compile(r"^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"),
+    "joplin": re.compile(r"^[0-9a-f]{32}$"),
 }
 SB_HINT = {
     "siyuan": "expected a block id like 20240101120000-abc1234, never an hpath or a title",
     "notion": "expected a 32-hex page id, dashes optional",
     "obsidian": "expected a vault-relative path, no leading / and no ..",
+    "joplin": "expected a 32-hex note id, no dashes, never a notebook title",
 }
 
 

@@ -24,7 +24,7 @@ Each element is one drifted doc:
 4. Apply the `stale_ref_in_map` removals.
 5. Update the generated-on date in the footer, if the map has one.
 
-Each entry links the doc in the backend's own link form, so the link resolves and the drift check can see it: `((<block id> 'Title'))` on SiYuan, `[[Note name]]` on Obsidian, a page mention on Notion. Never write an id you did not read back from the backend.
+Each entry links the doc in the backend's own link form, so the link resolves and the drift check can see it: `((<block id> 'Title'))` on SiYuan, `[[Note name]]` on Obsidian, a page mention on Notion, `[Title](:/<note id>)` on Joplin. Never write an id you did not read back from the backend.
 
 ## Constraints
 

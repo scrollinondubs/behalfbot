@@ -100,10 +100,11 @@ Plugins from `behalfbot-plugins` are offered from `python3 chassis/scripts/plugi
 
 | Field | Value |
 |---|---|
-| `second_brain_backend` | `<notion \| siyuan \| obsidian>` |
+| `second_brain_backend` | `<notion \| siyuan \| obsidian \| joplin>` |
 | `workspace_or_notebook` | `<installer's workspace id or notebook path>` |
 | `organization_pattern` | `<PARA \| flat \| other>` |
 | `databases` | TBD on install day - at minimum: primary notes area + memory page |
+| `joplin_api_source` | Joplin only: `<desktop app \| terminal client>`. Joplin has no cloud API, so the Data API runs on the install host. Desktop needs the app open with the Web Clipper service on; the headless terminal client (`joplin server start`) has no search index, so pick `second_brain.mode: adapter` for it |
 
 ---
 

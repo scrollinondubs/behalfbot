@@ -142,7 +142,7 @@ If any gate fails, do NOT generate a proposal. Instead:
 
 1. Write the EXPANDED proposal (per "Proposal format" section above - ~400-600 words) via `mcp__secondbrain__create_doc(parent: "${PACMAN_PROPOSALS_PARENT}", title: "YYYY-MM-DD-<slug>", body: ...)` where slug is derived from the URL's title (lowercase, hyphenated, max 8 words). The adapter files it in the right place on whatever backend the install runs.
 
-2. Keep the `doc_id` and `deeplink` that `create_doc` returned. The `doc_id` is opaque - a SiYuan block ID, a Notion UUID, or an Obsidian vault path depending on the install. Never parse it, never construct it, and never show it to the installer as something to type. Store it on the queue row with `--doc-id` in step 4, which is what lets the approval step find the document from the approval token later.
+2. Keep the `doc_id` and `deeplink` that `create_doc` returned. The `doc_id` is opaque - a SiYuan block ID, a Notion UUID, an Obsidian vault path, or a Joplin note id depending on the install. Never parse it, never construct it, and never show it to the installer as something to type. Store it on the queue row with `--doc-id` in step 4, which is what lets the approval step find the document from the approval token later.
 
 3. Post a 4-section Discord summary to the configured channel. The Discord post is the gist - the installer reads it inline and decides if the doc link is worth clicking. Target ~150-250 words, four explicit sections. Format:
    ```

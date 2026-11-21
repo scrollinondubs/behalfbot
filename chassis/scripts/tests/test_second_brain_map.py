@@ -133,6 +133,14 @@ class DriftReportTest(unittest.TestCase):
         self.assertEqual(sbm.drift_report(FakeAdapter("notion", notes), "map", {"projects": "root"}), [])
 
 
+class JoplinLinkedIdsTest(unittest.TestCase):
+    def test_native_note_links_only(self):
+        a, b = "0123456789abcdef0123456789abcdef", "fedcba9876543210fedcba9876543210"
+        text = (f"- [Alpha](:/{a}) - a project\n- [Beta [v2\\]](:/{b}#heading)\n"
+                "- bare id 11111111111111111111111111111111 in prose\n- [web](https://x.invalid)\n")
+        self.assertEqual(sbm.linked_ids("joplin", text), {a, b})
+
+
 class UrlFallbackTest(unittest.TestCase):
     def test_siyuan_connection_failure_tries_the_other_url(self):
         class Notes:
@@ -149,6 +157,22 @@ class UrlFallbackTest(unittest.TestCase):
 
         self.assertEqual(sbm.with_url_fallback(adapter, call), "ok")
         self.assertEqual(seen, ["http://host.docker.internal:6806", "http://127.0.0.1:6806"])
+
+    def test_joplin_connection_failure_tries_loopback_on_the_same_port(self):
+        class Notes:
+            _base_url = "http://host.docker.internal:41190"
+
+        adapter = FakeAdapter("joplin", Notes())
+        seen = []
+
+        def call():
+            seen.append(adapter.notes._base_url)
+            if adapter.notes._base_url != "http://127.0.0.1:41190":
+                raise RuntimeError("Joplin GET /notes/x request failed: refused")
+            return "ok"
+
+        self.assertEqual(sbm.with_url_fallback(adapter, call), "ok")
+        self.assertEqual(seen, ["http://host.docker.internal:41190", "http://127.0.0.1:41190"])
 
     def test_auth_failure_is_not_retried(self):
         class Notes:
