@@ -32,6 +32,65 @@ Checks are one plain GET with no JavaScript and no login. Loopback and private
 addresses are refused, including through a redirect, unless the CLI is given
 `--allow-private`. The dashboard form cannot set that.
 
+## Real-estate listings (`realestate`)
+
+A tripwire that watches files instead of a page: a GeoJSON file of zones and a
+JSON file of listings, both written by the install. On each check it screens the
+zones with the tripwire's criteria and alerts on listings that newly fall inside
+a passing zone. The chassis knows no zone property by name; the criteria name
+them.
+
+```bash
+chassis/scripts/tripwire.py add-realestate --seed config/tripwires/<name>.json
+```
+
+The seed holds `name`, `why`, `zones_path`, `listings_path` (both relative to the
+customer home, never outside it), `criteria`, `every`, `expires`, `message`, an
+optional `expiry_message` and a `seed_key`. Re-running the seed while that
+tripwire is active changes nothing, so criteria edited on the dashboard survive
+a redeploy.
+
+**Criteria.**
+
+```json
+{"id_property": "zone_id",
+ "rules": [{"key": "max_drive", "label": "Max drive (min)", "property": "drive_min",
+            "op": "<=", "value": 75, "enabled": true, "missing": "fail", "group": "limit"}],
+ "weights": [{"key": "view", "label": "View", "property": "view_score", "weight": 3}],
+ "regions": {"property": "region", "label_property": "region_name", "include": []}}
+```
+
+- A zone passes when every enabled rule holds. `op` is one of `<= >= < > == !=`;
+  text and true/false values only take `==` and `!=`. `missing` decides a zone
+  without the property (`fail` by default). `group` is `exclusion` or `limit`,
+  which only sorts the form.
+- The score is the weighted mean of the weight properties, each clamped to 0..1.
+  A missing one counts 0.
+- An empty `include` means every region.
+
+**Listings file.** `{"listings": [...]}`, each with `id`, `source`, `url`,
+`title`, `price_eur`, `area_m2`, `lat`, `lon`, `first_seen` and `raw`. Optional:
+`approximate: true` with `zone_hint` for a pin the install could only place at a
+zone's centre. A record without an id, an http(s) URL or coordinates is skipped.
+
+A listing matches when its point is inside a passing zone (`inside`), or when it
+is approximate and its hinted zone passes (`approximate`; it is never reported as
+inside, because a search area is usually wider than the zone). Each matching id
+alerts once, batched into one message per check with at most 8 lines. Widening
+the criteria alerts on listings that newly match.
+
+**Dashboard.** Each realestate row links to `/tripwires/<id>/map`: a Leaflet map
+on OpenStreetMap tiles with every zone (passing ones coloured by score, failing
+ones grey with the reasons in the popup), listing pins with price, size and a
+link to the ad, and a form for the enabled rules, their values, the regions and
+the weights. Properties and operators are fixed by the seed. Leaflet loads from
+cdnjs, like the d3 on the disk map.
+
+**Untrusted listings.** Titles and `raw` never reach an alert or the store; an
+alert line is our wording, the numbers, the zone id, the source and the URL.
+The map builds popups with `textContent` and links only http(s) URLs. A missing
+or unreadable file is "could not check", with the usual alert after 3 in a row.
+
 ## What a tripwire does
 
 - **Could not check.** A network failure, a non-2xx on the text and hash checks,
