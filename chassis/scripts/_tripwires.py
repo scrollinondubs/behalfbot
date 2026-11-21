@@ -43,13 +43,19 @@ from typing import Callable, Iterator
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
+import _realestate as realestate  # noqa: E402  (stdlib only, same directory)
+
 ACTIVE, FIRED, EXPIRED, CANCELLED, ARCHIVED = "active", "fired", "expired", "cancelled", "archived"
 CHECK_TYPES = {
     "text_appears": "text appears",
     "text_disappears": "text disappears",
     "page_changed": "page changed",
     "http_status": "HTTP status equals",
+    "realestate": "real-estate listings in passing zones",
 }
+URL_CHECKS = ("text_appears", "text_disappears", "page_changed", "http_status")
+# Checks whose every "met" is a new event, so they never latch condition_met.
+EVENT_CHECKS = ("page_changed", "realestate")
 
 MIN_INTERVAL_S = 15 * 60  # the dispatcher ticks every 15 minutes
 FAILURE_ALERT_AFTER = 3
@@ -272,8 +278,8 @@ def validate_url(url: str | None) -> str:
 
 def build_check(check: str | None, url: str | None, text: str | None = None,
                 status: str | int | None = None, allow_private: bool = False) -> dict:
-    if check not in CHECK_TYPES:
-        raise TripwireError(f"check must be one of {', '.join(CHECK_TYPES)}")
+    if check not in URL_CHECKS:
+        raise TripwireError(f"check must be one of {', '.join(URL_CHECKS)}")
     params: dict = {"url": validate_url(url)}
     if allow_private:
         params["allow_private"] = True
@@ -294,11 +300,63 @@ def add(store: Store, *, name: str | None, why: str | None, check: str | None, u
         status: str | int | None = None, keep_watching: bool = False, allow_private: bool = False,
         expiry_message: str | None = None, now: datetime | None = None) -> dict:
     now = now or utcnow()
-    record = {
+    record = _record(build_check(check, url, text, status, allow_private), name=name, why=why,
+                     every=every, expires=expires, message=message, expiry_message=expiry_message,
+                     keep_watching=keep_watching, now=now)
+    with store.transaction(create=True) as tripwires:
+        tripwires[record["id"]] = record
+    return record
+
+
+def add_realestate(store: Store, *, name: str | None, why: str | None, zones_path: str | None,
+                   listings_path: str | None, criteria: dict, every: str | None, expires: str | None,
+                   message: str | None, seed_key: str | None = None, expiry_message: str | None = None,
+                   now: datetime | None = None) -> tuple[dict, bool]:
+    """A realestate tripwire. With seed_key, an active one with that key is
+    returned untouched, so re-running a seed never overwrites dashboard edits.
+    Returns (record, created)."""
+    now = now or utcnow()
+    try:
+        check = {"check": "realestate", "params": {
+            "zones_path": realestate.check_relpath(zones_path, "zones path"),
+            "listings_path": realestate.check_relpath(listings_path, "listings path"),
+            "criteria": realestate.validate_criteria(criteria)}}
+    except realestate.RealEstateError as e:
+        raise TripwireError(str(e)) from None
+    record = _record(check, name=name, why=why, every=every, expires=expires, message=message,
+                     expiry_message=expiry_message, keep_watching=True, now=now)
+    record["alerted_ids"] = []
+    if seed_key:
+        record["seed_key"] = _clean(seed_key, "seed key", MAX_NAME)
+    with store.transaction(create=True) as tripwires:
+        for existing in tripwires.values():
+            if seed_key and existing.get("seed_key") == seed_key and existing["status"] == ACTIVE:
+                return dict(existing), False
+        tripwires[record["id"]] = record
+    return record, True
+
+
+def update_criteria(store: Store, tripwire_id: str, form: dict[str, str], now: datetime | None = None) -> dict:
+    with store.transaction() as tripwires:
+        rec = _get(tripwires, tripwire_id)
+        if rec["check"] != "realestate":
+            raise TripwireError(f"{tripwire_id} is not a realestate tripwire")
+        try:
+            rec["params"]["criteria"] = realestate.apply_form(rec["params"]["criteria"], form)
+        except realestate.RealEstateError as e:
+            raise TripwireError(str(e)) from None
+        if rec["status"] == ACTIVE:
+            rec["next_check"] = iso(now or utcnow())
+        return dict(rec)
+
+
+def _record(check: dict, *, name, why, every, expires, message, expiry_message, keep_watching,
+            now: datetime) -> dict:
+    return {
         "id": f"tw-{secrets.token_hex(4)}",
         "name": _clean(name, "name", MAX_NAME),
         "why": _clean(why, "why", MAX_WHY),
-        **build_check(check, url, text, status, allow_private),
+        **check,
         "interval_s": parse_interval(every or "1h"),
         "expires_at": iso(parse_expiry(expires or "", now)),
         "message": _clean(message, "message", MAX_MESSAGE),
@@ -318,9 +376,6 @@ def add(store: Store, *, name: str | None, why: str | None, check: str | None, u
         "baseline_hash": None,
         "outbox": [],
     }
-    with store.transaction(create=True) as tripwires:
-        tripwires[record["id"]] = record
-    return record
 
 
 def _get(tripwires: dict, tripwire_id: str) -> dict:
@@ -452,9 +507,18 @@ class Observation:
     result: str   # shown to the user; only ever our own wording
     seen: bool = False
     page_hash: str | None = None
+    detail: str = ""           # realestate: our own lines about the new listings
+    new_ids: list | None = None
 
 
-def evaluate(rec: dict, fetch: Fetch = fetch_url) -> Observation:
+def evaluate(rec: dict, fetch: Fetch = fetch_url, home: Path | None = None) -> Observation:
+    """`home` is the customer home realestate paths resolve against."""
+    if rec["check"] == "realestate":
+        if home is None:
+            from _paths import customer_home
+            home = customer_home()
+        got = realestate.observe(rec, home)
+        return Observation(got.outcome, got.result, detail=got.detail, new_ids=got.new_ids)
     params = rec["params"]
     could_not = lambda why: Observation("could_not_check", f"could not check: {why}")  # noqa: E731
     try:
@@ -503,8 +567,15 @@ def evaluate(rec: dict, fetch: Fetch = fetch_url) -> Observation:
 
 # ---- messages ------------------------------------------------------------------
 
-def fired_text(rec: dict) -> str:
-    return f"TripWire fired: {rec['name']}\n{rec['message']}\n{rec['params']['url']}"
+def where(rec: dict) -> str:
+    """The last line of every message: the watched URL, or for a realestate
+    tripwire where its map is."""
+    return rec["params"].get("url") or "Map: TripWires tab on the dashboard"
+
+
+def fired_text(rec: dict, detail: str = "") -> str:
+    body = f"{detail}\n" if detail else ""
+    return f"TripWire fired: {rec['name']}\n{rec['message']}\n{body}{where(rec)}"
 
 
 def expired_text(rec: dict) -> str:
@@ -516,14 +587,14 @@ def expired_text(rec: dict) -> str:
     if rec.get("expiry_message"):
         lines.append(rec["expiry_message"])
     lines.append(f"Last result: {rec.get('last_result') or 'never checked'}")
-    lines.append(rec["params"]["url"])
+    lines.append(where(rec))
     return "\n".join(lines)
 
 
 def failure_text(rec: dict) -> str:
     return (f"TripWire cannot see its page: {rec['name']}. {rec['consecutive_failures']} checks in a row "
             f"failed (last: {rec['last_result']}). It stays active, but treat it as blind until this "
-            f"clears. This is the only alert for this run of failures.\n{rec['params']['url']}")
+            f"clears. This is the only alert for this run of failures.\n{where(rec)}")
 
 
 # ---- the run -------------------------------------------------------------------
@@ -558,11 +629,21 @@ def apply_observation(rec: dict, obs: Observation, now: datetime) -> None:
         if obs.outcome == "met":
             # keep_watching fires when the condition becomes true, not on every
             # check while it stays true. Each page change is a new event.
-            if not rec["condition_met"]:
+            if obs.new_ids is not None:
+                # Only ids this record has not alerted on: a second run that
+                # overlapped this one must not repeat them.
+                done = set(rec.get("alerted_ids") or [])
+                fresh = [i for i in obs.new_ids if i not in done]
+                if fresh:
+                    rec["alerted_ids"] = (list(rec.get("alerted_ids") or []) + fresh)[-realestate.MAX_ALERTED_IDS:]
+                    rec["fire_count"] += 1
+                    kind = FIRED if not rec["keep_watching"] else "refire"
+                    rec["outbox"].append({"kind": kind, "text": fired_text(rec, obs.detail)})
+            elif not rec["condition_met"]:
                 rec["fire_count"] += 1
                 kind = FIRED if not rec["keep_watching"] else "refire"
                 rec["outbox"].append({"kind": kind, "text": fired_text(rec)})
-            rec["condition_met"] = rec["check"] != "page_changed"
+            rec["condition_met"] = rec["check"] not in EVENT_CHECKS
         else:
             rec["condition_met"] = False
 
@@ -592,7 +673,7 @@ def _deliver(store: Store, notify: Notify, now: datetime) -> tuple[int, int]:
 
 
 def run_due(store: Store, fetch: Fetch = fetch_url, notify: Notify | None = None,
-            now: datetime | None = None, budget_s: float = RUN_BUDGET_S) -> dict:
+            now: datetime | None = None, budget_s: float = RUN_BUDGET_S, home: Path | None = None) -> dict:
     """One heartbeat tick. Checks happen outside the lock, and each result is
     applied to a fresh read, so a cancel that lands during a fetch wins."""
     notify = notify or send_notification
@@ -604,7 +685,7 @@ def run_due(store: Store, fetch: Fetch = fetch_url, notify: Notify | None = None
     for snapshot in due:
         if time.monotonic() - started > budget_s:
             break
-        obs = evaluate(snapshot, fetch)
+        obs = evaluate(snapshot, fetch, home)
         checked += 1
         with store.transaction() as current:
             rec = current.get(snapshot["id"])
@@ -665,7 +746,7 @@ def _row(rec: dict, now: datetime) -> dict:
     parse = lambda key: parse_iso(rec[key]) if rec.get(key) else None  # noqa: E731
     params = rec["params"]
     target = {"text_appears": params.get("text"), "text_disappears": params.get("text"),
-              "http_status": params.get("status")}.get(rec["check"])
+              "http_status": params.get("status"), "realestate": params.get("zones_path")}.get(rec["check"])
     active = rec["status"] == ACTIVE
     blind = active and rec.get("last_outcome") == "could_not_check"
     if not active:
@@ -678,7 +759,8 @@ def _row(rec: dict, now: datetime) -> dict:
         **rec,
         "check_label": CHECK_TYPES.get(rec["check"], rec["check"]),
         "target": target,
-        "url": params["url"],
+        "url": params.get("url"),
+        "is_realestate": rec["check"] == "realestate",
         "active": active,
         "blind": blind,
         "last_checked_label": relative(parse("last_checked"), now),
@@ -713,7 +795,7 @@ def view(store: Store, show_archived: bool = False, now: datetime | None = None)
         "show_archived": show_archived,
         "heartbeat_stale": stale,
         "last_run_label": relative(last_run, now),
-        "check_types": CHECK_TYPES,
+        "check_types": {k: v for k, v in CHECK_TYPES.items() if k in URL_CHECKS},
     }
 
 

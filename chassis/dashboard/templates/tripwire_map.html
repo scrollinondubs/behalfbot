@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}{{ rec.name }} - TripWires{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+{% endblock %}
+
+{% block topbar %}
+<div class="topbar-inner">
+  <h1><a href="{{ prefix }}" class="muted">TripWires</a> · {{ rec.name }}</h1>
+  <span class="muted small">{{ row.status }} · last checked {{ row.last_checked_label }}: {{ rec.last_result or "not yet" }}</span>
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .re-grid { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  #re-map { height: 70vh; min-height: 420px; border-radius: 8px; border: 1px solid var(--border); }
+  .re-note { padding: 10px 12px; border: 1px solid var(--warn); border-radius: 6px; color: var(--warn); overflow-wrap: anywhere; }
+  .re-note.bad { border-color: var(--danger); color: var(--danger); }
+  .re-form h3 { margin: 14px 0 6px; font-size: 0.95em; }
+  .re-form label { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 0.9em; }
+  .re-form .re-label { flex: 1; }
+  .re-form input[type=number] { width: 84px; padding: 4px 6px; background: var(--bg-2); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
+  .re-legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0; font-size: 0.85em; color: var(--muted); }
+  .re-swatch { display: inline-block; width: 12px; height: 12px; border-radius: 50%; vertical-align: -1px; margin-right: 4px; border: 2px solid #333; }
+  .re-ramp { display: inline-block; width: 90px; height: 10px; vertical-align: 0; background: linear-gradient(90deg, #fff7bc, #addd8e, #31a354, #00441b); border: 1px solid #555; }
+  .re-pop { color: #111; font-size: 13px; max-width: 280px; }
+  .re-pop table { border-collapse: collapse; margin-top: 4px; }
+  .re-pop td { padding: 1px 6px 1px 0; vertical-align: top; }
+  .re-pop .re-bad { color: #b42318; }
+  @media (max-width: 900px) {
+    .re-grid { grid-template-columns: minmax(0, 1fr); }
+    #re-map { height: 60vh; }
+    .re-form input[type=number] { font-size: 16px; }
+  }
+</style>
+
+{% if error %}<p class="re-note bad" role="alert">{{ error }}</p>{% endif %}
+{% if load_error %}<p class="re-note bad" role="alert">{{ load_error }}</p>{% endif %}
+<p class="re-note" id="re-status" role="status" hidden></p>
+
+<div class="re-grid">
+  <section>
+    <div id="re-map" aria-label="Zones and listings map"></div>
+    <div class="re-legend">
+      <span><span class="re-ramp"></span> passing zone, low to high score</span>
+      <span><span class="re-swatch" style="background:#bbb;border-style:dashed"></span>failing zone</span>
+      <span><span class="re-swatch" style="background:#d7301f"></span>listing in a passing zone</span>
+      <span><span class="re-swatch" style="background:#fdae61"></span>approximate pin, search area of a passing zone</span>
+      <span><span class="re-swatch" style="background:#666"></span>listing outside</span>
+    </div>
+    <p class="muted small" id="re-summary"></p>
+  </section>
+
+  <section class="panel re-form">
+    <form method="post" action="{{ prefix }}/{{ rec.id }}/criteria">
+      {% for group, title in [("exclusion", "Hard exclusions"), ("limit", "Limits")] %}
+      {% set rules = criteria.rules | selectattr("group", "equalto", group) | list %}
+      {% if rules %}
+      <h3>{{ title }}</h3>
+      {% for r in rules %}
+      <label>
+        <input type="checkbox" name="rule_{{ r.key }}_enabled" value="1"{% if r.enabled %} checked{% endif %}>
+        <span class="re-label">{{ r.label }}</span>
+        {% if r.value is number and r.value is not sameas true and r.value is not sameas false %}
+        <span class="muted small">{{ r.op }}</span>
+        <input type="number" step="any" name="rule_{{ r.key }}_value" value="{{ '%g' | format(r.value) }}" aria-label="{{ r.label }} value">
+        {% endif %}
+      </label>
+      {% endfor %}
+      {% endif %}
+      {% endfor %}
+
+      {% if regions %}
+      <h3>Regions</h3>
+      {% for g in regions %}
+      <label><input type="checkbox" name="region_{{ loop.index }}" value="region:{{ g.value }}"{% if g.checked %} checked{% endif %}><span class="re-label">{{ g.label }}</span></label>
+      {% endfor %}
+      {% endif %}
+
+      {% if criteria.weights %}
+      <h3>Score weights</h3>
+      {% for w in criteria.weights %}
+      <label><span class="re-label">{{ w.label }}</span><input type="number" step="any" min="0" max="100" name="weight_{{ w.key }}" value="{{ '%g' | format(w.weight) }}" aria-label="{{ w.label }} weight"></label>
+      {% endfor %}
+      {% endif %}
+
+      <p><button class="btn" type="submit">Save criteria</button></p>
+      <p class="muted small">Saving rechecks at the next heartbeat tick. Listings that newly fall inside a passing zone alert once.</p>
+    </form>
+  </section>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  const DATA_URL = {{ (prefix ~ "/" ~ rec.id ~ "/map.json") | tojson }};
+  const statusEl = document.getElementById('re-status');
+  const say = (text) => { statusEl.textContent = text; statusEl.hidden = !text; };
+  if (!window.L) { say('The map library did not load (it comes from cdnjs). The criteria form still works.'); return; }
+
+  const map = L.map('re-map', { preferCanvas: true });
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+  map.setView([0, 0], 2);
+  window.tripwireMap = map;
+
+  const RAMP = ['#fff7bc', '#addd8e', '#31a354', '#00441b'];
+  function mix(a, b, t) {
+    const pa = a.match(/\w\w/g).map(h => parseInt(h, 16)), pb = b.match(/\w\w/g).map(h => parseInt(h, 16));
+    return '#' + pa.map((v, i) => Math.round(v + (pb[i] - v) * t).toString(16).padStart(2, '0')).join('');
+  }
+  function ramp(t) {
+    t = Math.max(0, Math.min(1, t)) * (RAMP.length - 1);
+    const i = Math.min(RAMP.length - 2, Math.floor(t));
+    return mix(RAMP[i], RAMP[i + 1], t - i);
+  }
+  function el(tag, text, cls) { const n = document.createElement(tag); if (text != null) n.textContent = String(text); if (cls) n.className = cls; return n; }
+  function row(table, k, v, cls) { const tr = el('tr'); tr.append(el('td', k), el('td', v, cls)); table.append(tr); }
+  function safeUrl(u) { try { const p = new URL(u); return (p.protocol === 'https:' || p.protocol === 'http:') ? p.href : null; } catch (e) { return null; } }
+  const eur = (v) => v == null ? 'not given' : 'EUR ' + Math.round(v).toLocaleString('en');
+  const m2 = (v) => v == null ? 'not given' : Math.round(v).toLocaleString('en') + ' m2' + (v >= 10000 ? ' (' + (v / 10000).toFixed(1) + ' ha)' : '');
+
+  function zonePopup(p) {
+    const box = el('div', null, 're-pop');
+    box.append(el('strong', p._id));
+    box.append(el('div', p._passes ? 'Passes. Score ' + p._score.toFixed(3) : 'Fails the current criteria', p._passes ? null : 're-bad'));
+    const t = el('table');
+    (p._reasons || []).forEach(r => row(t, 'fails', r, 're-bad'));
+    (p._breakdown || []).forEach(b => row(t, b.label, b.value + '  x' + b.weight));
+    box.append(t);
+    return box;
+  }
+  function listingPopup(l) {
+    const box = el('div', null, 're-pop');
+    box.append(el('strong', l.title || 'Untitled listing'));
+    const t = el('table');
+    row(t, 'Price', eur(l.price_eur));
+    row(t, 'Size', m2(l.area_m2));
+    row(t, 'Where', l.match === 'inside' ? 'inside passing zone ' + l.zone
+      : l.match === 'approximate' ? 'approximate pin, search area around ' + l.zone
+      : (l.zone ? 'in failing zone ' + l.zone : 'outside every zone'));
+    row(t, 'Source', l.source);
+    if (l.first_seen) row(t, 'First seen', l.first_seen);
+    box.append(t);
+    const href = safeUrl(l.url);
+    if (href) { const a = el('a', 'Open the ad'); a.href = href; a.target = '_blank'; a.rel = 'noopener noreferrer'; box.append(a); }
+    return box;
+  }
+
+  fetch(DATA_URL, { cache: 'no-store' }).then(r => r.json()).then(data => {
+    if (data.error) { say(data.error); return; }
+    const feats = data.zones.features;
+    const pass = feats.filter(f => f.properties._passes).map(f => f.properties._score);
+    const lo = pass.length ? Math.min(...pass) : 0, hi = pass.length ? Math.max(...pass) : 1;
+    const norm = (s) => hi > lo ? (s - lo) / (hi - lo) : 1;
+    const failing = L.geoJSON({ type: 'FeatureCollection', features: feats.filter(f => !f.properties._passes) }, {
+      style: { color: '#555', weight: 1.2, dashArray: '3 3', fillColor: '#9a9a9a', fillOpacity: 0.4 },
+      onEachFeature: (f, layer) => layer.bindPopup(() => zonePopup(f.properties))
+    }).addTo(map);
+    const passing = L.geoJSON({ type: 'FeatureCollection', features: feats.filter(f => f.properties._passes) }, {
+      style: f => ({ color: '#1b1b1b', weight: 1.5, fillColor: ramp(norm(f.properties._score)), fillOpacity: 0.7 }),
+      onEachFeature: (f, layer) => layer.bindPopup(() => zonePopup(f.properties))
+    }).addTo(map);
+    const colour = { inside: '#d7301f', approximate: '#fdae61', outside: '#666' };
+    const pins = L.layerGroup(data.listings.map(l => L.circleMarker([l.lat, l.lon], {
+      radius: l.match === 'outside' ? 5 : 7, color: '#222', weight: 1.5, dashArray: l.approximate ? '2 2' : null,
+      fillColor: colour[l.match], fillOpacity: 0.9
+    }).bindPopup(() => listingPopup(l)))).addTo(map);
+    L.control.layers(null, { 'Passing zones': passing, 'Failing zones': failing, 'Listings': pins }, { collapsed: true }).addTo(map);
+    const all = L.featureGroup([failing, passing]);
+    if (all.getLayers().length) map.fitBounds(all.getBounds(), { padding: [12, 12] });
+    const inside = data.listings.filter(l => l.match !== 'outside').length;
+    document.getElementById('re-summary').textContent =
+      feats.length + ' zones, ' + data.passing + ' pass. ' + data.listings.length + ' listings, ' + inside +
+      ' in passing zones' + (data.dropped ? ', ' + data.dropped + ' unusable records skipped' : '') + '.';
+  }).catch(() => say('Could not load the map data.'));
+})();
+</script>
+{% endblock %}
