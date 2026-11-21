@@ -66,6 +66,12 @@ class Detect(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(records(name)[0], fmt)
 
+    def test_bytes_in_memory_read_the_same_as_the_file(self) -> None:
+        data = (FIX / "linkedin-Connections.csv").read_bytes()
+        self.assertEqual(ci.load_bytes("Connections.csv", data), records("linkedin-Connections.csv"))
+        with self.assertRaisesRegex(ci.ExportFileError, "whole archive"):
+            ci.load_bytes("export.zip", data)
+
     def test_zip_is_refused_without_opening_it(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "Complete_LinkedInDataExport.zip"
@@ -123,7 +129,9 @@ class Run(unittest.TestCase):
     def test_dry_run_counts_and_writes_nothing(self) -> None:
         store = MemStore()
         _, recs = records("linkedin-Connections.csv")
-        counts = ci.run(store, recs, "linkedin", apply=False, today=TODAY)
+        new_names: list[str] = []
+        counts = ci.run(store, recs, "linkedin", apply=False, today=TODAY, new_names=new_names)
+        self.assertEqual(new_names, ["Alba Quintero", "Bram Oosterveld", "Cleo Varga"])
         self.assertEqual(store.writes, 0)
         self.assertEqual(store.rows, {})
         # Bram appears twice (trailing slash on the second URL): one new, one duplicate.
@@ -137,24 +145,90 @@ class Run(unittest.TestCase):
         alba = store.by_name("Alba Quintero")
         self.assertEqual(alba["notes"], "source: linkedin (imported 2026-11-20)\n"
                                         "profile: https://linkedin.com/in/alba-quintero-test\n"
-                                        "role: Founder at Fictional Labs")
+                                        "role: Founder at Fictional Labs\n"
+                                        "connected: 03 Mar 2024")
         before = {k: dict(v) for k, v in store.rows.items()}
-        again = ci.run(store, recs, "linkedin", apply=True, today=TODAY)
+        # A later day: the source line is already there, so still nothing new.
+        again = ci.run(store, recs, "linkedin", apply=True, today=date(2026, 12, 1))
+        self.assertEqual((again["enriched"], again["unchanged"]), (0, 4))
         self.assertEqual(again["new"], 0)
         self.assertEqual(store.rows, before)
 
-    def test_existing_fields_are_never_overwritten_only_blanks_filled(self) -> None:
+    def test_existing_values_are_kept_and_new_details_appended(self) -> None:
         store = MemStore([{"name": "Alba Q.", "email": "ALBA.Q@example.com", "phone": "", "notes": "met at a meetup"},
                           {"name": "Fenna Holt", "email": "", "phone": "+1 (555) 0100-003", "notes": ""}])
         _, recs = records("outlook-contacts.csv")
         counts = ci.run(store, recs, "outlook", apply=True, today=TODAY)
         self.assertEqual((counts["new"], counts["duplicate"]), (0, 2))
         alba = store.rows[1]
-        self.assertEqual((alba["name"], alba["email"], alba["notes"]), ("Alba Q.", "ALBA.Q@example.com", "met at a meetup"))
+        self.assertEqual((alba["name"], alba["email"]), ("Alba Q.", "ALBA.Q@example.com"))
+        self.assertEqual(alba["notes"], "met at a meetup\nsource: outlook (imported 2026-11-20)")
         self.assertEqual(alba["phone"], "+351 910 000 004")
         fenna = store.rows[2]
         self.assertEqual((fenna["phone"], fenna["email"]), ("+1 (555) 0100-003", "fenna.holt@example.com"))
         self.assertTrue(fenna["notes"].startswith("source: outlook"))
+
+    def test_hand_entered_name_only_contact_takes_the_export_row(self) -> None:
+        store = MemStore([{"name": "alba  QUINTERO", "notes": "met at the picnic"},
+                          {"name": "Cleo Varga"}])
+        _, recs = records("linkedin-Connections.csv")
+        counts = ci.run(store, recs, "linkedin", apply=True, today=TODAY)
+        self.assertEqual((counts["new"], counts["enriched"], counts["unchanged"], counts["ambiguous"]), (1, 2, 1, 0))
+        self.assertEqual(len(store.rows), 3)
+        alba = store.rows[1]
+        self.assertEqual((alba["name"], alba["email"]), ("alba  QUINTERO", "alba.q@example.com"))
+        self.assertEqual(alba["notes"], "met at the picnic\nsource: linkedin (imported 2026-11-20)\n"
+                                        "profile: https://linkedin.com/in/alba-quintero-test\nrole: Founder at Fictional Labs\n"
+                                        "connected: 03 Mar 2024")
+        self.assertIn("profile: https://linkedin.com/in/cleo-varga-test", store.rows[2]["notes"])
+        before = {k: dict(v) for k, v in store.rows.items()}
+        again = ci.run(store, recs, "linkedin", apply=True, today=TODAY)
+        self.assertEqual((again["new"], again["enriched"]), (0, 0))
+        self.assertEqual(store.rows, before)
+
+    def test_two_name_only_contacts_with_the_name_is_ambiguous_so_add_new(self) -> None:
+        store = MemStore([{"name": "Alba Quintero"}, {"name": "Alba Quintero", "notes": "the other one"}])
+        _, recs = records("linkedin-Connections.csv")
+        dry = ci.run(store, recs, "linkedin", apply=False, today=TODAY)
+        self.assertEqual((dry["new"], dry["ambiguous"]), (3, 1))
+        self.assertIn("1 of these share a name with 2+ name-only contacts", ci.report("linkedin", FIX / "x.csv", dry, False))
+        ci.run(store, recs, "linkedin", apply=True, today=TODAY)
+        self.assertEqual([r["email"] for r in store.rows.values() if r["name"] == "Alba Quintero"],
+                         [None, None, "alba.q@example.com"])
+
+    def test_matched_contact_with_notes_gets_new_lines_appended(self) -> None:
+        store = MemStore([{"name": "Alba Quintero", "email": "alba.q@example.com",
+                           "notes": "met at a meetup\nrole: Founder at Fictional Labs"}])
+        counts = ci.run(store, records("linkedin-Connections.csv")[1], "linkedin", apply=True, today=TODAY)
+        self.assertEqual((counts["new"], counts["enriched"]), (2, 1))
+        self.assertEqual(store.rows[1]["notes"],
+                         "met at a meetup\nrole: Founder at Fictional Labs\nsource: linkedin (imported 2026-11-20)\n"
+                         "profile: https://linkedin.com/in/alba-quintero-test\nconnected: 03 Mar 2024")
+        self.assertEqual(store.rows[1]["email"], "alba.q@example.com")
+
+    def test_a_different_email_or_phone_is_noted_not_swapped_in(self) -> None:
+        store = MemStore([{"name": "Alba Quintero", "email": "alba@old.example", "phone": "+351 910 000 001",
+                           "notes": "profile: https://linkedin.com/in/alba-quintero-test"}])
+        rec = ci.Record(name="Alba Quintero", email="ALBA.Q@example.com", phone="+351 910 000 002",
+                        profile="https://www.linkedin.com/in/alba-quintero-test/")
+        dry = ci.run(store, [rec], "google", apply=False, today=TODAY)
+        self.assertEqual((dry["new"], dry["enriched"], dry["unchanged"]), (0, 1, 0))
+        self.assertIn("enriched:  1", ci.report("google", FIX / "x.csv", dry, False))
+        ci.run(store, [rec], "google", apply=True, today=TODAY)
+        alba = store.rows[1]
+        self.assertEqual((alba["email"], alba["phone"]), ("alba@old.example", "+351 910 000 001"))
+        self.assertEqual(alba["notes"].splitlines()[-3:], [
+            "source: google (imported 2026-11-20)", "also: alba.q@example.com (google)", "also: +351 910 000 002 (google)"])
+        again = ci.run(store, [rec], "google", apply=True, today=TODAY)
+        self.assertEqual((again["enriched"], again["unchanged"]), (0, 1))
+
+    def test_contacts_with_an_identifier_are_not_merged_by_name(self) -> None:
+        store = MemStore([{"name": "Alba Quintero", "phone": "+1 555 0199"},
+                          {"name": "Cleo Varga", "email": "cleo@elsewhere.example"},
+                          {"name": "Bram Oosterveld", "notes": "profile: https://linkedin.com/in/someone-else"}])
+        counts = ci.run(store, records("linkedin-Connections.csv")[1], "linkedin", apply=True, today=TODAY)
+        self.assertEqual((counts["new"], counts["ambiguous"]), (3, 0))
+        self.assertEqual(len(store.rows), 6)
 
     def test_name_only_rows_match_by_name_across_sources(self) -> None:
         store = MemStore()
@@ -184,7 +258,7 @@ class Run(unittest.TestCase):
                 ci.Record(name="Omar Lindqvist", email="omar@example.com", phone="+351 210 000 100", **site),
                 ci.Record(name="Pia Lindqvist", phone="210000100")]
         counts = ci.run(store, rows, "google", apply=True, today=TODAY)
-        self.assertEqual((counts["new"], counts["duplicate"], counts["filled"]), (3, 0, 0))
+        self.assertEqual((counts["new"], counts["duplicate"], counts["enriched"]), (3, 0, 0))
         self.assertEqual(store.by_name("Nadia Okafor")["email"], "nadia@example.com")
         self.assertIn("website: https://sample-studio.example", store.by_name("Omar Lindqvist")["notes"])
         self.assertNotIn("profile:", store.by_name("Omar Lindqvist")["notes"])

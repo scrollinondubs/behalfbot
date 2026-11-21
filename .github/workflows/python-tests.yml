@@ -98,6 +98,8 @@ jobs:
       # mcp is pinned to the same version as requirements.txt so the e2e
       # server test exercises what the image ships. fastapi, jinja2 and httpx
       # cover the dashboard tests (chassis/dashboard/requirements.txt is the
-      # host-side install; httpx is only for TestClient).
-      - run: pip install pytest pyyaml mcp==1.28.1 fastapi jinja2 httpx
+      # host-side install; httpx is only for TestClient). python-multipart
+      # backs the CRM import upload; mcp happens to pull it in too, but the
+      # dashboard tests should not depend on that.
+      - run: pip install pytest pyyaml mcp==1.28.1 fastapi jinja2 httpx 'python-multipart>=0.0.31,<1'
       - run: python3 -m pytest chassis/second_brain/tests/ chassis/scripts/tests/ -v
