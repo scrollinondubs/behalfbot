@@ -38,6 +38,7 @@ IMPORT_MAX_BYTES = 10 * 1024 * 1024
 IMPORT_SUFFIXES = (".csv", ".vcf", ".json")
 IMPORT_TTL_SECONDS = 15 * 60
 IMPORT_SAMPLE = 8
+CONTACTS_PER_PAGE = 500
 TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{20,64}")
 FORMAT_LABELS = {
     "linkedin": "LinkedIn Connections.csv", "google": "Google Contacts CSV", "outlook": "Outlook CSV",
@@ -144,8 +145,23 @@ def build_router(render: Callable = _default_render, store: crm.Store | None = N
     def contacts_page(request: Request, status_code: int = 200, error: str | None = None,
                       form: dict | None = None):
         q = (request.query_params.get("q") or "").strip()
+        total = db.count_contacts(q)
+        pages = max(1, -(-total // CONTACTS_PER_PAGE))
+        try:
+            page = min(max(1, int(request.query_params.get("page") or 1)), pages)
+        except ValueError:
+            page = 1
+        offset = (page - 1) * CONTACTS_PER_PAGE
+        contacts = db.contacts(q, limit=CONTACTS_PER_PAGE, offset=offset)
+
+        def page_url(n: int) -> str:
+            params = {k: v for k, v in (("q", q), ("page", n if n > 1 else "")) if v}
+            return prefix + ("?" + urllib.parse.urlencode(params) if params else "")
         return show(request, "crm_contacts.html", {
-            "view": "contacts", "q": q, "contacts": db.contacts(q),
+            "view": "contacts", "q": q, "contacts": contacts, "total": total,
+            "page": page, "pages": pages, "first": offset + 1, "last": offset + len(contacts),
+            "prev_url": page_url(page - 1) if page > 1 else None,
+            "next_url": page_url(page + 1) if page < pages else None,
             "imported": None if error else import_result(request),
             "max_mb": IMPORT_MAX_BYTES // (1024 * 1024),
             "error": error, "form": form or {}}, status_code)
