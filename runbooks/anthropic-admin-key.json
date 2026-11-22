@@ -1,0 +1,21 @@
+{
+  "id": "anthropic-admin-key",
+  "task": "Claude Console (Sean's account): create one read-only Admin API key for spend tracking and store it, without touching billing, plans or the claude.ai Max subscription",
+  "allow": ["platform.claude.com", "console.anthropic.com"],
+  "start_url": "https://platform.claude.com/settings/admin-keys",
+  "steps": [
+    { "id": "signin", "human": "Sign in to the Claude Console in this tab. Press Done when you see Settings." },
+    { "id": "inspect", "do": "Report the organization name, whether Settings shows Admin keys or asks to set up an organization, the existing admin keys (names only), and the Billing page's plan, usage tier and credit balance. Change nothing." },
+    { "id": "org-gate", "do": "If the account is an individual account with no Admin keys page, stop here and wait in the chat. Jax confirms with Sean before anyone sets up an organization." },
+    { "id": "create", "do": "Admin keys > Create admin key. Name it as Jax gives in the chat (e.g. jax-spend-read). Do not open Billing, buy credits, change a plan or invite anyone." },
+    { "id": "save-key", "do": "Save the new key with save_secret under the name Jax gives in the chat (spend-anthropic-admin-key). Never print it." },
+    { "id": "recheck", "do": "Open Billing again and report the plan, usage tier and credit balance, so Jax can confirm they match the inspect step." }
+  ],
+  "accept": "One new admin key exists and Jax has it in Vaultwarden. Billing plan, usage tier and credit balance are unchanged from the inspect step.",
+  "notes": [
+    "The Console API organization and its billing are separate from the claude.ai Max subscription. Nothing in this runbook touches claude.ai.",
+    "An admin key grants org-wide admin, so it is stored in Vaultwarden only and the spend gather uses it for GETs to the cost report.",
+    "If any screen asks for a card, a plan change or a credit purchase, stop and hand it to Sean.",
+    "Sign-in may run on accounts.google.com or a magic link, which is off the allow list, so the extension lets go of the tab while Sean signs in."
+  ]
+}
