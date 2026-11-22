@@ -314,6 +314,49 @@ class StackedChartTests(unittest.TestCase):
         self.assertIsNone(st["range"])
         self.assertEqual(st["top"], 0)
 
+    def spiky(self):
+        days = {f"2026-11-{i:02d}": 2.0 + 0.1 * i for i in range(1, 21)}
+        return [
+            {"service": "vercel", "label": "Vercel", "color": "#3987e5", "by_day": days},
+            {"service": "anthropic", "label": "Anthropic", "color": "#008300", "prepaid": True,
+             "by_day": {"2026-11-02": 80.0}},
+        ]
+
+    def test_clip_cap_rule(self):
+        self.assertIsNone(projections.clip_cap([]))
+        self.assertIsNone(projections.clip_cap([0.0, 0.0]))
+        self.assertIsNone(projections.clip_cap([1.0, 50.0]))
+        vals = [1.0] * 17 + [2.0, 2.0, 90.0]
+        self.assertEqual(projections.clip_cap(vals), 6.0)
+        self.assertEqual(projections.clip_cap(vals, floor=10.0), 10.0)
+        self.assertIsNone(projections.clip_cap([1.0] * 17 + [2.0, 2.0, 5.0]))
+
+    def test_outlier_day_is_clipped_and_keeps_others_to_scale(self):
+        st = projections.build_stacked(self.spiky(), date(2026, 11, 1), date(2026, 11, 20))
+        cap = st["cap"]
+        self.assertAlmostEqual(cap, 3 * 3.9)
+        spike = st["days"][1]
+        self.assertTrue(spike["clipped"])
+        self.assertAlmostEqual(spike["total"], 82.2)
+        self.assertAlmostEqual(sum(g["pct"] for g in spike["segments"]), 100.0, places=1)
+        small, big = spike["segments"]
+        self.assertEqual(small["pct"], round(100 * 2.2 / cap, 2))
+        self.assertTrue(big["broken"] and big["prepaid"])
+        self.assertFalse(any(d["clipped"] for i, d in enumerate(st["days"]) if i != 1))
+        self.assertEqual(st["days"][19]["segments"][0]["pct"], round(100 * 4.0 / cap, 2))
+        self.assertTrue(st["has_prepaid"])
+
+    def test_no_clip_without_an_outlier(self):
+        st = projections.build_stacked(self.spiky()[:1], date(2026, 11, 1), date(2026, 11, 20))
+        self.assertIsNone(st["cap"])
+        self.assertFalse(st["has_prepaid"])
+        self.assertAlmostEqual(sum(g["pct"] for g in st["days"][19]["segments"]), 100.0)
+
+    def test_baseline_is_never_clipped_off(self):
+        st = projections.build_stacked(self.spiky(), date(2026, 11, 1), date(2026, 11, 20), base_per_day=30.0)
+        self.assertEqual(st["cap"], 30.0)
+        self.assertEqual(st["base_pct"], 100.0)
+
 
 @unittest.skipUnless(HAVE_FASTAPI, "fastapi not installed")
 class ProjectionsPageTests(unittest.TestCase):
@@ -375,6 +418,26 @@ class ProjectionsPageTests(unittest.TestCase):
 
     def test_unknown_service_404s(self):
         self.assertEqual(self.client.get("/projections/nope").status_code, 404)
+
+    def test_hide_leaves_a_service_out_of_the_chart_only(self):
+        full = self.client.get("/projections").text
+        html = self.client.get("/projections?hide=cloudflare,stale").text
+        self.assertIn('href="/projections?hide=" role="switch" aria-checked="false" aria-label="Show Cloudflare', html)
+        self.assertIn('href="/projections?hide=cloudflare,vercel" role="switch" aria-checked="true"', html)
+        self.assertIn('class="spend-chip-row off"', html)
+        self.assertIn("Hidden from the chart: 1 service.", html)
+        self.assertNotIn("aria-checked", self.client.get("/projections/vercel").text)
+        self.assertNotIn('role="switch" aria-checked="true" aria-label="Hide Claude Max', full)
+        for page_html in (full, html):
+            self.assertIn('<div class="stat-num">$108.25</div>', page_html)
+        if self.has_complete_day:
+            self.assertIn('<a href="/projections/cloudflare" style="height: ', full)
+            self.assertNotIn('<a href="/projections/cloudflare" style="height: ', html)
+            self.assertIn('<a href="/projections/vercel" style="height: ', html)
+
+    def test_hiding_everything_says_so(self):
+        html = self.client.get("/projections?hide=vercel,cloudflare").text
+        self.assertIn("Every service with daily usage is hidden.", html)
 
 
 class InvoiceKindTests(unittest.TestCase):

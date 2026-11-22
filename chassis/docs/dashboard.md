@@ -224,6 +224,21 @@ go to the Matrix alerts room instead or as well. `_settings.dashboard_url` (or `
 link to the service's page. With no channel the alert is logged and retried
 next run. `DRY_RUN=1` prints alerts instead of posting them.
 
+**Reading the All chart.**
+
+- The box beside each usage-billed service leaves it out of the stacked
+  chart and the combined baseline line. The tiles, chip amounts and tables
+  still count it. The choice rides in `?hide=a,b` and is kept per browser in
+  localStorage (`projections-hidden`); "Show all" clears it. Clicking the
+  name still opens that service on its own.
+- Outlier clip: the y-axis tops out at 3x the 90th-percentile day (nearest
+  rank, over days with any visible spend), and never below the baseline line.
+  A day above that is drawn at the cap, its largest segment shrunk and marked
+  with a break, and its real total is printed on top. With fewer than ten
+  days of spend the 90th percentile is the tallest day, so nothing clips.
+- A service with `"fetch": "receipts"` (prepaid top-ups) is drawn hatched:
+  each bar is a top-up booked on the day it was paid, not that day's usage.
+
 ## Adding a custom tab
 
 Drop a file in `$CUSTOMER_HOME/dashboard/tabs/` and restart the dashboard:

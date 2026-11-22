@@ -4,6 +4,24 @@
 
 {% macro money(v) %}{% if v is none %}-{% else %}{{ "%.2f"|format(v) }}{% endif %}{% endmacro %}
 
+{% block head %}
+{% if not single %}
+<script>
+  (function () {
+    var KEY = 'projections-hidden';
+    var q = new URLSearchParams(location.search);
+    try {
+      if (q.has('hide')) localStorage.setItem(KEY, q.get('hide'));
+      else {
+        var saved = localStorage.getItem(KEY);
+        if (saved) { q.set('hide', saved); location.replace(location.pathname + '?' + q.toString()); }
+      }
+    } catch (e) {}
+  })();
+</script>
+{% endif %}
+{% endblock %}
+
 {% block topbar %}
 <div class="topbar-inner">
   <h1>{% if single and rows %}<a href="/projections" class="muted">Projections</a> · {{ rows[0].s.label }}{% else %}Projections{% endif %}</h1>
@@ -35,26 +53,37 @@
 <section class="panel spend-overview">
   <nav class="spend-chips" aria-label="Services">
     {% for c in chips %}
+    <div class="spend-chip-row{% if c.hidden %} off{% endif %}"{% if c.color %} style="--c: {{ c.color }}"{% endif %}>
+    {% if c.toggle %}<a class="spend-toggle" href="{{ c.toggle.href }}" role="switch" aria-checked="{{ 'false' if c.hidden else 'true' }}" aria-label="{{ c.toggle.action }} {{ c.label }} in the chart" title="{{ c.toggle.action }} {{ c.label }} in the chart"><span class="spend-check"></span></a>{% elif not single %}<span class="spend-toggle-gap"></span>{% endif %}
     <a class="spend-chip{% if c.selected %} selected{% endif %}" href="{{ c.href }}"{% if c.color %} style="--c: {{ c.color }}"{% endif %}{% if c.selected %} aria-current="page"{% endif %}>
       <span class="spend-swatch{% if not c.color %} all{% endif %}"></span>
       <span class="spend-chip-name">{{ c.label }}</span>
       <span class="spend-chip-amt">{% if c.to_date is not none %}${{ money(c.to_date) }}{% else %}-{% endif %}</span>
       {% if c.pill %}<span class="pill spend-{{ c.tone }}">{{ c.pill }}</span>{% endif %}
     </a>
+    </div>
     {% endfor %}
   </nav>
 
   <div class="spend-main">
   {% if not single %}{% set st = totals.stacked %}
     <h2>All services · daily usage <small>{% if st and st.range %}{{ st.range }}{% else %}{{ month }}{% endif %}{% if st and st.base_per_day %} · dashed line = combined baseline per day ${{ "%.2f"|format(st.base_per_day) }}{% endif %}</small></h2>
+    {% if totals.hidden %}
+    <p class="muted small spend-hidden-note">Hidden from the chart: {{ totals.hidden|length }} service{{ 's' if totals.hidden|length > 1 }}. <a href="/projections?hide=">Show all</a></p>
+    {% endif %}
     {% if st %}
     <div class="spend-chart">
       <div class="intensity-chart spend-stack">
-        {% for d in st.days %}<span class="day{% if d.future %} future{% elif not d.segments %} empty{% endif %}" title="{{ d.label }}{% if not d.future %}: ${{ '%.2f'|format(d.total) }}{% endif %}">{% for g in d.segments %}<a href="/projections/{{ g.service }}" style="height: {{ g.pct }}%; background: {{ g.color }}" title="{{ d.label }} · {{ g.label }} ${{ '%.2f'|format(g.cost) }} (day ${{ '%.2f'|format(d.total) }})" aria-label="{{ g.label }}, {{ d.label }}, ${{ '%.2f'|format(g.cost) }}"></a>{% endfor %}</span>{% endfor %}
-        {% if st.base_pct %}<span class="spend-baseline" style="bottom: {{ st.base_pct }}%"></span>{% endif %}
+        {% for d in st.days %}<span class="day{% if d.future %} future{% elif not d.segments %} empty{% endif %}{% if d.clipped %} clipped{% endif %}" title="{{ d.label }}{% if not d.future %}: ${{ '%.2f'|format(d.total) }}{% endif %}">{% for g in d.segments %}<a href="/projections/{{ g.service }}" style="height: {{ g.pct }}%; background: {{ g.color }}"{% if g.prepaid or g.broken %} class="{{ 'prepaid' if g.prepaid }}{{ ' ' if g.prepaid and g.broken }}{{ 'broken' if g.broken }}"{% endif %} title="{{ d.label }} · {{ g.label }} ${{ '%.2f'|format(g.cost) }}{% if g.prepaid %} (prepaid top-up, not daily usage){% endif %} (day ${{ '%.2f'|format(d.total) }})" aria-label="{{ g.label }}, {{ d.label }}, ${{ '%.2f'|format(g.cost) }}{% if g.prepaid %}, prepaid top-up{% endif %}"></a>{% endfor %}{% if d.clipped %}<span class="spend-clip-label{% if loop.index0 >= st.days|length // 2 %} end{% endif %}">${{ '%.2f'|format(d.total) }}</span>{% endif %}</span>{% endfor %}
+        {% if st.base_pct %}<span class="spend-baseline" style="--f: {{ st.base_pct / 100 }}"></span>{% endif %}
       </div>
-      <div class="spend-axis muted small"><span>{{ st.days[0].label }}</span><span>tallest day ${{ "%.2f"|format(st.top) }}</span><span>{{ st.days[-1].label }}</span></div>
+      <div class="spend-axis muted small"><span>{{ st.days[0].label }}</span><span>{% if st.cap %}scale capped at ${{ "%.2f"|format(st.cap) }} · {% endif %}tallest day ${{ "%.2f"|format(st.top) }}</span><span>{{ st.days[-1].label }}</span></div>
     </div>
+    {% if st.cap or st.has_prepaid %}
+    <p class="muted small spend-legend">{% if st.cap %}<span class="spend-key-break"></span> A broken bar ran past the scale; its real total is printed on top. {% endif %}{% if st.has_prepaid %}<span class="spend-key-prepaid"></span> Hatched = prepaid top-up, booked the day it was paid, not daily usage.{% endif %}</p>
+    {% endif %}
+    {% elif totals.hidden %}
+    <p class="muted">Every service with daily usage is hidden. <a href="/projections?hide=">Show all</a></p>
     {% else %}
     <p class="muted">No usage-billed service has data yet.</p>
     {% endif %}
@@ -62,15 +91,16 @@
     <p class="muted small spend-fixed">Fixed plans, not in the bars: {% for f in totals.fixed %}<span class="spend-fixed-item" style="--c: {{ f.color }}">{{ f.label }} ${{ money(f.amount) }}</span>{% if not loop.last %}, {% endif %}{% endfor %}
     (${{ money(totals.fixed_total) }} this period). They are in the totals above.</p>
     {% endif %}
-    <p class="muted small">Tap a service, or its part of a bar, to see it against its own baseline.</p>
+    <p class="muted small">Tap a service, or its part of a bar, to see it against its own baseline. Untick the box beside it to leave it out of this chart; the totals above still count it.</p>
   {% elif focus and focus.chart %}{% set s = focus.s %}{% set c = focus.chart %}
     <h2>{{ s.label }} · daily <small>{{ c.range }}{% if c.base_per_day %} · dashed line = baseline per day ${{ "%.2f"|format(c.base_per_day) }}{% endif %}</small></h2>
     <div class="spend-chart">
       <div class="intensity-chart" style="--c: {{ focus.color }}">
-        {% for d in c.days %}<span class="bar{% if not d.cost %} bar-empty{% endif %}" style="height: {{ [d.pct, 1]|max }}%" title="{{ d.label }}: ${{ '%.2f'|format(d.cost) }}"></span>{% endfor %}
+        {% for d in c.days %}<span class="bar{% if not d.cost %} bar-empty{% elif focus.prepaid %} prepaid{% endif %}" style="height: {{ [d.pct, 1]|max }}%" title="{{ d.label }}: ${{ '%.2f'|format(d.cost) }}{% if focus.prepaid and d.cost %} (prepaid top-up, not daily usage){% endif %}"></span>{% endfor %}
         {% if c.base_pct %}<span class="spend-baseline" style="bottom: {{ c.base_pct }}%"></span>{% endif %}
       </div>
     </div>
+    {% if focus.prepaid %}<p class="muted small spend-legend"><span class="spend-key-prepaid"></span> Hatched = prepaid top-up receipts, booked the day each was paid. Usage behind them is not daily.</p>{% endif %}
   {% elif focus %}
     <h2>{{ focus.s.label }}</h2>
     <p class="muted">{% if focus.s.kind == "api" %}No daily usage on record for this period yet.{% else %}A fixed or invoiced plan, so there is no daily usage to chart.{% endif %}</p>
