@@ -510,7 +510,9 @@ class Tab(Case):
             self.add(group="option-a")
             self.run_at(fares(400))
             client = TestClient(dash_app.create_app(tabs.Registry(), home / "no-plugins", home / "no-tabs"))
-            got = client.get("/tripwires").text
+            # The tab reads the wall clock; pin it so the "under 3 days" wording holds after T0 + 3 days.
+            with mock.patch.object(tw, "utcnow", return_value=T0 + timedelta(hours=1)):
+                got = client.get("/tripwires").text
         self.assertIn("flight fare drops: JFK-LAX 2026-12-15, economy, max 1 stop", got)
         self.assertIn("average after 3 days of checks, first USD 400, lowest USD 400, last alert -", got)
         self.assertIn("Open on Google Flights", got)
