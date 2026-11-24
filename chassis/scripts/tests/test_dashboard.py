@@ -170,6 +170,8 @@ class TabLoading(DashboardCase):
         c, _ = self.client()
         r = c.get("/st", follow_redirects=False)
         self.assertEqual((r.status_code, r.headers["location"]), (307, "/st/"))
+        r = c.get("/st?week=2026-W47&x=1", follow_redirects=False)
+        self.assertEqual((r.status_code, r.headers["location"]), (307, "/st/?week=2026-W47&x=1"))
         r = c.get("/st")
         self.assertEqual(r.status_code, 200)
         self.assertIn("via-state", r.text)

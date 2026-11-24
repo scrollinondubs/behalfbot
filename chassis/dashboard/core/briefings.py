@@ -88,7 +88,7 @@ legacy_root = APIRouter()
 
 
 @legacy_root.get("/{rel:path}", include_in_schema=False)
-def briefing_at_root(rel: str):
+def briefing_at_root(rel: str, request: Request):
     # The pre-dashboard server served the briefings dir at /. Registered last,
     # so it only sees paths no tab claimed. Being a catch-all it also swallows
     # the trailing-slash redirect for a tab whose router serves "/", so do
@@ -97,5 +97,8 @@ def briefing_at_root(rel: str):
         return FileResponse(briefing_file(rel))
     except HTTPException:
         if "/" + rel.rstrip("/") in {t.prefix for t in current_registry().tabs} and not rel.endswith("/"):
-            return RedirectResponse(url=f"/{rel}/")
+            # Keep the query string: /bfl?week=2026-W47 must land on
+            # /bfl/?week=2026-W47, not the current week.
+            query = request.url.query
+            return RedirectResponse(url=f"/{rel}/" + (f"?{query}" if query else ""))
         raise
