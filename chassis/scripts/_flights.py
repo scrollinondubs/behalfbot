@@ -216,7 +216,8 @@ def reference(rec: dict, now: datetime) -> tuple[float | None, str]:
         return first, (f"the first fare seen, {money(first, cur)} on {first_at[:10]} "
                        f"(under 3 days of history, so no average yet)")
     avg = sum(window) / len(window)
-    return avg, f"the 14-day average {money(round(avg), cur)} ({len(window)} checks)"
+    checks = f"{len(window)} check" + ("s" if len(window) != 1 else "")
+    return avg, f"the 14-day average {money(round(avg), cur)} ({checks})"
 
 
 def fares_label(rec: dict, now: datetime) -> str:

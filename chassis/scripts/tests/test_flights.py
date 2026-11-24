@@ -298,7 +298,8 @@ class FlexAndGroup(Case):
     def test_searches_each_day_and_alerts_on_the_cheapest_with_its_date_and_link(self) -> None:
         tid = self.add(date_str="2026-12-27", flex_days=1, group="option-b")
         rec = self.rec(tid)
-        self.assertEqual((rec["name"], rec["expires_at"][:10]), ("Fare JFK-LAX 2026-12-27 ±1d (option-b)", "2026-12-29"))
+        self.assertEqual((rec["name"], rec["expires_at"]),
+                         ("Fare JFK-LAX 2026-12-27 ±1d (option-b)", tw.iso(tw.parse_expiry("2026-12-28", T0))))
         fetch, asked = self.by_day({"2026-12-26": 420, "2026-12-27": 400, "2026-12-28": 410})
         self.run_with(fetch)
         self.assertEqual(asked, ["2026-12-26", "2026-12-27", "2026-12-28"])
