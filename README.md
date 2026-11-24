@@ -124,6 +124,8 @@ Refer to `chassis/scripts/migrate-customer-state.sh --help` for flag details. Th
 
 Total wall-clock time, wizard-assisted: 30-45 minutes once your accounts are provisioned. Self-serve from cold: 2-4 hours typical, more if you're new to Docker / Tailscale / Vaultwarden.
 
+Running an operator agent that hands a project to an installer's agent and works alongside it? See [`docs/managed-install-agent-collab.md`](docs/managed-install-agent-collab.md) for the repo and data handoff, scoped Discord access, the agent's two gates and the kickoff.
+
 ---
 
 ## Status
