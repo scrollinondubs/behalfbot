@@ -1,0 +1,18 @@
+{
+  "id": "podia-capture",
+  "task": "Podia (the person's own creator account): read-only walk of the logged-in site and admin so the pages, product structure and member-only views can be rebuilt elsewhere before Podia access ends. Capture only; never change, publish, delete or send anything",
+  "allow": ["podia.com"],
+  "start_url": "https://app.podia.com/",
+  "steps": [
+    { "id": "signin", "human": "Sign in to Podia in this tab. Press Done when you see your Podia dashboard." },
+    { "id": "inventory", "do": "List every product, page, community and email sequence the dashboard shows, with its URL. Report the list in the chat before opening anything." },
+    { "id": "walk", "do": "Open each item Jax names in the chat, one at a time, as the creator and in the customer preview. Snapshot the text and structure (sections, lessons, file names, prices shown). Do not press save, publish, delete, send or any toggle." },
+    { "id": "downloads", "human": "If Jax asks for a file that only downloads through a button, press the download yourself, then Done." }
+  ],
+  "accept": "Jax has a written inventory of every product and page, plus snapshots of each member-only view the person approved, stored in the install's intake folder. Nothing in the Podia account changed.",
+  "notes": [
+    "Read-only by design: every step is snapshot or navigate. No form submits.",
+    "Customer lists, orders and emails are personal data: do not open the Audience or Sales pages unless the person asks, and never snapshot them into chat.",
+    "No save_secret step: nothing here creates a credential."
+  ]
+}

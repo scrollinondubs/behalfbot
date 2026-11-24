@@ -15,6 +15,7 @@ import googleContactsExport from '../../../runbooks/google-contacts-export.json'
 import outlookContactsExport from '../../../runbooks/outlook-contacts-export.json' with { type: 'json' }
 import icloudContactsExport from '../../../runbooks/icloud-contacts-export.json' with { type: 'json' }
 import anthropicAdminKey from '../../../runbooks/anthropic-admin-key.json' with { type: 'json' }
+import podiaCapture from '../../../runbooks/podia-capture.json' with { type: 'json' }
 
 export interface Runbook {
   id: string
@@ -41,6 +42,7 @@ const ALL: Runbook[] = [
   outlookContactsExport as Runbook,
   icloudContactsExport as Runbook,
   anthropicAdminKey as Runbook,
+  podiaCapture as Runbook,
 ]
 
 export function runbook(id: string): Runbook | null {
