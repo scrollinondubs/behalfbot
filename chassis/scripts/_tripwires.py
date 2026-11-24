@@ -10,6 +10,8 @@ by host dashboards.
 
 Fetched pages are untrusted. Nothing from a response body, header or reason
 phrase is ever stored or sent; only our own fixed strings and a sha256 are.
+The one exception is a flight_price fare, whose fields pass the validation in
+_flights.py (codes, times and numbers by pattern) before they are kept.
 
 The store is shared across a virtiofs bind mount, measured on Colima on
 2026-11-03:
@@ -43,7 +45,8 @@ from typing import Callable, Iterator
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
-import _realestate as realestate  # noqa: E402  (stdlib only, same directory)
+import _flights as flights  # noqa: E402  (stdlib only, same directory)
+import _realestate as realestate  # noqa: E402
 
 ACTIVE, FIRED, EXPIRED, CANCELLED, ARCHIVED = "active", "fired", "expired", "cancelled", "archived"
 CHECK_TYPES = {
@@ -52,10 +55,11 @@ CHECK_TYPES = {
     "page_changed": "page changed",
     "http_status": "HTTP status equals",
     "realestate": "real-estate listings in passing zones",
+    "flight_price": "flight fare drops",
 }
 URL_CHECKS = ("text_appears", "text_disappears", "page_changed", "http_status")
 # Checks whose every "met" is a new event, so they never latch condition_met.
-EVENT_CHECKS = ("page_changed", "realestate")
+EVENT_CHECKS = ("page_changed", "realestate", "flight_price")
 
 MIN_INTERVAL_S = 15 * 60  # the dispatcher ticks every 15 minutes
 FAILURE_ALERT_AFTER = 3
@@ -336,6 +340,39 @@ def add_realestate(store: Store, *, name: str | None, why: str | None, zones_pat
     return record, True
 
 
+def add_flight(store: Store, *, origin: str | None, destination: str | None, date_str: str | None,
+               max_stops: str | None = "one", currency: str | None = "EUR", drop_pct=flights.DEFAULT_DROP_PCT,
+               max_price=None, fare_class: str | None = "any", market: str | None = None,
+               flex_days: int | str | None = 0, group: str | None = None, max_duration_hours=None,
+               name: str | None = None, why: str | None = None, every: str | None = "6h",
+               expires: str | None = None, message: str | None = None, expiry_message: str | None = None,
+               now: datetime | None = None) -> dict:
+    """A flight_price tripwire. It always keeps watching: each fare below the
+    last one alerted is a new alert, until it expires (by default at the end
+    of the flight date)."""
+    now = now or utcnow()
+    try:
+        params = flights.validate_params(origin=origin, destination=destination, date_str=date_str,
+                                         max_stops=max_stops, currency=currency, drop_pct=drop_pct,
+                                         max_price=max_price, fare_class=fare_class, market=market,
+                                         flex_days=flex_days, group=group,
+                                         max_duration_hours=max_duration_hours, today=now.astimezone().date())
+    except flights.FlightError as e:
+        raise TripwireError(str(e)) from None
+    label = flights.leg(params)
+    last_day = (date.fromisoformat(params["date"]) + timedelta(days=params["flex_days"])).isoformat()
+    default_name = f"Fare {label}" + (f" ({params['group']})" if params["group"] else "")
+    record = _record({"check": "flight_price", "params": params}, name=name or default_name,
+                     why=why or f"Fare watch for {label}", every=every or "6h",
+                     expires=expires or last_day, message=message or f"Fare drop on {label}",
+                     expiry_message=expiry_message, keep_watching=True, now=now)
+    record.update({"baseline_price": None, "baseline_at": None, "last_alerted_price": None,
+                   "lowest_price": None, "history": []})
+    with store.transaction(create=True) as tripwires:
+        tripwires[record["id"]] = record
+    return record
+
+
 def update_criteria(store: Store, tripwire_id: str, form: dict[str, str], now: datetime | None = None) -> dict:
     with store.transaction() as tripwires:
         rec = _get(tripwires, tripwire_id)
@@ -507,12 +544,18 @@ class Observation:
     result: str   # shown to the user; only ever our own wording
     seen: bool = False
     page_hash: str | None = None
-    detail: str = ""           # realestate: our own lines about the new listings
+    detail: str = ""           # realestate and flight_price: our own lines for the alert
     new_ids: list | None = None
+    price: float | None = None  # flight_price: the cheapest eligible fare
 
 
-def evaluate(rec: dict, fetch: Fetch = fetch_url, home: Path | None = None) -> Observation:
-    """`home` is the customer home realestate paths resolve against."""
+def evaluate(rec: dict, fetch: Fetch = fetch_url, home: Path | None = None,
+             flight_fetch: "flights.FlightFetch | None" = None, now: datetime | None = None) -> Observation:
+    """`home` is the customer home realestate paths resolve against.
+    `flight_fetch` is the fare source; Firecrawl's by default."""
+    if rec["check"] == "flight_price":
+        got = flights.observe(rec, flight_fetch, now or utcnow())
+        return Observation(got.outcome, got.result, detail=got.detail, price=got.price)
     if rec["check"] == "realestate":
         if home is None:
             from _paths import customer_home
@@ -626,6 +669,8 @@ def apply_observation(rec: dict, obs: Observation, now: datetime) -> None:
         rec["seen"] = rec["seen"] or obs.seen
         if obs.page_hash:
             rec["baseline_hash"] = obs.page_hash
+        if obs.price is not None:
+            flights.record_price(rec, obs.price, now)
         if obs.outcome == "met":
             # keep_watching fires when the condition becomes true, not on every
             # check while it stays true. Each page change is a new event.
@@ -639,6 +684,14 @@ def apply_observation(rec: dict, obs: Observation, now: datetime) -> None:
                     rec["fire_count"] += 1
                     kind = FIRED if not rec["keep_watching"] else "refire"
                     rec["outbox"].append({"kind": kind, "text": fired_text(rec, obs.detail)})
+            elif obs.price is not None:
+                # Checked again on this fresh read: an overlapping run may
+                # already have alerted at this price or lower.
+                last = rec.get("last_alerted_price")
+                if last is None or obs.price < last:
+                    rec["last_alerted_price"] = obs.price
+                    rec["fire_count"] += 1
+                    rec["outbox"].append({"kind": "refire", "text": fired_text(rec, obs.detail)})
             elif not rec["condition_met"]:
                 rec["fire_count"] += 1
                 kind = FIRED if not rec["keep_watching"] else "refire"
@@ -672,8 +725,27 @@ def _deliver(store: Store, notify: Notify, now: datetime) -> tuple[int, int]:
     return sent, failed
 
 
+def _apply(store: Store, tripwire_id: str, obs: Observation, now: datetime) -> None:
+    with store.transaction() as current:
+        rec = current.get(tripwire_id)
+        if rec and rec["status"] == ACTIVE:
+            apply_observation(rec, obs, now)
+
+
+def check_now(store: Store, tripwire_id: str, now: datetime | None = None,
+              flight_fetch: "flights.FlightFetch | None" = None) -> Observation:
+    """One check of one tripwire, recorded like a heartbeat check. add-flight
+    uses it so the fare it prints is the baseline it keeps. Sends nothing;
+    anything it queues goes out on the next tick."""
+    now = now or utcnow()
+    obs = evaluate(_get(store.read(), tripwire_id), flight_fetch=flight_fetch, now=now)
+    _apply(store, tripwire_id, obs, now)
+    return obs
+
+
 def run_due(store: Store, fetch: Fetch = fetch_url, notify: Notify | None = None,
-            now: datetime | None = None, budget_s: float = RUN_BUDGET_S, home: Path | None = None) -> dict:
+            now: datetime | None = None, budget_s: float = RUN_BUDGET_S, home: Path | None = None,
+            flight_fetch: "flights.FlightFetch | None" = None) -> dict:
     """One heartbeat tick. Checks happen outside the lock, and each result is
     applied to a fresh read, so a cancel that lands during a fetch wins."""
     notify = notify or send_notification
@@ -685,12 +757,9 @@ def run_due(store: Store, fetch: Fetch = fetch_url, notify: Notify | None = None
     for snapshot in due:
         if time.monotonic() - started > budget_s:
             break
-        obs = evaluate(snapshot, fetch, home)
+        obs = evaluate(snapshot, fetch, home, flight_fetch, now)
         checked += 1
-        with store.transaction() as current:
-            rec = current.get(snapshot["id"])
-            if rec and rec["status"] == ACTIVE:
-                apply_observation(rec, obs, now)
+        _apply(store, snapshot["id"], obs, now)
     sent, failed = _deliver(store, notify, now)
     store.mark_run(now)
     active = sum(1 for r in store.read().values() if r["status"] == ACTIVE)
@@ -747,6 +816,9 @@ def _row(rec: dict, now: datetime) -> dict:
     params = rec["params"]
     target = {"text_appears": params.get("text"), "text_disappears": params.get("text"),
               "http_status": params.get("status"), "realestate": params.get("zones_path")}.get(rec["check"])
+    is_flight = rec["check"] == "flight_price"
+    if is_flight:
+        target = flights.summary(params)
     active = rec["status"] == ACTIVE
     blind = active and rec.get("last_outcome") == "could_not_check"
     if not active:
@@ -761,6 +833,9 @@ def _row(rec: dict, now: datetime) -> dict:
         "target": target,
         "url": params.get("url"),
         "is_realestate": rec["check"] == "realestate",
+        "is_flight": is_flight,
+        "fares_label": flights.fares_label(rec, now) if is_flight else None,
+        "group": params.get("group") if is_flight else None,
         "active": active,
         "blind": blind,
         "last_checked_label": relative(parse("last_checked"), now),

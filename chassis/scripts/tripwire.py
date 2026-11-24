@@ -9,6 +9,16 @@
   tripwire.py archive <id>
   tripwire.py probe --check text_appears --url https://example.com --text "example"
   tripwire.py add-realestate --seed config/tripwires/land.json
+  tripwire.py add-flight --from JFK --to LAX --date 2026-12-15 --max-stops one \
+      --currency USD --drop-pct 15 [--max-price 300] [--fare-class main] --every 6h
+  tripwire.py probe --check flight_price --from JFK --to LAX --date 2026-12-15
+
+`add-flight` watches the cheapest economy fare for one one-way leg (over
+--flex-days either side of the date) and alerts when it is --drop-pct below the
+average of the last 14 days of checks, or below the first fare until there are
+3 days of them. It expires at the end of the last date searched unless
+--expires says otherwise, and it checks once straight away. --group labels
+which trip option a leg belongs to. Needs FIRECRAWL_API_KEY.
 
 `add-realestate` reads a seed file (name, why, zones_path, listings_path,
 criteria, every, expires, message, seed_key). Re-running it while that seed's
@@ -28,23 +38,76 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _tripwires as tw  # noqa: E402
 
 
-def check_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--check", required=True, choices=sorted(tw.URL_CHECKS))
-    parser.add_argument("--url", required=True)
+def check_args(parser: argparse.ArgumentParser, probing: bool = False) -> None:
+    checks = sorted(tw.URL_CHECKS) + (["flight_price"] if probing else [])
+    parser.add_argument("--check", required=True, choices=checks)
+    parser.add_argument("--url", required=not probing)
     parser.add_argument("--text", help="for text_appears and text_disappears; case-insensitive")
     parser.add_argument("--status", help="for http_status")
     parser.add_argument("--allow-private", action="store_true",
                         help="permit loopback and private addresses, which are refused by default")
 
 
+def flight_args(parser: argparse.ArgumentParser, required: bool) -> None:
+    parser.add_argument("--from", dest="origin", required=required, help="airport code, e.g. JFK")
+    parser.add_argument("--to", dest="destination", required=required, help="airport code, e.g. LAX")
+    parser.add_argument("--date", required=required, help="departure date, YYYY-MM-DD")
+    parser.add_argument("--max-stops", choices=sorted(tw.flights.MAX_STOPS), default="one")
+    parser.add_argument("--currency", default="EUR")
+    parser.add_argument("--drop-pct", default=tw.flights.DEFAULT_DROP_PCT, type=float,
+                        help="alert at this percent below the baseline (default 15)")
+    parser.add_argument("--max-price", type=float, help="never alert above this fare")
+    parser.add_argument("--fare-class", choices=tw.flights.FARE_CLASSES, default="any",
+                        help="main: wants no Basic Economy. Recorded and stated in alerts, NOT enforced: "
+                             "the fare source shows no fare family")
+    parser.add_argument("--market", help="2-letter Google sales market, e.g. US; Google's default if unset")
+    parser.add_argument("--flex-days", type=int, default=0,
+                        help="also search this many days either side of --date (0-3); one paid call per day")
+    parser.add_argument("--group", help="which trip option this leg belongs to, e.g. jan-4-option-a")
+    parser.add_argument("--max-duration-hours", type=float,
+                        help="ignore itineraries longer than this, door to door (e.g. 20)")
+
+
+def flight_params(args: argparse.Namespace) -> dict:
+    try:
+        return tw.flights.validate_params(
+            origin=args.origin, destination=args.destination, date_str=args.date, max_stops=args.max_stops,
+            currency=args.currency, drop_pct=args.drop_pct, max_price=args.max_price,
+            fare_class=args.fare_class, market=args.market, flex_days=args.flex_days, group=args.group,
+            max_duration_hours=args.max_duration_hours)
+    except tw.flights.FlightError as e:
+        raise tw.TripwireError(str(e)) from None
+
+
 def probe(check: dict) -> tw.Observation:
-    return tw.evaluate({**check, "seen": False, "baseline_hash": None})
+    return tw.evaluate({**check, "seen": False, "baseline_hash": None, "baseline_price": None})
 
 
 def probe_line(obs: tw.Observation) -> str:
     if obs.outcome == "could_not_check":
         return f"first look: {obs.result}. This check may never work on this page."
-    return f"first look: {obs.result}"
+    line = f"first look: {obs.result}"
+    return f"{line}\n  {obs.detail}" if obs.price is not None and obs.detail else line
+
+
+def cmd_add_flight(args: argparse.Namespace, store: tw.Store) -> int:
+    rec = tw.add_flight(store, origin=args.origin, destination=args.destination, date_str=args.date,
+                        max_stops=args.max_stops, currency=args.currency, drop_pct=args.drop_pct,
+                        max_price=args.max_price, fare_class=args.fare_class, market=args.market,
+                        flex_days=args.flex_days, group=args.group,
+                        max_duration_hours=args.max_duration_hours, name=args.name, why=args.why, every=args.every, expires=args.expires,
+                        message=args.message, expiry_message=args.expiry_message)
+    print(f"added {rec['id']}: {rec['name']} (every {args.every.strip()}, expires {rec['expires_at']})")
+    print(f"  {tw.flights.summary(rec['params'])}\n  {rec['params']['url']}")
+    if args.fare_class == "main":
+        print("  note: fare family cannot be checked, so a Basic Economy fare can still trigger it")
+    if not args.no_probe:
+        obs = tw.check_now(store, rec["id"])
+        if obs.outcome == "could_not_check":
+            print(f"first look: {obs.result}. No baseline yet; the heartbeat retries every interval.")
+        else:
+            print(probe_line(obs))
+    return 0
 
 
 def cmd_add(args: argparse.Namespace, store: tw.Store) -> int:
@@ -89,6 +152,8 @@ def cmd_list(args: argparse.Namespace, store: tw.Store) -> int:
               f"  last checked {r['last_checked_label']}: {r['last_result'] or 'not yet'}"
               f"; next {r['next_check_label']}; expires {r['expires_label']}"
               f"; failures in a row {r['consecutive_failures']}")
+        if r["is_flight"]:
+            print(f"  {r['target']}" + (f" [{r['group']}]" if r["group"] else "") + f"\n  {r['fares_label']}")
     if not rows:
         print("no tripwires")
     return 0
@@ -116,9 +181,21 @@ def main() -> int:
     p = sub.add_parser("add-realestate", help="add a realestate tripwire from a seed file")
     p.add_argument("--seed", required=True)
 
+    p = sub.add_parser("add-flight", help="watch the cheapest economy fare on one leg")
+    flight_args(p, required=True)
+    p.add_argument("--every", default="6h", help="at least 15m; 6h by default")
+    p.add_argument("--expires", help="default: the end of the last date searched")
+    p.add_argument("--name", help="default: Fare <FROM>-<TO> <date>")
+    p.add_argument("--why", help="default: Fare watch for the leg")
+    p.add_argument("--message", help="first line of each alert; default: Fare drop on the leg")
+    p.add_argument("--expiry-message", help="extra line for the expiry message")
+    p.add_argument("--no-probe", action="store_true", help="skip the first check; the heartbeat makes it")
+
     sub.add_parser("cancel").add_argument("id")
     sub.add_parser("archive").add_argument("id")
-    check_args(sub.add_parser("probe"))
+    p = sub.add_parser("probe")
+    check_args(p, probing=True)
+    flight_args(p, required=False)
 
     args = parser.parse_args()
     store = tw.Store()
@@ -127,12 +204,16 @@ def main() -> int:
             return cmd_add(args, store)
         if args.cmd == "add-realestate":
             return cmd_add_realestate(args, store)
+        if args.cmd == "add-flight":
+            return cmd_add_flight(args, store)
         if args.cmd == "list":
             return cmd_list(args, store)
         if args.cmd == "cancel":
             print(f"cancelled {tw.cancel(store, args.id)['id']}")
         elif args.cmd == "archive":
             print(f"archived {tw.archive(store, args.id)['id']}")
+        elif args.cmd == "probe" and args.check == "flight_price":
+            print(probe_line(probe({"check": "flight_price", "params": flight_params(args)})))
         elif args.cmd == "probe":
             print(probe_line(probe(tw.build_check(args.check, args.url, args.text, args.status,
                                                   args.allow_private))))
