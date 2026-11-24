@@ -93,7 +93,8 @@ def validate_params(*, origin: str | None, destination: str | None, date_str: st
                     max_stops: str | None = "one", currency: str | None = "EUR",
                     drop_pct: float | str | None = DEFAULT_DROP_PCT, max_price: float | str | None = None,
                     fare_class: str | None = "any", market: str | None = None, flex_days: int | str | None = 0,
-                    group: str | None = None, today: date | None = None) -> dict:
+                    group: str | None = None, max_duration_hours: float | str | None = None,
+                    today: date | None = None) -> dict:
     params: dict = {"origin": _airport(origin, "from"), "destination": _airport(destination, "to")}
     if params["origin"] == params["destination"]:
         raise FlightError("from and to must differ")
@@ -131,6 +132,10 @@ def validate_params(*, origin: str | None, destination: str | None, date_str: st
     params["group"] = (group or "").strip() or None
     if params["group"] and not _GROUP.fullmatch(params["group"]):
         raise FlightError("group must be up to 40 letters, digits, spaces, dots, dashes or underscores")
+    params["max_duration_hours"] = (None if max_duration_hours in (None, "")
+                                    else _number(max_duration_hours, "max duration hours"))
+    if params["max_duration_hours"] is not None and not 1 <= params["max_duration_hours"] <= 72:
+        raise FlightError("max duration hours must be between 1 and 72")
     params["url"] = google_flights_url(params)
     return params
 
@@ -175,6 +180,8 @@ def summary(params: dict) -> str:
            f"alert at {params['drop_pct']:g}% below the 14-day average")
     if params.get("max_price") is not None:
         out += f" and at most {money(params['max_price'], params['currency'])}"
+    if params.get("max_duration_hours") is not None:
+        out += f", trips up to {params['max_duration_hours']:g}h"
     if params.get("fare_class") == "main":
         out += ", wants main cabin (unverified)"
     return out
@@ -343,8 +350,12 @@ class Result:
 
 
 def eligible(fares: list[Fare], params: dict) -> list[Fare]:
+    """A duration cap also drops fares whose duration is not given: a fare that
+    cannot be shown to fit must not set the price."""
     limit = MAX_STOPS[params["max_stops"]]
-    return [f for f in fares if f.economy and f.stops <= limit and f.currency == params["currency"]]
+    cap = params.get("max_duration_hours")
+    return [f for f in fares if f.economy and f.stops <= limit and f.currency == params["currency"]
+            and (cap is None or (f.duration_min is not None and f.duration_min <= cap * 60))]
 
 
 def fare_line(f: Fare) -> str:
@@ -385,8 +396,9 @@ def _cheapest(params: dict, fetch: FlightFetch, today: date) -> tuple[Fare | Non
         ok = eligible(fares, params)
         if not ok:
             return None, (f"could not check: no economy fare in {params['currency']} with "
-                          f"{'no stops' if params['max_stops'] == 'nonstop' else 'at most 1 stop'} "
-                          f"among {len(fares)} returned for {day}")
+                          f"{'no stops' if params['max_stops'] == 'nonstop' else 'at most 1 stop'}"
+                          + (f" within {params['max_duration_hours']:g}h" if params.get("max_duration_hours") else "")
+                          + f" among {len(fares)} returned for {day}")
         for f in ok:
             f.day = day
         cheapest = min(ok, key=lambda f: f.price)

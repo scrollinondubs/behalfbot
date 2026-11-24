@@ -343,7 +343,8 @@ def add_realestate(store: Store, *, name: str | None, why: str | None, zones_pat
 def add_flight(store: Store, *, origin: str | None, destination: str | None, date_str: str | None,
                max_stops: str | None = "one", currency: str | None = "EUR", drop_pct=flights.DEFAULT_DROP_PCT,
                max_price=None, fare_class: str | None = "any", market: str | None = None,
-               flex_days: int | str | None = 0, group: str | None = None, name: str | None = None, why: str | None = None, every: str | None = "6h",
+               flex_days: int | str | None = 0, group: str | None = None, max_duration_hours=None,
+               name: str | None = None, why: str | None = None, every: str | None = "6h",
                expires: str | None = None, message: str | None = None, expiry_message: str | None = None,
                now: datetime | None = None) -> dict:
     """A flight_price tripwire. It always keeps watching: each fare below the
@@ -354,7 +355,8 @@ def add_flight(store: Store, *, origin: str | None, destination: str | None, dat
         params = flights.validate_params(origin=origin, destination=destination, date_str=date_str,
                                          max_stops=max_stops, currency=currency, drop_pct=drop_pct,
                                          max_price=max_price, fare_class=fare_class, market=market,
-                                         flex_days=flex_days, group=group, today=now.astimezone().date())
+                                         flex_days=flex_days, group=group,
+                                         max_duration_hours=max_duration_hours, today=now.astimezone().date())
     except flights.FlightError as e:
         raise TripwireError(str(e)) from None
     label = flights.leg(params)

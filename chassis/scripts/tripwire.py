@@ -64,6 +64,8 @@ def flight_args(parser: argparse.ArgumentParser, required: bool) -> None:
     parser.add_argument("--flex-days", type=int, default=0,
                         help="also search this many days either side of --date (0-3); one paid call per day")
     parser.add_argument("--group", help="which trip option this leg belongs to, e.g. jan-4-option-a")
+    parser.add_argument("--max-duration-hours", type=float,
+                        help="ignore itineraries longer than this, door to door (e.g. 20)")
 
 
 def flight_params(args: argparse.Namespace) -> dict:
@@ -71,7 +73,8 @@ def flight_params(args: argparse.Namespace) -> dict:
         return tw.flights.validate_params(
             origin=args.origin, destination=args.destination, date_str=args.date, max_stops=args.max_stops,
             currency=args.currency, drop_pct=args.drop_pct, max_price=args.max_price,
-            fare_class=args.fare_class, market=args.market, flex_days=args.flex_days, group=args.group)
+            fare_class=args.fare_class, market=args.market, flex_days=args.flex_days, group=args.group,
+            max_duration_hours=args.max_duration_hours)
     except tw.flights.FlightError as e:
         raise tw.TripwireError(str(e)) from None
 
@@ -91,7 +94,8 @@ def cmd_add_flight(args: argparse.Namespace, store: tw.Store) -> int:
     rec = tw.add_flight(store, origin=args.origin, destination=args.destination, date_str=args.date,
                         max_stops=args.max_stops, currency=args.currency, drop_pct=args.drop_pct,
                         max_price=args.max_price, fare_class=args.fare_class, market=args.market,
-                        flex_days=args.flex_days, group=args.group, name=args.name, why=args.why, every=args.every, expires=args.expires,
+                        flex_days=args.flex_days, group=args.group,
+                        max_duration_hours=args.max_duration_hours, name=args.name, why=args.why, every=args.every, expires=args.expires,
                         message=args.message, expiry_message=args.expiry_message)
     print(f"added {rec['id']}: {rec['name']} (every {args.every.strip()}, expires {rec['expires_at']})")
     print(f"  {tw.flights.summary(rec['params'])}\n  {rec['params']['url']}")

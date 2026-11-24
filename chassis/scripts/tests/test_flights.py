@@ -332,6 +332,30 @@ class FlexAndGroup(Case):
                 self.add(**kw)
 
 
+class DurationCap(Case):
+    def test_long_itineraries_are_dropped_before_the_cheapest_is_picked(self) -> None:
+        tid = self.add(max_duration_hours=20)
+        self.run_at(fl.parse_alexandria(payload([flight(300, duration=32 * 60 + 15), flight(450, duration=20 * 60),
+                                                 flight(200, duration=None)])))
+        self.assertEqual(self.rec(tid)["baseline_price"], 450.0)
+
+    def test_none_within_the_cap_is_could_not_check(self) -> None:
+        tid = self.add(max_duration_hours=20)
+        self.run_at(fares(300, duration=32 * 60))
+        rec = self.rec(tid)
+        self.assertEqual(rec["last_result"], "could not check: no economy fare in USD with at most 1 stop "
+                                             "within 20h among 1 returned for 2026-12-15")
+        self.assertIsNone(rec["baseline_price"])
+
+    def test_cap_is_validated_and_shown(self) -> None:
+        for bad in (0, 100, "x"):
+            with self.subTest(bad), self.assertRaises(tw.TripwireError):
+                self.add(max_duration_hours=bad)
+        tid = self.add(max_duration_hours=20)
+        self.assertIn(", trips up to 20h", tw.view(self.store, now=T0)["rows"][0]["target"])
+        self.assertEqual(self.rec(tid)["params"]["max_duration_hours"], 20.0)
+
+
 class Honesty(Case):
     """An empty or failed fetch is never "no flights" or "price unchanged"."""
 
@@ -443,15 +467,16 @@ class Cli(unittest.TestCase):
     def test_add_flight_list_and_a_first_check_without_a_key(self) -> None:
         out = self.cli("add-flight", "--from", "JFK", "--to", "LAX", "--date", "2099-12-15",
                        "--currency", "USD", "--max-stops", "nonstop", "--max-price", "300",
-                       "--fare-class", "main").stdout
+                       "--fare-class", "main", "--max-duration-hours", "20").stdout
         tid = out.split()[1].rstrip(":")
         self.assertIn("every 6h", out)
-        self.assertIn("nonstop, alert at 15% below the 14-day average and at most USD 300", out)
+        self.assertIn("nonstop, alert at 15% below the 14-day average and at most USD 300, trips up to 20h", out)
         self.assertIn("fare family cannot be checked", out)
         self.assertIn("first look: could not check: FIRECRAWL_API_KEY is not set", out)
         rec = tw.Store(self.home / "state" / "tripwires").read()[tid]
         self.assertEqual((rec["consecutive_failures"], rec["baseline_price"]), (1, None))
         listed = self.cli("list").stdout
+        self.assertIn("trips up to 20h", listed)
         self.assertIn("flight fare drops", listed)
         self.assertIn("no fare yet, first -, lowest -, last alert -", listed)
 

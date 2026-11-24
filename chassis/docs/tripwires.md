@@ -100,7 +100,7 @@ good buy: significantly lower than it has been.
 ```bash
 chassis/scripts/tripwire.py probe --check flight_price --from JFK --to LAX --date 2026-12-15
 chassis/scripts/tripwire.py add-flight --from JFK --to LAX --date 2026-12-15 \
-  [--flex-days 1] [--group option-a] \
+  [--flex-days 1] [--group option-a] [--max-duration-hours 20] \
   [--max-stops nonstop|one] [--currency USD] [--drop-pct 15] [--max-price 300] \
   [--fare-class any|main] [--market US] [--every 6h] [--expires 2026-12-15] \
   [--name ...] [--why ...] [--message ...]
@@ -133,7 +133,7 @@ of the last date searched. Name, why and message are filled in from the leg
 - **Eligible fares.** Economy on every segment (the source's
   `cabin_matches_request` must be true, since Google substitutes another cabin
   when a flight has no economy fare), at most the stops asked for, and the
-  currency asked for. The source is asked for these and they are checked again
+  currency asked for, within the duration cap when one is set. The source is asked for these and they are checked again
   here. Up to 50 rows of Google's first results page are read: the cheapest
   fare is often listed well below the "top" flights.
 - **The alert** carries the option label, the price and currency (and day, with flex), how far below the reference and
@@ -144,8 +144,14 @@ of the last date searched. Name, why and message are filled in from the leg
   Basic Economy, which can block seat selection. The fare source shows no fare
   family, so `main` cannot filter. It is recorded, shown on the tab and stated
   in every alert as unverified. Check the fare before booking.
-- **No duration filter.** The cheapest one-stop fare can be an overnight
-  connection; the alert shows the duration so a person can judge.
+- **Duration cap (`--max-duration-hours N`).** The cheapest one-stop fare can
+  be a very long connection, such as a 32h transatlantic routing through
+  Istanbul. With a cap, longer itineraries (total time, origin to destination)
+  are dropped before the cheapest fare is picked, and so are fares whose
+  duration the source does not give. If none is left, the check is "could not
+  check". On a transatlantic leg, `--max-duration-hours 20` is a sensible start.
+  The cap shows on the tab row and in `list`. Without it, the alert still
+  shows the duration so a person can judge.
 
 **Honesty.** A fare source error, a missing `FIRECRAWL_API_KEY`, an empty result
 and a result where no fare passes the filters are all "could not check", never

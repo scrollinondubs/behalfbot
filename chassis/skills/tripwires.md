@@ -53,14 +53,14 @@ written), so keep the interval at 6h unless asked.
 chassis/scripts/tripwire.py probe --check flight_price --from JFK --to LAX --date 2026-12-15
 chassis/scripts/tripwire.py add-flight --from JFK --to LAX --date 2026-12-15 \
   --max-stops one --currency USD --drop-pct 15 [--max-price 300] [--fare-class main] \
-  [--flex-days 1] [--group option-a]
+  [--flex-days 1] [--group option-a] [--max-duration-hours 20]
 ```
 
 It checks at once, then alerts when the cheapest fare is 15% below the average
 of the last 14 days of checks (the first fare until there are 3 days of them),
 never above `--max-price`, and again on each further drop. `--flex-days N`
 searches N days either side and costs one call per day. `--group` labels which
-trip option a leg belongs to when alternatives overlap. It expires at the end of
+trip option a leg belongs to when alternatives overlap. `--max-duration-hours` drops longer itineraries (20 suits a transatlantic leg). It expires at the end of
 the last date searched. If the first look says `could not check`, nothing is
 recorded yet: say so. `--fare-class main` is not enforced, because the
 source shows no fare family; tell the person an alert may still be Basic
