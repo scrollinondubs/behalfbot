@@ -708,6 +708,35 @@ class Tab(unittest.TestCase):
         self.assertIn("cannot be read", got)
         self.assertNotIn("Nothing is being watched", got)
 
+    def test_rows_carry_their_type_and_the_filter_counts_each(self) -> None:
+        self.add(name="Tix")
+        self.add(name="Gone", check="text_disappears")
+        self.add(name="Up", check="http_status", text=None, status="200")
+        tw.add_flight(self.store, origin="JFK", destination="LAX", date_str="2099-12-15")
+        tw.add_stay(self.store, where="Downtown Austin", country="us", checkin="2099-01-04", checkout="2099-01-06")
+        tw.add_realestate(self.store, name="Land", why="w", zones_path="data/zones.geojson",
+                          listings_path="state/listings.json", every="1h", expires="365d", message="m",
+                          criteria={"id_property": "zone_id", "rules": [
+                              {"key": "max_drive", "label": "Max drive", "property": "drive_min", "op": "<=",
+                               "value": 75, "group": "limit"}], "weights": []})
+        got = self.client.get("/tripwires").text
+        for kind, n in (("flights", 1), ("stays", 1), ("land", 1), ("websites", 3)):
+            self.assertEqual(got.count(f'<tr data-kind="{kind}">'), n, kind)
+            self.assertRegex(got, rf'<button type="button" class="tw-filter" data-kind="{kind}" '
+                                  rf'aria-pressed="true" title="[A-Za-z]+" aria-label="[A-Za-z]+ \({n}\)">')
+        self.assertIn('title="Accommodations"', got)
+        self.assertIn("No tripwires match the filters", got)
+
+    def test_filter_counts_include_archived_rows_only_when_shown(self) -> None:
+        tid = self.add()
+        tw.cancel(self.store, tid)
+        tw.archive(self.store, tid)
+        self.add(name="Live")
+        self.assertIn('aria-label="Websites (1)"', self.client.get("/tripwires").text)
+        shown = self.client.get("/tripwires?archived=1").text
+        self.assertIn('aria-label="Websites (2)"', shown)
+        self.assertEqual(shown.count('<tr data-kind="websites">'), 2)
+
     def test_router_mounts_in_another_app_with_its_own_renderer_and_store(self) -> None:
         from fastapi import FastAPI
         from fastapi.responses import JSONResponse
