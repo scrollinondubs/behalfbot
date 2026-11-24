@@ -51,8 +51,14 @@
         <td>
           <strong>{{ r.name }}</strong>
           <div class="muted small">{{ r.why }}</div>
+          {% if r.is_flight %}
+          <div class="small">{{ r.check_label }}: {{ r.target }}</div>
+          <div class="muted small">{{ r.fares_label }}</div>
+          {% else %}
           <div class="small">{{ r.check_label }}{% if r.target and not r.is_realestate %}: "{{ r.target }}"{% endif %}{% if r.keep_watching %} · keeps watching{% endif %}</div>
+          {% endif %}
           {% if r.is_realestate %}<a class="tw-url" href="{{ prefix }}/{{ r.id }}/map">Map and criteria</a>
+          {% elif r.is_flight %}<a class="tw-url" href="{{ r.url }}" rel="noopener noreferrer" target="_blank">Open on Google Flights</a>
           {% else %}<a class="tw-url" href="{{ r.url }}" rel="noopener noreferrer" target="_blank">{{ r.url }}</a>{% endif %}
         </td>
         <td data-label="Status"><span class="pill {% if r.blind %}tw-warn{% elif r.active %}tw-ok{% endif %}">{% if r.blind %}blind{% else %}{{ r.status }}{% endif %}</span></td>
