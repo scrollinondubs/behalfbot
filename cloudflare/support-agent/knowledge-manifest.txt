@@ -45,6 +45,7 @@ docs/heartbeat-dispatcher.md
 docs/hydration.md
 docs/installer-homework.md
 docs/launchd-domains.md
+docs/managed-install-agent-collab.md
 docs/mcp-setup.md
 docs/memory-seeding.md
 docs/multi-surface-channels.md
