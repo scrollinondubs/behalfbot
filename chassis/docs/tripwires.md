@@ -212,8 +212,9 @@ expiry at the end of the checkin date. Up to 28 nights (Vrbo's limit).
   combination is refused rather than gating one source silently.
 - **Rating (`--min-rating N`, out of 10).** Both sources already score out of
   10. Unrated stays (no score, no reviews, or Vrbo's "New") are left out unless
-  `--allow-unrated`. Booking.com is asked to filter server-side too, except with
-  `--allow-unrated`, because its filter drops unrated properties.
+  `--allow-unrated`. Booking.com is asked to filter server-side too, floored to
+  a whole score (8.5 sends 8), except with `--allow-unrated`, because its filter
+  drops unrated properties. The exact cut is made here.
 - **Where.** Booking.com resolves `--where` itself; a result that is only near
   the place (`name_match` false) or in another country than `--country` is
   "could not check". Vrbo's region is looked up once, in `--country` only

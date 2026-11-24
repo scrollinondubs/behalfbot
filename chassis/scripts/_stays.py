@@ -67,7 +67,7 @@ _VRBO_LISTING = re.compile(r"[0-9]{1,12}(ha)?")
 _DIGITS = re.compile(r"[1-9][0-9]{0,19}")
 _VRBO_TOTAL = re.compile(r"\$([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(\.[0-9]{1,2})? for ([0-9]{1,3}) nights?")
 _VRBO_NIGHTLY = re.compile(r"\$([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)(\.[0-9]{1,2})?")
-_URLISH = re.compile(r"(https?://|www\.)\S*", re.I)
+_URLISH = re.compile(r"(https?://|www\.)\S*|\b[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}\b(/\S*)?", re.I)
 _TAG = re.compile(r"<[^>]*>")
 _NOT_PLAIN = re.compile(r"[^\w .,'&()/+#-]")
 _DISTANCE = re.compile(r"[0-9]{1,3}(\.[0-9]{1,2})? (miles|mile|km|m|ft) from [A-Za-z ]{1,30}")
@@ -184,9 +184,20 @@ def booking_search_url(params: dict) -> str:
     q = {"ss": params["where"], "checkin": params["checkin"], "checkout": params["checkout"],
          "group_adults": params["adults"], "no_rooms": 1, "group_children": 0,
          "selected_currency": params["currency"], "order": "price"}
-    if params.get("min_rating") and not params.get("allow_unrated"):
-        q["nflt"] = f"review_score={int(params['min_rating'] * 10)}"
+    if rating_filter(params):
+        q["nflt"] = rating_filter(params)
     return "https://www.booking.com/searchresults.html?" + urllib.parse.urlencode(q, quote_via=urllib.parse.quote)
+
+
+def rating_filter(params: dict) -> str:
+    """Booking.com's own score filter, floored to a whole score (its facets
+    are 60, 70, 80, 90), so it never cuts tighter than --min-rating; the exact
+    cut is made locally. Not sent with --allow-unrated: it drops unrated
+    properties."""
+    floor = math.floor(params.get("min_rating") or 0)
+    if not floor or params.get("allow_unrated"):
+        return ""
+    return f"review_score={floor * 10}"
 
 
 def vrbo_search_url(params: dict, region_id: str | None = None) -> str:
@@ -287,10 +298,8 @@ def booking_options(params: dict) -> dict:
                "adults": params["adults"], "currency": params["currency"], "sort": "price", "rows": RESULT_LIMIT}
     if params.get("country"):
         options["country_code"] = params["country"]
-    if params.get("min_rating") and not params.get("allow_unrated"):
-        # Booking.com drops unrated properties with this filter, so it is only
-        # sent when unrated ones are not wanted. Checked again locally.
-        options["filters"] = f"review_score={int(params['min_rating'] * 10)}"
+    if rating_filter(params):
+        options["filters"] = rating_filter(params)
     return options
 
 
@@ -631,6 +640,8 @@ def apply(rec: dict, got: Result, now: datetime, fired_text: Callable[[dict, str
         if r.source == "vrbo" and r.region_id and not params.get("vrbo_region_id"):
             params["vrbo_region_id"], params["vrbo_place"] = r.region_id, r.place
             params["vrbo_url"] = vrbo_search_url(params, r.region_id)
+            if "booking" not in params["sources"]:
+                params["url"] = params["vrbo_url"]
         flights.record_price(state, r.best.total, now)
         last = state.get("last_alerted_price")
         if r.met and (last is None or r.best.total < last):

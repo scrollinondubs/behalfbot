@@ -153,6 +153,8 @@ class Params(Case):
             "query": "Downtown Austin", "checkin": "2027-01-04", "checkout": "2027-01-06", "adults": 1,
             "currency": "EUR", "sort": "price", "rows": 50, "country_code": "us", "filters": "review_score=80"})
         self.assertNotIn("filters", st.booking_options(params(min_rating=8, allow_unrated=True)))
+        self.assertEqual(st.booking_options(params(min_rating=8.5))["filters"], "review_score=80")
+        self.assertNotIn("filters", st.booking_options(params(min_rating=0.5)))
         self.assertEqual(st.vrbo_options(p, "6059850"), {
             "region_id": "6059850", "checkin": "2027-01-04", "checkout": "2027-01-06", "adults": 1,
             "sort": "PRICE_LOW_TO_HIGH", "limit": 50})
@@ -332,6 +334,7 @@ class Alerts(Case):
         p = self.rec(tid)["params"]
         self.assertEqual((p["vrbo_region_id"], p["vrbo_place"]), ("6059850", "Downtown Austin, Texas"))
         self.assertIn("regionId=6059850", p["vrbo_url"])
+        self.assertEqual(p["url"], p["vrbo_url"])
 
 
 class Honesty(Case):
@@ -441,13 +444,16 @@ class DefaultSource(unittest.TestCase):
 
 class UntrustedListings(Case):
     def test_names_are_short_plain_labels_and_links_are_rebuilt(self) -> None:
-        nasty = "Cozy <b>loft</b>\nhttps://evil.example/x click www.evil.example now | ~ 🏠 " + "x" * 80
+        nasty = ("Cozy <b>loft</b>\nhttps://evil.example/x click www.evil.example now evil.example/y "
+                 "or Evil.Example | ~ 🏠 " + "x" * 80)
         got = st.label(nasty)
         self.assertNotIn("\n", got)
         self.assertNotIn("<", got)
         self.assertNotIn("evil", got)
         self.assertLessEqual(len(got), st.MAX_LABEL)
-        self.assertTrue(got.startswith("Cozy loft click now"))
+        self.assertTrue(got.startswith("Cozy loft click now or"))
+        self.assertNotIn("Evil", got)
+        self.assertEqual(st.label("St. Louis Arch View, 2.5 mi"), "St. Louis Arch View, 2.5 mi")
 
     def test_nothing_from_a_listings_url_reaches_the_store_or_a_message(self) -> None:
         tid = self.add()
@@ -531,7 +537,9 @@ class Tab(Case):
                                   + booking(260, page="c").options + booking(270, page="d").options),
                         st.StayError("source timeout"))
             client = TestClient(dash_app.create_app(tabs.Registry(), home / "no-plugins", home / "no-tabs"))
-            got = client.get("/tripwires").text
+            # The tab reads the wall clock; pin it so the "under 3 days" wording holds after T0 + 3 days.
+            with mock.patch.object(tw, "utcnow", return_value=T0 + timedelta(hours=1)):
+                got = client.get("/tripwires").text
         self.assertIn("stay price drops: Downtown Austin 2027-01-04 to 2027-01-06 (2 nights, 1 adult)", got)
         self.assertIn("Booking.com: average after 3 days of checks, first EUR 200, lowest EUR 200, last alert -", got)
         self.assertIn("Vrbo: no price yet", got)
