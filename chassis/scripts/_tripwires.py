@@ -343,7 +343,7 @@ def add_realestate(store: Store, *, name: str | None, why: str | None, zones_pat
 def add_flight(store: Store, *, origin: str | None, destination: str | None, date_str: str | None,
                max_stops: str | None = "one", currency: str | None = "EUR", drop_pct=flights.DEFAULT_DROP_PCT,
                max_price=None, fare_class: str | None = "any", market: str | None = None,
-               name: str | None = None, why: str | None = None, every: str | None = "6h",
+               flex_days: int | str | None = 0, group: str | None = None, name: str | None = None, why: str | None = None, every: str | None = "6h",
                expires: str | None = None, message: str | None = None, expiry_message: str | None = None,
                now: datetime | None = None) -> dict:
     """A flight_price tripwire. It always keeps watching: each fare below the
@@ -354,16 +354,18 @@ def add_flight(store: Store, *, origin: str | None, destination: str | None, dat
         params = flights.validate_params(origin=origin, destination=destination, date_str=date_str,
                                          max_stops=max_stops, currency=currency, drop_pct=drop_pct,
                                          max_price=max_price, fare_class=fare_class, market=market,
-                                         today=now.astimezone().date())
+                                         flex_days=flex_days, group=group, today=now.astimezone().date())
     except flights.FlightError as e:
         raise TripwireError(str(e)) from None
     label = flights.leg(params)
-    record = _record({"check": "flight_price", "params": params}, name=name or f"Fare {label}",
+    last_day = (date.fromisoformat(params["date"]) + timedelta(days=params["flex_days"])).isoformat()
+    default_name = f"Fare {label}" + (f" ({params['group']})" if params["group"] else "")
+    record = _record({"check": "flight_price", "params": params}, name=name or default_name,
                      why=why or f"Fare watch for {label}", every=every or "6h",
-                     expires=expires or params["date"], message=message or f"Fare drop on {label}",
+                     expires=expires or last_day, message=message or f"Fare drop on {label}",
                      expiry_message=expiry_message, keep_watching=True, now=now)
     record.update({"baseline_price": None, "baseline_at": None, "last_alerted_price": None,
-                   "lowest_price": None})
+                   "lowest_price": None, "history": []})
     with store.transaction(create=True) as tripwires:
         tripwires[record["id"]] = record
     return record
@@ -546,11 +548,11 @@ class Observation:
 
 
 def evaluate(rec: dict, fetch: Fetch = fetch_url, home: Path | None = None,
-             flight_fetch: "flights.FlightFetch | None" = None) -> Observation:
+             flight_fetch: "flights.FlightFetch | None" = None, now: datetime | None = None) -> Observation:
     """`home` is the customer home realestate paths resolve against.
     `flight_fetch` is the fare source; Firecrawl's by default."""
     if rec["check"] == "flight_price":
-        got = flights.observe(rec, flight_fetch)
+        got = flights.observe(rec, flight_fetch, now or utcnow())
         return Observation(got.outcome, got.result, detail=got.detail, price=got.price)
     if rec["check"] == "realestate":
         if home is None:
@@ -666,10 +668,7 @@ def apply_observation(rec: dict, obs: Observation, now: datetime) -> None:
         if obs.page_hash:
             rec["baseline_hash"] = obs.page_hash
         if obs.price is not None:
-            if rec.get("baseline_price") is None:
-                rec["baseline_price"], rec["baseline_at"] = obs.price, iso(now)
-            if rec.get("lowest_price") is None or obs.price < rec["lowest_price"]:
-                rec["lowest_price"] = obs.price
+            flights.record_price(rec, obs.price, now)
         if obs.outcome == "met":
             # keep_watching fires when the condition becomes true, not on every
             # check while it stays true. Each page change is a new event.
@@ -737,7 +736,7 @@ def check_now(store: Store, tripwire_id: str, now: datetime | None = None,
     uses it so the fare it prints is the baseline it keeps. Sends nothing;
     anything it queues goes out on the next tick."""
     now = now or utcnow()
-    obs = evaluate(_get(store.read(), tripwire_id), flight_fetch=flight_fetch)
+    obs = evaluate(_get(store.read(), tripwire_id), flight_fetch=flight_fetch, now=now)
     _apply(store, tripwire_id, obs, now)
     return obs
 
@@ -756,7 +755,7 @@ def run_due(store: Store, fetch: Fetch = fetch_url, notify: Notify | None = None
     for snapshot in due:
         if time.monotonic() - started > budget_s:
             break
-        obs = evaluate(snapshot, fetch, home, flight_fetch)
+        obs = evaluate(snapshot, fetch, home, flight_fetch, now)
         checked += 1
         _apply(store, snapshot["id"], obs, now)
     sent, failed = _deliver(store, notify, now)
@@ -833,10 +832,8 @@ def _row(rec: dict, now: datetime) -> dict:
         "url": params.get("url"),
         "is_realestate": rec["check"] == "realestate",
         "is_flight": is_flight,
-        "fares_label": (f"baseline {flights.money(rec.get('baseline_price'), params['currency'])}, "
-                        f"lowest {flights.money(rec.get('lowest_price'), params['currency'])}, "
-                        f"last alert {flights.money(rec.get('last_alerted_price'), params['currency'])}"
-                        if is_flight else None),
+        "fares_label": flights.fares_label(rec, now) if is_flight else None,
+        "group": params.get("group") if is_flight else None,
         "active": active,
         "blind": blind,
         "last_checked_label": relative(parse("last_checked"), now),

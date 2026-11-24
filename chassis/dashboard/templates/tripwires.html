@@ -52,6 +52,7 @@
           <strong>{{ r.name }}</strong>
           <div class="muted small">{{ r.why }}</div>
           {% if r.is_flight %}
+          {% if r.group %}<div class="small"><span class="pill">{{ r.group }}</span></div>{% endif %}
           <div class="small">{{ r.check_label }}: {{ r.target }}</div>
           <div class="muted small">{{ r.fares_label }}</div>
           {% else %}

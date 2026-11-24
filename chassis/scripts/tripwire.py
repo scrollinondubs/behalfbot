@@ -13,10 +13,12 @@
       --currency USD --drop-pct 15 [--max-price 300] [--fare-class main] --every 6h
   tripwire.py probe --check flight_price --from JFK --to LAX --date 2026-12-15
 
-`add-flight` watches the cheapest economy fare for one one-way leg and alerts
-when it is --drop-pct below the first fare it saw. It expires at the end of the
-flight date unless --expires says otherwise, and it checks once straight away:
-that first fare is the baseline it keeps. Needs FIRECRAWL_API_KEY.
+`add-flight` watches the cheapest economy fare for one one-way leg (over
+--flex-days either side of the date) and alerts when it is --drop-pct below the
+average of the last 14 days of checks, or below the first fare until there are
+3 days of them. It expires at the end of the last date searched unless
+--expires says otherwise, and it checks once straight away. --group labels
+which trip option a leg belongs to. Needs FIRECRAWL_API_KEY.
 
 `add-realestate` reads a seed file (name, why, zones_path, listings_path,
 criteria, every, expires, message, seed_key). Re-running it while that seed's
@@ -47,8 +49,8 @@ def check_args(parser: argparse.ArgumentParser, probing: bool = False) -> None:
 
 
 def flight_args(parser: argparse.ArgumentParser, required: bool) -> None:
-    parser.add_argument("--from", dest="origin", required=required, help="airport code, e.g. LIS")
-    parser.add_argument("--to", dest="destination", required=required, help="airport code, e.g. DFW")
+    parser.add_argument("--from", dest="origin", required=required, help="airport code, e.g. JFK")
+    parser.add_argument("--to", dest="destination", required=required, help="airport code, e.g. LAX")
     parser.add_argument("--date", required=required, help="departure date, YYYY-MM-DD")
     parser.add_argument("--max-stops", choices=sorted(tw.flights.MAX_STOPS), default="one")
     parser.add_argument("--currency", default="EUR")
@@ -58,7 +60,10 @@ def flight_args(parser: argparse.ArgumentParser, required: bool) -> None:
     parser.add_argument("--fare-class", choices=tw.flights.FARE_CLASSES, default="any",
                         help="main: wants no Basic Economy. Recorded and stated in alerts, NOT enforced: "
                              "the fare source shows no fare family")
-    parser.add_argument("--market", help="2-letter Google sales market, e.g. PT; Google's default if unset")
+    parser.add_argument("--market", help="2-letter Google sales market, e.g. US; Google's default if unset")
+    parser.add_argument("--flex-days", type=int, default=0,
+                        help="also search this many days either side of --date (0-3); one paid call per day")
+    parser.add_argument("--group", help="which trip option this leg belongs to, e.g. jan-4-option-a")
 
 
 def flight_params(args: argparse.Namespace) -> dict:
@@ -66,7 +71,7 @@ def flight_params(args: argparse.Namespace) -> dict:
         return tw.flights.validate_params(
             origin=args.origin, destination=args.destination, date_str=args.date, max_stops=args.max_stops,
             currency=args.currency, drop_pct=args.drop_pct, max_price=args.max_price,
-            fare_class=args.fare_class, market=args.market)
+            fare_class=args.fare_class, market=args.market, flex_days=args.flex_days, group=args.group)
     except tw.flights.FlightError as e:
         raise tw.TripwireError(str(e)) from None
 
@@ -86,9 +91,9 @@ def cmd_add_flight(args: argparse.Namespace, store: tw.Store) -> int:
     rec = tw.add_flight(store, origin=args.origin, destination=args.destination, date_str=args.date,
                         max_stops=args.max_stops, currency=args.currency, drop_pct=args.drop_pct,
                         max_price=args.max_price, fare_class=args.fare_class, market=args.market,
-                        name=args.name, why=args.why, every=args.every, expires=args.expires,
+                        flex_days=args.flex_days, group=args.group, name=args.name, why=args.why, every=args.every, expires=args.expires,
                         message=args.message, expiry_message=args.expiry_message)
-    print(f"added {rec['id']}: {rec['name']} (every {rec['interval_s'] // 3600}h, expires {rec['expires_at']})")
+    print(f"added {rec['id']}: {rec['name']} (every {args.every.strip()}, expires {rec['expires_at']})")
     print(f"  {tw.flights.summary(rec['params'])}\n  {rec['params']['url']}")
     if args.fare_class == "main":
         print("  note: fare family cannot be checked, so a Basic Economy fare can still trigger it")
@@ -144,7 +149,7 @@ def cmd_list(args: argparse.Namespace, store: tw.Store) -> int:
               f"; next {r['next_check_label']}; expires {r['expires_label']}"
               f"; failures in a row {r['consecutive_failures']}")
         if r["is_flight"]:
-            print(f"  {r['target']}\n  {r['fares_label']}")
+            print(f"  {r['target']}" + (f" [{r['group']}]" if r["group"] else "") + f"\n  {r['fares_label']}")
     if not rows:
         print("no tripwires")
     return 0
@@ -175,7 +180,7 @@ def main() -> int:
     p = sub.add_parser("add-flight", help="watch the cheapest economy fare on one leg")
     flight_args(p, required=True)
     p.add_argument("--every", default="6h", help="at least 15m; 6h by default")
-    p.add_argument("--expires", help="default: the end of the flight date")
+    p.add_argument("--expires", help="default: the end of the last date searched")
     p.add_argument("--name", help="default: Fare <FROM>-<TO> <date>")
     p.add_argument("--why", help="default: Fare watch for the leg")
     p.add_argument("--message", help="first line of each alert; default: Fare drop on the leg")

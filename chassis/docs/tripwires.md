@@ -27,7 +27,7 @@ gather: TRIPWIRE_CHANNEL_ID=<channel id> state/chassis-root/scripts/gather-tripw
 | `text_disappears` | the text was there and is gone | Must see the text at least once first; until then it reports "could not check" |
 | `page_changed` | the visible text's hash differs from the baseline | The first good fetch sets the baseline. Script and style are ignored, but a page showing a clock or a view count will fire at once |
 | `http_status` | the status equals the one you gave | A different status is a normal result, except 401, 403, 407, 429, 451 and 5xx, which read as "could not check" unless they are the status you asked for |
-| `flight_price` | a leg's cheapest economy fare drops below its baseline | CLI only (`add-flight`). See "Flight fares" |
+| `flight_price` | a leg's cheapest economy fare drops well below its 14-day average | CLI only (`add-flight`). See "Flight fares" |
 
 Checks are one plain GET with no JavaScript and no login. Loopback and private
 addresses are refused, including through a redirect, unless the CLI is given
@@ -94,37 +94,50 @@ or unreadable file is "could not check", with the usual alert after 3 in a row.
 
 ## Flight fares (`flight_price`)
 
-Watches the cheapest economy fare for one one-way leg and alerts when it is
-significantly lower than it has been.
+Watches the cheapest economy fare for one one-way leg and alerts when it is a
+good buy: significantly lower than it has been.
 
 ```bash
 chassis/scripts/tripwire.py probe --check flight_price --from JFK --to LAX --date 2026-12-15
 chassis/scripts/tripwire.py add-flight --from JFK --to LAX --date 2026-12-15 \
+  [--flex-days 1] [--group option-a] \
   [--max-stops nonstop|one] [--currency USD] [--drop-pct 15] [--max-price 300] \
   [--fare-class any|main] [--market US] [--every 6h] [--expires 2026-12-15] \
   [--name ...] [--why ...] [--message ...]
 ```
 
-Defaults: at most one stop, EUR, 15%, every 6h, and expiry at the end of the
-flight date. Name, why and message are filled in from the leg when not given.
+Defaults: no flex, at most one stop, EUR, 15%, every 6h, and expiry at the end
+of the last date searched. Name, why and message are filled in from the leg
+(and group) when not given.
 
-- **Baseline.** The first successful check records the cheapest eligible fare
-  as the baseline. `add-flight` makes that check at once (skip it with
-  `--no-probe`), so the fare it prints is the one it keeps. A failed check never
-  sets a baseline.
+- **What it compares with.** Every successful check is kept with its time.
+  The reference is the mean of the checks from the last 14 days. Until the first
+  check is 3 days old there are too few for a mean, so the first fare seen
+  stands in. The alert names which one it beat. `add-flight` makes the first
+  check at once (skip it with `--no-probe`). A failed check is never recorded.
+  History is capped at 200 checks.
 - **Alert.** When the cheapest fare is at least `--drop-pct` below the
-  baseline, and not above `--max-price` when one is set. `--max-price` is a gate,
-  not a trigger: a fare under it that is not also the drop below the baseline
-  stays quiet. After an alert it keeps watching and alerts again only on a fare
-  below the last one alerted, until it expires. The baseline never moves.
+  reference, and not above `--max-price` when one is set. `--max-price` is a
+  gate, not a trigger: a fare under it that is not also a drop stays quiet.
+  After an alert it keeps watching and alerts again only on a fare below the
+  last one alerted, until it expires.
+- **Flexible dates (`--flex-days N`, 0 to 3).** Searches the date and N days
+  either side (days already past are skipped) and takes the cheapest. The alert
+  gives that day's date and a Google Flights link for it. Every day must answer:
+  if one fails, the whole check is "could not check", because the missing day
+  could have held the cheapest fare. Each day is one paid call.
+- **Options (`--group LABEL`).** Labels which trip option a leg belongs to, so
+  alternatives covering the same dates (for example `jan-4-option-a` and
+  `jan-4-option-b`) can be told apart. Shown on the tab, in `list` and as the
+  first line of each alert. Legs stay independent watches.
 - **Eligible fares.** Economy on every segment (the source's
   `cabin_matches_request` must be true, since Google substitutes another cabin
   when a flight has no economy fare), at most the stops asked for, and the
   currency asked for. The source is asked for these and they are checked again
   here. Up to 50 rows of Google's first results page are read: the cheapest
   fare is often listed well below the "top" flights.
-- **The alert** carries the price and currency, how far below the baseline and
-  when the baseline was seen, the last price alerted, the airline(s), stops and
+- **The alert** carries the option label, the price and currency (and day, with flex), how far below the reference and
+  which reference it was, the last price alerted, the airline(s), stops and
   connection airports, total duration, departure time (local to the origin),
   and a Google Flights search link for the leg.
 - **Fare family (`--fare-class main`).** The cheapest economy fare is often
@@ -192,10 +205,11 @@ non-zero, which the dispatcher reports directly for a `critical` heartbeat.
 
 A check that fails is not a broken heartbeat and never spends anything.
 
-The exception is `flight_price`: each check is one Firecrawl call, which cost
-5 credits when this was written. One leg every 6h is 20 credits a day, so five
-legs are about 100 a day. A missing key costs nothing and reads as "could not
-check".
+The exception is `flight_price`: each check is one Firecrawl call per date
+searched, which cost 5 credits when this was written. One leg every 6h is 20
+credits a day, and `--flex-days 1` triples that. A missing key costs nothing
+and reads as "could not check". The heartbeat is `critical`, so conservation
+mode does not pause these calls; cancel the tripwire to stop the spend.
 
 ## The store
 

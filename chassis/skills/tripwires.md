@@ -50,15 +50,19 @@ Flight fare drops: one `flight_price` tripwire per one-way leg. Needs
 written), so keep the interval at 6h unless asked.
 
 ```bash
-chassis/scripts/tripwire.py probe --check flight_price --from LIS --to JFK --date 2026-12-15
-chassis/scripts/tripwire.py add-flight --from LIS --to JFK --date 2026-12-15 \
-  --max-stops one --currency EUR --drop-pct 15 [--max-price 600] [--fare-class main]
+chassis/scripts/tripwire.py probe --check flight_price --from JFK --to LAX --date 2026-12-15
+chassis/scripts/tripwire.py add-flight --from JFK --to LAX --date 2026-12-15 \
+  --max-stops one --currency USD --drop-pct 15 [--max-price 300] [--fare-class main] \
+  [--flex-days 1] [--group option-a]
 ```
 
-It checks at once and keeps that fare as the baseline, then alerts at 15% below
-it (and never above `--max-price`), and again on each further drop. It expires
-at the end of the flight date. If the first look says `could not check`, there
-is no baseline yet: say so. `--fare-class main` is not enforced, because the
+It checks at once, then alerts when the cheapest fare is 15% below the average
+of the last 14 days of checks (the first fare until there are 3 days of them),
+never above `--max-price`, and again on each further drop. `--flex-days N`
+searches N days either side and costs one call per day. `--group` labels which
+trip option a leg belongs to when alternatives overlap. It expires at the end of
+the last date searched. If the first look says `could not check`, nothing is
+recorded yet: say so. `--fare-class main` is not enforced, because the
 source shows no fare family; tell the person an alert may still be Basic
 Economy. Never report a failed check as "no flights" or "no change".
 

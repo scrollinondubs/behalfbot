@@ -165,7 +165,7 @@ class Alerts(Case):
         rec = self.rec(tid)
         self.assertEqual((rec["baseline_price"], rec["lowest_price"], rec["last_outcome"]), (450.0, 450.0, "baseline"))
         self.assertEqual(rec["baseline_at"], "2026-11-24T12:00:00Z")
-        self.assertEqual(rec["last_result"], "cheapest USD 450, recorded as the baseline")
+        self.assertEqual(rec["last_result"], "cheapest USD 450, the first fare seen")
         self.assertEqual(self.sent, [])
 
     def test_alerts_at_the_drop_with_everything_needed_to_act(self) -> None:
@@ -173,12 +173,12 @@ class Alerts(Case):
         self.run_at(fares(400))
         self.run_at(fares(350), 6)   # 12.5% down: quiet
         self.assertEqual(self.sent, [])
-        self.assertEqual(self.rec(tid)["last_result"], "cheapest USD 350, 12% below baseline USD 400")
+        self.assertEqual(self.rec(tid)["last_result"], "cheapest USD 350, 12% below first fare USD 400")
         self.run_at(fares(340), 12)  # 15% down: alert
         self.assertEqual(len(self.sent), 1)
         msg = self.sent[0]
         for part in ["TripWire fired: Fare JFK-LAX 2026-12-15", "Fare drop on JFK-LAX 2026-12-15",
-                     "USD 340, 15% below baseline USD 400 (first seen 2026-11-24)",
+                     "USD 340, 15% below the first fare seen, USD 400 on 2026-11-24 (under 3 days of history, so no average yet)",
                      "United, 1 stop via ORD, 6h 50m, departs 2026-12-15 10:15",
                      "https://www.google.com/travel/flights?q=Flights%20to%20LAX"]:
             self.assertIn(part, msg)
@@ -244,6 +244,91 @@ class Alerts(Case):
         rec = self.rec(tid)
         self.assertEqual(rec["status"], tw.EXPIRED)
         self.assertIn("ended at its expiry", self.sent[-1])
+
+
+class GoodBuy(Case):
+    """The reference is the 14-day mean of past checks once there are 3 days."""
+
+    def test_uses_the_first_fare_until_three_days_of_history(self) -> None:
+        tid = self.add(expires="30d")
+        self.run_at(fares(400))
+        self.run_at(fares(200), 47)
+        self.run_at(fares(390), 71)
+        self.assertEqual(self.rec(tid)["last_result"], "cheapest USD 390, 2% below first fare USD 400")
+        self.run_at(fares(390), 77)  # next due; mean(400, 200, 390) = 330
+        self.assertEqual(self.rec(tid)["last_result"], "cheapest USD 390, 18% above 14-day average USD 330")
+
+    def test_alert_names_the_average_it_beat(self) -> None:
+        tid = self.add(expires="30d")
+        for hour, price in [(0, 400), (24, 380), (48, 360), (72, 300)]:
+            self.run_at(fares(price), hour)
+        # At 72h the first check is 3 days old: mean(400, 380, 360) = 380, 300 is 21% below.
+        self.assertEqual(len(self.sent), 1)
+        self.assertIn("USD 300, 21% below the 14-day average USD 380 (3 checks)", self.sent[0])
+        self.assertEqual(self.rec(tid)["last_result"], "cheapest USD 300, 21% below 14-day average USD 380")
+
+    def test_only_the_last_14_days_count_and_history_is_bounded(self) -> None:
+        tid = self.add(expires="60d", every="15m")
+        self.run_at(fares(1000))
+        self.run_at(fares(400), 15 * 24)
+        rec = self.rec(tid)
+        self.assertEqual([h["price"] for h in rec["history"]], [400.0])
+        self.assertEqual(rec["baseline_price"], 1000.0)
+        with self.store.transaction() as current:
+            for i in range(fl.MAX_HISTORY + 20):
+                fl.record_price(current[tid], 500, T0 + timedelta(days=16, minutes=i))
+        self.assertEqual(len(self.rec(tid)["history"]), fl.MAX_HISTORY)
+
+
+class FlexAndGroup(Case):
+    def by_day(self, prices: dict):
+        asked = []
+
+        def fetch(params):
+            asked.append(params["date"])
+            got = prices[params["date"]]
+            if isinstance(got, Exception):
+                raise got
+            return fares(got)
+        return fetch, asked
+
+    def run_with(self, fetch, hours: float = 0) -> dict:
+        return tw.run_due(self.store, notify=self.notify, now=T0 + timedelta(hours=hours), flight_fetch=fetch)
+
+    def test_searches_each_day_and_alerts_on_the_cheapest_with_its_date_and_link(self) -> None:
+        tid = self.add(date_str="2026-12-27", flex_days=1, group="option-b")
+        rec = self.rec(tid)
+        self.assertEqual((rec["name"], rec["expires_at"][:10]), ("Fare JFK-LAX 2026-12-27 ±1d (option-b)", "2026-12-29"))
+        fetch, asked = self.by_day({"2026-12-26": 420, "2026-12-27": 400, "2026-12-28": 410})
+        self.run_with(fetch)
+        self.assertEqual(asked, ["2026-12-26", "2026-12-27", "2026-12-28"])
+        self.assertEqual(self.rec(tid)["baseline_price"], 400.0)
+        fetch, _ = self.by_day({"2026-12-26": 330, "2026-12-27": 390, "2026-12-28": 410})
+        self.run_with(fetch, 6)
+        msg = self.sent[0]
+        self.assertIn("Option: option-b", msg)
+        self.assertIn("USD 330 on 2026-12-26, 18% below the first fare seen", msg)
+        self.assertIn("Google Flights for 2026-12-26: https://www.google.com/travel/flights?q=Flights%20to%20LAX"
+                      "%20from%20JFK%20on%202026-12-26", msg)
+
+    def test_one_failed_day_makes_the_whole_check_could_not_check(self) -> None:
+        tid = self.add(date_str="2026-12-27", flex_days=1)
+        fetch, _ = self.by_day({"2026-12-26": 100, "2026-12-27": fl.FlightError("fare source timeout"),
+                                "2026-12-28": 410})
+        self.run_with(fetch)
+        rec = self.rec(tid)
+        self.assertEqual(rec["last_result"], "could not check: fare source timeout for 2026-12-27")
+        self.assertIsNone(rec["baseline_price"])
+
+    def test_past_days_are_not_searched(self) -> None:
+        self.assertEqual(fl.search_dates({"date": "2026-11-24", "flex_days": 2}, date(2026, 11, 24)),
+                         ["2026-11-24", "2026-11-25", "2026-11-26"])
+
+    def test_flex_and_group_are_validated(self) -> None:
+        for kw in [dict(flex_days=4), dict(flex_days=-1), dict(flex_days="x"), dict(group="<b>x</b>"),
+                   dict(group="x" * 41)]:
+            with self.subTest(kw), self.assertRaises(tw.TripwireError):
+                self.add(**kw)
 
 
 class Honesty(Case):
@@ -360,14 +445,14 @@ class Cli(unittest.TestCase):
                        "--fare-class", "main").stdout
         tid = out.split()[1].rstrip(":")
         self.assertIn("every 6h", out)
-        self.assertIn("nonstop, alert at 15% below baseline and at most USD 300", out)
+        self.assertIn("nonstop, alert at 15% below the 14-day average and at most USD 300", out)
         self.assertIn("fare family cannot be checked", out)
         self.assertIn("first look: could not check: FIRECRAWL_API_KEY is not set", out)
         rec = tw.Store(self.home / "state" / "tripwires").read()[tid]
         self.assertEqual((rec["consecutive_failures"], rec["baseline_price"]), (1, None))
         listed = self.cli("list").stdout
         self.assertIn("flight fare drops", listed)
-        self.assertIn("baseline -, lowest -, last alert -", listed)
+        self.assertIn("no fare yet, first -, lowest -, last alert -", listed)
 
     def test_probe_flight_stores_nothing(self) -> None:
         out = self.cli("probe", "--check", "flight_price", "--from", "JFK", "--to", "LAX",
@@ -396,13 +481,14 @@ class Tab(Case):
             import app as dash_app
             import tabs
             self.store = tw.Store(home / "state" / "tripwires")
-            self.add()
+            self.add(group="option-a")
             self.run_at(fares(400))
             client = TestClient(dash_app.create_app(tabs.Registry(), home / "no-plugins", home / "no-tabs"))
             got = client.get("/tripwires").text
         self.assertIn("flight fare drops: JFK-LAX 2026-12-15, economy, max 1 stop", got)
-        self.assertIn("baseline USD 400, lowest USD 400, last alert -", got)
+        self.assertIn("average after 3 days of checks, first USD 400, lowest USD 400, last alert -", got)
         self.assertIn("Open on Google Flights", got)
+        self.assertIn(">option-a</span>", got)
         self.assertNotIn('<option value="flight_price"', got)
 
 
