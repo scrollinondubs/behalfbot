@@ -62,6 +62,10 @@ CHECK_TYPES = {
     "stay_price": "stay price drops",
 }
 URL_CHECKS = ("text_appears", "text_disappears", "page_changed", "http_status")
+# The dashboard's type filter. Anything not listed is a website check.
+KINDS = {"flight_price": "flights", "stay_price": "stays", "realestate": "land"}
+KIND_ORDER = (("flights", "\u2708\ufe0f", "Flights"), ("stays", "\U0001f3e0", "Accommodations"),
+              ("land", "\U0001f3d5\ufe0f", "Land"), ("websites", "\U0001f310", "Websites"))
 # Checks whose every "met" is a new event, so they never latch condition_met.
 EVENT_CHECKS = ("page_changed", "realestate", "flight_price", "stay_price")
 
@@ -877,6 +881,7 @@ def _row(rec: dict, now: datetime) -> dict:
     return {
         **rec,
         "check_label": CHECK_TYPES.get(rec["check"], rec["check"]),
+        "kind": KINDS.get(rec["check"], "websites"),
         "target": target,
         "url": params.get("url"),
         "is_realestate": rec["check"] == "realestate",
@@ -913,11 +918,14 @@ def view(store: Store, show_archived: bool = False, now: datetime | None = None)
     ordered.sort(key=lambda r: order.get(r["status"], 9))
     archived_count = sum(1 for r in ordered if r["status"] == ARCHIVED)
     rows = [_row(r, now) for r in ordered if show_archived or r["status"] != ARCHIVED]
+    kinds = [{"kind": k, "icon": icon, "label": label, "count": sum(1 for r in rows if r["kind"] == k)}
+             for k, icon, label in KIND_ORDER]
     last_run = store.last_run()
     active = any(r["status"] == ACTIVE for r in ordered)
     stale = active and (last_run is None or (now - last_run).total_seconds() > HEARTBEAT_STALE_S)
     return {
         "rows": rows,
+        "kinds": kinds,
         "store_error": error,
         "archived_count": archived_count,
         "show_archived": show_archived,

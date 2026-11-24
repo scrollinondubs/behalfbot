@@ -27,6 +27,10 @@
   .tw-form input, .tw-form select, .tw-form textarea { width: 100%; margin-top: 4px; padding: 7px 9px; background: var(--bg-2); color: var(--fg); border: 1px solid var(--border); border-radius: 6px; font: inherit; }
   .tw-wide { grid-column: 1 / -1; }
   .tw-form .tw-check input { width: auto; margin-right: 6px; }
+  .tw-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .tw-filter { padding: 5px 11px; background: var(--bg-2); color: var(--fg); border: 1px solid var(--accent); border-radius: 999px; font: inherit; cursor: pointer; }
+  .tw-filter[aria-pressed="false"] { opacity: 0.4; border-color: var(--border); text-decoration: line-through; }
+  .tw-table[hidden], .tw-table tr[hidden] { display: none; }
   @media (max-width: 768px) {
     .tw-table thead { display: none; }
     .tw-table, .tw-table tbody, .tw-table tr, .tw-table td { display: block; width: 100%; }
@@ -45,11 +49,15 @@
 
 <section class="panel">
   {% if rows %}
+  <div class="tw-filters" role="group" aria-label="Filter by type">
+    {% for k in kinds %}<button type="button" class="tw-filter" data-kind="{{ k.kind }}" aria-pressed="true" title="{{ k.label }}" aria-label="{{ k.label }} ({{ k.count }})">{{ k.icon }} {{ k.count }}</button>{% endfor %}
+  </div>
+  <p class="muted tw-none" hidden>No tripwires match the filters</p>
   <table class="status-table tw-table">
     <thead><tr><th>Tripwire</th><th>Status</th><th>Last checked</th><th>Last result</th><th>Next check</th><th>Expires</th><th></th></tr></thead>
     <tbody>
     {% for r in rows %}
-      <tr>
+      <tr data-kind="{{ r.kind }}">
         <td>
           <strong>{{ r.name }}</strong>
           <div class="muted small">{{ r.why }}</div>
@@ -88,6 +96,37 @@
     {% endfor %}
     </tbody>
   </table>
+  <script>
+  (function () {
+    var KEY = 'tripwires-hidden-kinds';
+    var hidden = [];
+    try { hidden = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) {}
+    var buttons = document.querySelectorAll('.tw-filter');
+    var rows = document.querySelectorAll('.tw-table tbody tr');
+    var table = document.querySelector('.tw-table');
+    var none = document.querySelector('.tw-none');
+    function apply() {
+      var shown = 0;
+      buttons.forEach(function (b) { b.setAttribute('aria-pressed', hidden.indexOf(b.dataset.kind) < 0 ? 'true' : 'false'); });
+      rows.forEach(function (r) {
+        var off = hidden.indexOf(r.dataset.kind) >= 0;
+        r.hidden = off;
+        if (!off) shown++;
+      });
+      table.hidden = shown === 0;
+      none.hidden = shown !== 0;
+    }
+    buttons.forEach(function (b) {
+      b.addEventListener('click', function () {
+        var i = hidden.indexOf(b.dataset.kind);
+        if (i < 0) hidden.push(b.dataset.kind); else hidden.splice(i, 1);
+        try { localStorage.setItem(KEY, JSON.stringify(hidden)); } catch (e) {}
+        apply();
+      });
+    });
+    apply();
+  })();
+  </script>
   {% elif not store_error %}
   <p class="muted">Nothing is being watched. Add one below, or ask in chat.</p>
   {% endif %}
