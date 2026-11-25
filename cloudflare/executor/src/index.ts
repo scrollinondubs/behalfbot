@@ -3,7 +3,9 @@
 // Thin trigger in front of the executor container. The Mac mini heartbeat
 // (and later a Worker cron) POSTs /trigger with a bearer token; we forward
 // to the singleton container instance, which starts one queue tick and
-// answers 202 immediately. No connection is ever held open for the job,
+// answers 202 immediately. Before waking it, the Worker asks Turso whether
+// the tick has anything to do (src/queue-gate.ts); an empty queue answers
+// 200 {ok, skipped: 'queue_empty'} and the container stays asleep. No connection is ever held open for the job,
 // so the Workers CPU limit is never in play - the 15-20 min work happens
 // entirely inside the container.
 //
@@ -11,6 +13,7 @@
 
 import { Container, getContainer } from '@cloudflare/containers'
 import { deepHealthz } from './healthz'
+import { gatedTrigger } from './queue-gate'
 
 interface Env {
   EXECUTOR_CONTAINER: DurableObjectNamespace<ExecutorContainer>
@@ -56,7 +59,9 @@ export class ExecutorContainer extends Container<Env> {
   defaultPort = 8080
   // Must exceed the executor's 30-min per-ask wallclock cap (and the
   // shim's 35-min hard kill) so the idle reaper can never sleep a
-  // container mid-job. Each /trigger resets the timer.
+  // container mid-job. Each /trigger that wakes it resets the timer; the
+  // queue gate still wakes it while any row is 'processing', so a running
+  // job keeps getting its timer reset.
   sleepAfter = '45m'
 
   constructor(ctx: DurableObjectState<{}>, env: Env) {
@@ -179,7 +184,8 @@ export default {
     // Singleton instance preserves the single-in-flight contract at the
     // instance level; the DB-level optimistic UPDATE remains the
     // authoritative lock (same as on the Mac mini today).
-    const container = getContainer(env.EXECUTOR_CONTAINER, 'singleton')
+    // Resolved lazily so a gated /trigger that skips never touches it.
+    const container = () => getContainer(env.EXECUTOR_CONTAINER, 'singleton')
 
     // Deep health: ask the executor container which image it booted from.
     // Behind the trigger bearer because it starts the singleton if it is
@@ -191,17 +197,22 @@ export default {
     if (request.method === 'GET' && url.pathname === '/healthz') {
       return deepHealthz(
         { appCommit: env.APP_COMMIT ?? null, builtAt: env.BUILT_AT ?? null },
-        () => container.fetch(new Request('http://container/healthz')),
+        () => container().fetch(new Request('http://container/healthz')),
       )
     }
 
     if (request.method === 'POST' && url.pathname === '/trigger') {
-      const mode = url.searchParams.get('mode') === 'prescan' ? '?mode=prescan' : ''
-      return container.fetch(new Request(`http://container/run${mode}`, { method: 'POST' }))
+      const mode = url.searchParams.get('mode') === 'prescan' ? 'prescan' : 'executor'
+      const query = mode === 'prescan' ? '?mode=prescan' : ''
+      return gatedTrigger(
+        { url: env.DATABASE_URL, authToken: env.DATABASE_AUTH_TOKEN },
+        mode,
+        () => container().fetch(new Request(`http://container/run${query}`, { method: 'POST' })),
+      )
     }
 
     if (request.method === 'GET' && url.pathname === '/status') {
-      return container.fetch(new Request('http://container/status'))
+      return container().fetch(new Request('http://container/status'))
     }
 
     return Response.json({ error: 'not_found' }, { status: 404 })

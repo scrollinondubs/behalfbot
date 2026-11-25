@@ -53,7 +53,10 @@ the existing orphan sweep).
 ```
 Mac mini heartbeat (launchd, unchanged schedule)
   -> POST https://behalfbot-executor.<subdomain>.workers.dev/trigger   (Bearer EXECUTOR_TRIGGER_TOKEN)
-    -> Worker stub (src/index.ts) forwards to the singleton container
+    -> Worker stub (src/index.ts) asks Turso if the tick has work (src/queue-gate.ts):
+       no 'processing' row and none in the mode's pick status -> 200 {"skipped":"queue_empty"},
+       container stays asleep. Otherwise, or if the check errors or takes >3s, forwards
+       to the singleton container
       -> container shim (container/server.mjs) answers 202, spawns one tick
         -> tsx scripts/behalfbot-heartbeat.ts   (unmodified vibecodelisboa executor)
           -> clone member repo / claude -p --bare / parse / PR / notify
