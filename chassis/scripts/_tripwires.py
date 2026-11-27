@@ -10,10 +10,10 @@ by host dashboards.
 
 Fetched pages are untrusted. Nothing from a response body, header or reason
 phrase is ever stored or sent; only our own fixed strings and a sha256 are.
-The exceptions are a flight_price fare and a stay_price listing, whose fields
-pass the validation in _flights.py and _stays.py (codes, ids, times and numbers
-by pattern, a property name stripped to a short plain label) before they are
-kept.
+The exceptions are a flight_price fare, a stay_price listing and an
+item_price listing, whose fields pass the validation in _flights.py, _stays.py
+and _items.py (codes, ids, times and numbers by pattern, a name or title
+stripped to a short plain label) before they are kept.
 
 The store is shared across a virtiofs bind mount, measured on Colima on
 2026-11-03:
@@ -48,6 +48,7 @@ from typing import Callable, Iterator
 SCRIPTS_DIR = Path(__file__).resolve().parent
 
 import _flights as flights  # noqa: E402  (stdlib only, same directory)
+import _items as items  # noqa: E402
 import _realestate as realestate  # noqa: E402
 import _stays as stays  # noqa: E402
 
@@ -60,14 +61,16 @@ CHECK_TYPES = {
     "realestate": "real-estate listings in passing zones",
     "flight_price": "flight fare drops",
     "stay_price": "stay price drops",
+    "item_price": "item price",
 }
 URL_CHECKS = ("text_appears", "text_disappears", "page_changed", "http_status")
 # The dashboard's type filter. Anything not listed is a website check.
-KINDS = {"flight_price": "flights", "stay_price": "stays", "realestate": "land"}
+KINDS = {"flight_price": "flights", "stay_price": "stays", "realestate": "land", "item_price": "items"}
 KIND_ORDER = (("flights", "\u2708\ufe0f", "Flights"), ("stays", "\U0001f3e0", "Accommodations"),
-              ("land", "\U0001f3d5\ufe0f", "Land"), ("websites", "\U0001f310", "Websites"))
+              ("land", "\U0001f3d5\ufe0f", "Land"), ("items", "\U0001f4e6", "Items"),
+              ("websites", "\U0001f310", "Websites"))
 # Checks whose every "met" is a new event, so they never latch condition_met.
-EVENT_CHECKS = ("page_changed", "realestate", "flight_price", "stay_price")
+EVENT_CHECKS = ("page_changed", "realestate", "flight_price", "stay_price", "item_price")
 
 MIN_INTERVAL_S = 15 * 60  # the dispatcher ticks every 15 minutes
 FAILURE_ALERT_AFTER = 3
@@ -410,6 +413,36 @@ def add_stay(store: Store, *, where: str | None, country: str | None, checkin: s
     return record
 
 
+def add_item(store: Store, *, query: str | None = None, product: str | None = None, source: str | None = None,
+             must=None, exclude=None, min_price=None, max_price=None, condition: str | None = "new",
+             sources=None, include_sponsored: bool = False, store_id: str | None = None, target_price=None,
+             drop_pct=None, currency: str | None = None, group: str | None = None, name: str | None = None,
+             why: str | None = None, every: str | None = "6h", expires: str | None = None,
+             message: str | None = None, expiry_message: str | None = None, now: datetime | None = None) -> dict:
+    """An item_price tripwire. It always keeps watching until it expires (90
+    days by default): a product or a search has no date of its own."""
+    now = now or utcnow()
+    try:
+        params = items.validate_params(query=query, product=product, source=source, must=must, exclude=exclude,
+                                       min_price=min_price, max_price=max_price, condition=condition,
+                                       sources=sources, include_sponsored=include_sponsored, store=store_id,
+                                       target_price=target_price, drop_pct=drop_pct, currency=currency,
+                                       group=group)
+    except items.ItemError as e:
+        raise TripwireError(str(e)) from None
+    label = items.what(params)
+    suffix = f" ({params['group']})" if params["group"] else ""
+    default_name = f"Item {label}"[:MAX_NAME - len(suffix)] + suffix
+    record = _record({"check": "item_price", "params": params}, name=name or default_name,
+                     why=why or f"Price watch for {label}", every=every or "6h", expires=expires or "90d",
+                     message=message or f"Deal on {label}", expiry_message=expiry_message, keep_watching=True,
+                     now=now)
+    record["item_state"] = {s: items.new_state() for s in params["sources"]}
+    with store.transaction(create=True) as tripwires:
+        tripwires[record["id"]] = record
+    return record
+
+
 def update_criteria(store: Store, tripwire_id: str, form: dict[str, str], now: datetime | None = None) -> dict:
     with store.transaction() as tripwires:
         rec = _get(tripwires, tripwire_id)
@@ -585,13 +618,19 @@ class Observation:
     new_ids: list | None = None
     price: float | None = None  # flight_price: the cheapest eligible fare
     stay: "stays.Result | None" = None  # stay_price: every source's result, applied by stays.apply
+    item: "items.Result | None" = None  # item_price: every source's result, applied by items.apply
 
 
 def evaluate(rec: dict, fetch: Fetch = fetch_url, home: Path | None = None,
              flight_fetch: "flights.FlightFetch | None" = None, now: datetime | None = None,
-             stay_fetch: "stays.StayFetch | None" = None) -> Observation:
+             stay_fetch: "stays.StayFetch | None" = None,
+             item_fetch: "items.ItemFetch | None" = None) -> Observation:
     """`home` is the customer home realestate paths resolve against.
-    `flight_fetch` and `stay_fetch` are the price sources; Firecrawl's by default."""
+    `flight_fetch`, `stay_fetch` and `item_fetch` are the price sources;
+    Firecrawl's by default."""
+    if rec["check"] == "item_price":
+        got = items.observe(rec, item_fetch, now or utcnow())
+        return Observation(got.outcome, got.result, item=got)
     if rec["check"] == "stay_price":
         got = stays.observe(rec, stay_fetch, now or utcnow())
         return Observation(got.outcome, got.result, stay=got)
@@ -703,6 +742,8 @@ def apply_observation(rec: dict, obs: Observation, now: datetime) -> None:
         # Per source: prices, failures and alerts. The generic path below
         # still counts a check where every source failed.
         stays.apply(rec, obs.stay, now, fired_text, FAILURE_ALERT_AFTER)
+    if obs.item is not None:
+        items.apply(rec, obs.item, now, fired_text, FAILURE_ALERT_AFTER)
 
     if obs.outcome == "could_not_check":
         rec["consecutive_failures"] += 1
@@ -717,7 +758,7 @@ def apply_observation(rec: dict, obs: Observation, now: datetime) -> None:
             rec["baseline_hash"] = obs.page_hash
         if obs.price is not None:
             flights.record_price(rec, obs.price, now)
-        if obs.outcome == "met" and obs.stay is None:
+        if obs.outcome == "met" and obs.stay is None and obs.item is None:
             # keep_watching fires when the condition becomes true, not on every
             # check while it stays true. Each page change is a new event.
             if obs.new_ids is not None:
@@ -780,12 +821,14 @@ def _apply(store: Store, tripwire_id: str, obs: Observation, now: datetime) -> N
 
 def check_now(store: Store, tripwire_id: str, now: datetime | None = None,
               flight_fetch: "flights.FlightFetch | None" = None,
-              stay_fetch: "stays.StayFetch | None" = None) -> Observation:
+              stay_fetch: "stays.StayFetch | None" = None,
+              item_fetch: "items.ItemFetch | None" = None) -> Observation:
     """One check of one tripwire, recorded like a heartbeat check. add-flight
     uses it so the fare it prints is the baseline it keeps. Sends nothing;
     anything it queues goes out on the next tick."""
     now = now or utcnow()
-    obs = evaluate(_get(store.read(), tripwire_id), flight_fetch=flight_fetch, now=now, stay_fetch=stay_fetch)
+    obs = evaluate(_get(store.read(), tripwire_id), flight_fetch=flight_fetch, now=now, stay_fetch=stay_fetch,
+                   item_fetch=item_fetch)
     _apply(store, tripwire_id, obs, now)
     return obs
 
@@ -793,7 +836,8 @@ def check_now(store: Store, tripwire_id: str, now: datetime | None = None,
 def run_due(store: Store, fetch: Fetch = fetch_url, notify: Notify | None = None,
             now: datetime | None = None, budget_s: float = RUN_BUDGET_S, home: Path | None = None,
             flight_fetch: "flights.FlightFetch | None" = None,
-            stay_fetch: "stays.StayFetch | None" = None) -> dict:
+            stay_fetch: "stays.StayFetch | None" = None,
+            item_fetch: "items.ItemFetch | None" = None) -> dict:
     """One heartbeat tick. Checks happen outside the lock, and each result is
     applied to a fresh read, so a cancel that lands during a fetch wins."""
     notify = notify or send_notification
@@ -805,7 +849,7 @@ def run_due(store: Store, fetch: Fetch = fetch_url, notify: Notify | None = None
     for snapshot in due:
         if time.monotonic() - started > budget_s:
             break
-        obs = evaluate(snapshot, fetch, home, flight_fetch, now, stay_fetch)
+        obs = evaluate(snapshot, fetch, home, flight_fetch, now, stay_fetch, item_fetch)
         checked += 1
         _apply(store, snapshot["id"], obs, now)
     sent, failed = _deliver(store, notify, now)
@@ -870,6 +914,9 @@ def _row(rec: dict, now: datetime) -> dict:
     is_stay = rec["check"] == "stay_price"
     if is_stay:
         target = stays.summary(params)
+    is_item = rec["check"] == "item_price"
+    if is_item:
+        target = items.summary(params)
     active = rec["status"] == ACTIVE
     blind = active and rec.get("last_outcome") == "could_not_check"
     if not active:
@@ -887,13 +934,18 @@ def _row(rec: dict, now: datetime) -> dict:
         "is_realestate": rec["check"] == "realestate",
         "is_flight": is_flight,
         "fares_label": flights.fares_label(rec, now) if is_flight else None,
-        "group": params.get("group") if is_flight or is_stay else None,
+        "group": params.get("group") if is_flight or is_stay or is_item else None,
         "is_stay": is_stay,
         "stay_prices": stays.prices_label(rec, now) if is_stay else [],
         "stay_top": stays.top_rows(rec) if is_stay else [],
         "stay_degraded": stays.degraded(rec) if is_stay else [],
         "booking_url": params.get("booking_url") if is_stay and "booking" in params["sources"] else None,
         "vrbo_url": params.get("vrbo_url") if is_stay and "vrbo" in params["sources"] else None,
+        "is_item": is_item,
+        "item_prices": items.prices_label(rec, now) if is_item else [],
+        "item_top": items.top_rows(rec) if is_item else [],
+        "item_degraded": items.degraded(rec) if is_item else [],
+        "item_links": items.links(params) if is_item else [],
         "active": active,
         "blind": blind,
         "last_checked_label": relative(parse("last_checked"), now),

@@ -714,17 +714,19 @@ class Tab(unittest.TestCase):
         self.add(name="Up", check="http_status", text=None, status="200")
         tw.add_flight(self.store, origin="JFK", destination="LAX", date_str="2099-12-15")
         tw.add_stay(self.store, where="Downtown Austin", country="us", checkin="2099-01-04", checkout="2099-01-06")
+        tw.add_item(self.store, query="mini pc", target_price=500)
         tw.add_realestate(self.store, name="Land", why="w", zones_path="data/zones.geojson",
                           listings_path="state/listings.json", every="1h", expires="365d", message="m",
                           criteria={"id_property": "zone_id", "rules": [
                               {"key": "max_drive", "label": "Max drive", "property": "drive_min", "op": "<=",
                                "value": 75, "group": "limit"}], "weights": []})
         got = self.client.get("/tripwires").text
-        for kind, n in (("flights", 1), ("stays", 1), ("land", 1), ("websites", 3)):
+        for kind, n in (("flights", 1), ("stays", 1), ("land", 1), ("items", 1), ("websites", 3)):
             self.assertEqual(got.count(f'<tr data-kind="{kind}">'), n, kind)
             self.assertRegex(got, rf'<button type="button" class="tw-filter" data-kind="{kind}" '
                                   rf'aria-pressed="true" title="[A-Za-z]+" aria-label="[A-Za-z]+ \({n}\)">')
         self.assertIn('title="Accommodations"', got)
+        self.assertIn('title="Items" aria-label="Items (1)">\U0001f4e6 1</button>', got)
         self.assertIn("No tripwires match the filters", got)
 
     def test_filter_counts_include_archived_rows_only_when_shown(self) -> None:

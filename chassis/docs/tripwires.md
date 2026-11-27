@@ -29,6 +29,7 @@ gather: TRIPWIRE_CHANNEL_ID=<channel id> state/chassis-root/scripts/gather-tripw
 | `http_status` | the status equals the one you gave | A different status is a normal result, except 401, 403, 407, 429, 451 and 5xx, which read as "could not check" unless they are the status you asked for |
 | `flight_price` | a leg's cheapest economy fare drops well below its 14-day average | CLI only (`add-flight`). See "Flight fares" |
 | `stay_price` | the cheapest qualifying stay for fixed dates drops well below its 14-day average | CLI only (`add-stay`). See "Stay prices" |
+| `item_price` | a product, or a listing matching a search, is at or below a target price or drops well below its 14-day average | CLI only (`add-item`). Amazon, Walmart, Best Buy, Newegg, Micro Center. See "Item prices" |
 
 Checks are one plain GET with no JavaScript and no login. Loopback and private
 addresses are refused, including through a redirect, unless the CLI is given
@@ -251,6 +252,112 @@ Firecrawl's Alexandria providers `booking-com` (`hotels/search`) and `vrbo-com`
 (`vacation-rentals/locations` once, then `vacation-rentals/search`) through the
 same endpoint and key as flights.
 
+## Item prices (`item_price`)
+
+Watches US retailers for hardware deals within your params ("a Ryzen AI Max+
+395 mini PC with 128GB under $3,299"), or one product for a price drop.
+
+```bash
+chassis/scripts/tripwire.py probe --check item_price --query "ryzen ai max+ 395 128gb mini pc" \
+  --must 395 --must 128 --min-price 1000 --sources amazon,walmart,bestbuy,newegg
+chassis/scripts/tripwire.py add-item --query "ryzen ai max+ 395 128gb mini pc" \
+  [--must TEXT ...] [--exclude TEXT ...] [--min-price 1000] [--max-price 5000] \
+  [--condition new|any] [--sources amazon,walmart,bestbuy,newegg,microcenter] [--include-sponsored] \
+  [--store 029] [--target-price 3299] [--drop-pct 15] [--group LABEL] [--every 6h] [--expires 90d] \
+  [--name ...] [--why ...] [--message ...]
+chassis/scripts/tripwire.py add-item --product https://www.amazon.com/dp/B0DHJCYNS7 [--target-price 500] [--drop-pct 10]
+chassis/scripts/tripwire.py add-item --product 6507524 --source bestbuy
+```
+
+Defaults: Amazon, Walmart, Best Buy and Newegg, new only, sponsored listings
+left out, USD, every 6h, and expiry in 90 days.
+
+- **Two modes.** `--query` searches each source and watches the cheapest
+  listing that passes the filters. `--product` watches one listing on one
+  source: a product URL (Amazon `/dp/ASIN`, Walmart `/ip/...`, Best Buy
+  `/site/...?skuId=`, Newegg `/p/...`, Micro Center `/product/...`), or a bare
+  id (ASIN, Walmart item id, Best Buy SKU, Newegg item number, Micro Center
+  product id) with `--source`. Best Buy's newer `/product/<slug>/<code>` links
+  carry no SKU; pass the SKU with `--source bestbuy`.
+- **Filters (search mode).** Every `--must` must appear in the title and no
+  `--exclude` may, ignoring case and spaces ("128 GB" matches `128gb`). They
+  run on the full title, not the shortened label. `--min-price` drops
+  accessories and cases, `--max-price` drops anything above it. Sponsored
+  listings count only with `--include-sponsored` (Amazon, Walmart and Newegg
+  mark them). Walmart is also sent the price bounds; Newegg is asked for new
+  items when `--condition new`.
+- **Condition.** `--condition new` (the default) drops open-box, refurbished
+  and used where the source says so (Newegg, Amazon and Best Buy product
+  pages, Micro Center), and any title saying Renewed, Refurbished, Open Box,
+  Pre-owned or "(Used)", since Amazon and Walmart searches carry no condition.
+  A listing whose condition is not given otherwise counts as new. Product mode
+  skips this: the listing was picked by hand, renewed or not.
+- **Stock.** Where a source reports availability (Walmart, Newegg, Micro
+  Center, Best Buy's unavailable SKUs, Amazon's product offer), out-of-stock
+  listings do not count. Amazon search results carry no stock state.
+- **Currency.** All five sources price in USD. Any other `--currency` is
+  refused, and a listing in another currency does not count. Nothing is
+  converted.
+- **Triggers.** `--target-price`: any qualifying listing at or below it.
+  `--drop-pct`: the cheapest qualifying price that far below that source's
+  reference, the same rule as stays (the mean of the last 14 days of checks,
+  or the first price until that is 3 days old). With neither, `--drop-pct 15`.
+  With only `--target-price`, the target alone. With both, either one.
+  Each source is its own price series, like stays: a merged cheapest would
+  read a source dropping out of one check as a price move.
+- **When it alerts again.** A source alerts again on price only below the
+  last price it alerted at. Separately, every listing id that comes in at or
+  under the target alerts once, even when the price logic would stay quiet:
+  a new listing at a deal price is never missed. The ids alerted are kept (up
+  to 300 per source), so a listing that drops off the first page and comes
+  back does not alert twice. Every source with an alert due goes into one
+  message.
+- **Search depth.** One results page per source per check: Amazon, Best Buy
+  and Newegg's first page (about 16 listings), Walmart's first 40, Micro
+  Center's first 48. A query precise enough to put the wanted item on page
+  one matters more than the filters.
+- **Micro Center (`microcenter`, opt-in).** Prices are per store. The default
+  store `029` is Micro Center's "Shippable Items", web prices with no store
+  inventory; pass `--store` with a 3-digit store number for one store's stock
+  and price. Target has no search capability, so it is not a source.
+- **The alert** carries the option label, per source the price and how far
+  under the target and below which reference, the previous alert, then the
+  listing (title label, source, price, condition, stock, rating with review
+  count) and its link, up to 3 more new listings under the target, and a
+  search link for that source.
+- **The tab** shows the usual row, one line per source (last cheapest, the
+  reference, first, lowest, last alert), the 3 cheapest qualifying listings
+  from the last good check across sources, and a search link per source (or
+  the product link).
+
+**Honesty.** Same as stays. A source that errors, returns nothing, or returns
+nothing that passes the filters is "could not check" for that source, and the
+result line says which and why ("Newegg could not check: none of the 16
+listings it returned passes the filters"). A watched product that is out of
+stock reads "could not check: the product is out of stock". The check as a
+whole is "could not check" only when every source failed. A source failing 3
+checks in a row while another works sends one alert of its own.
+
+**Untrusted listings.** Titles are third-party text. They are used whole for
+`--must` and `--exclude`, then kept only as a label: newlines, markup and URLs
+stripped, a plain character set, cut to 80 characters. Links are rebuilt from
+validated ids in each retailer's canonical product URL format
+(`amazon.com/dp/<ASIN>`, `walmart.com/ip/<id>`,
+`bestbuy.com/site/<sku>.p?skuId=<sku>`, `newegg.com/p/N82E168<item>`,
+`microcenter.com/product/<id>/item`), never taken from the response. Micro
+Center 404s without a slug but serves the product under any slug, so the link
+uses a fixed one.
+
+**Item source.** A function in `chassis/scripts/_items.py` that takes a source
+name and the params, swappable like the stay source. The default calls
+Firecrawl's Alexandria providers `amazon-com`, `walmart-com`, `bestbuy-com`,
+`newegg-com` and `microcenter-com` through the same endpoint and key as
+flights: `products/search` (Micro Center `products/search_products`) in search
+mode, and in product mode Amazon `products/offer`, Walmart and Newegg
+`products/product`, Best Buy `products/pricing`, Micro Center
+`products/get_product`. The sources are called at once, so a check takes as
+long as the slowest one (about 3 seconds on 2026-11-27).
+
 ## What a tripwire does
 
 - **Could not check.** A network failure, a non-2xx on the text and hash checks,
@@ -275,10 +382,10 @@ same endpoint and key as flights.
 
 Nothing from a response body, header or reason phrase is stored, sent or shown.
 `last_result` holds only our own wording and the status code, and the page hash
-is a sha256. Messages contain the name, your authored text and the URL. The one
-exceptions are `flight_price` and `stay_price`, which keep and send fare and
-listing fields after validating them (see "Untrusted fares" and "Untrusted
-listings" above).
+is a sha256. Messages contain the name, your authored text and the URL. The
+exceptions are `flight_price`, `stay_price` and `item_price`, which keep and
+send fare and listing fields after validating them (see "Untrusted fares" and
+the two "Untrusted listings" above).
 
 ## Spend
 
@@ -290,11 +397,15 @@ non-zero, which the dispatcher reports directly for a `critical` heartbeat.
 
 A check that fails is not a broken heartbeat and never spends anything.
 
-The exceptions are `flight_price` and `stay_price`: each flight check is one Firecrawl call per date
+The exceptions are `flight_price`, `stay_price` and `item_price`: each flight check is one Firecrawl call per date
 searched, which cost 5 credits when this was written. One leg every 6h is 20
 credits a day, and `--flex-days 1` triples that. A `stay_price` check is one call per
 source (plus one Vrbo region lookup the first time), 5 credits each when
-written: both sources every 6h is 40 credits a day. A missing key costs nothing
+written: both sources every 6h is 40 credits a day. An `item_price` check is
+one call per source; each reported `creditsCost: 5` on 2026-11-27. A search on
+the four default sources every 6h is 16 calls, 80 credits a day, and adding
+Micro Center makes it 100. A product watch is one call, 20 credits a day. A
+missing key costs nothing
 and reads as "could not check". The heartbeat is `critical`, so conservation
 mode does not pause these calls; cancel the tripwire to stop the spend.
 

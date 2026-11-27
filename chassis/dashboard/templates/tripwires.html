@@ -71,6 +71,16 @@
             {% for o in r.stay_top %}<li><a href="{{ o.link }}" rel="noopener noreferrer" target="_blank">{{ o.name }}</a> - {{ o.source_label }}, {{ o.price_label }} total{% if o.source == "booking" %} before taxes{% endif %}, {{ o.rating_label }}</li>{% endfor %}
           </ol>
           {% endif %}
+          {% elif r.is_item %}
+          {% if r.group %}<div class="small"><span class="pill">{{ r.group }}</span></div>{% endif %}
+          <div class="small">{{ r.check_label }}: {{ r.target }}</div>
+          {% for line in r.item_prices %}<div class="muted small">{{ line }}</div>{% endfor %}
+          {% if r.item_degraded %}<div class="small tw-result-bad">Last check could not see {{ r.item_degraded|join(" or ") }}</div>{% endif %}
+          {% if r.item_top %}
+          <ol class="tw-top">
+            {% for o in r.item_top %}<li><a href="{{ o.link }}" rel="noopener noreferrer" target="_blank">{{ o.name }}</a> - {{ o.source_label }}, {{ o.price_label }}, {{ o.rating_label }}</li>{% endfor %}
+          </ol>
+          {% endif %}
           {% elif r.is_flight %}
           {% if r.group %}<div class="small"><span class="pill">{{ r.group }}</span></div>{% endif %}
           <div class="small">{{ r.check_label }}: {{ r.target }}</div>
@@ -80,6 +90,7 @@
           {% endif %}
           {% if r.is_realestate %}<a class="tw-url" href="{{ prefix }}/{{ r.id }}/map">Map and criteria</a>
           {% elif r.is_flight %}<a class="tw-url" href="{{ r.url }}" rel="noopener noreferrer" target="_blank">Open on Google Flights</a>
+          {% elif r.is_item %}{% for l in r.item_links %}{% if not loop.first %} · {% endif %}<a class="tw-url" href="{{ l.url }}" rel="noopener noreferrer" target="_blank">{% if r.params.mode == "search" %}Search {% endif %}{{ l.label }}</a>{% endfor %}
           {% elif r.is_stay %}{% if r.booking_url %}<a class="tw-url" href="{{ r.booking_url }}" rel="noopener noreferrer" target="_blank">Open on Booking.com</a>{% endif %}{% if r.booking_url and r.vrbo_url %} · {% endif %}{% if r.vrbo_url %}<a class="tw-url" href="{{ r.vrbo_url }}" rel="noopener noreferrer" target="_blank">Open on Vrbo</a>{% endif %}
           {% else %}<a class="tw-url" href="{{ r.url }}" rel="noopener noreferrer" target="_blank">{{ r.url }}</a>{% endif %}
         </td>
