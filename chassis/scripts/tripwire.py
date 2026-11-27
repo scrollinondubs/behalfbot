@@ -16,6 +16,10 @@
       --checkout 2027-03-12 --adults 1 --min-rating 8 --currency USD --drop-pct 15 --every 6h
   tripwire.py probe --check stay_price --where "Downtown Austin" --country us \
       --checkin 2027-03-10 --checkout 2027-03-12
+  tripwire.py add-item --query "ryzen ai max+ 395 128gb mini pc" --must 395 --must 128gb \
+      --min-price 1000 --target-price 3299 [--sources amazon,walmart,bestbuy,newegg]
+  tripwire.py add-item --product https://www.amazon.com/dp/B0DHJCYNS7 --drop-pct 10
+  tripwire.py probe --check item_price --query "ryzen ai max+ 395 128gb mini pc" --must 395
 
 `add-flight` watches the cheapest economy fare for one one-way leg (over
 --flex-days either side of the date) and alerts when it is --drop-pct below the
@@ -28,6 +32,13 @@ which trip option a leg belongs to. Needs FIRECRAWL_API_KEY.
 Booking.com and Vrbo, each source against its own 14-day history (Vrbo prices
 are USD only), with the same good-buy rule. It expires at the end of the
 checkin date unless --expires says otherwise, and checks once straight away.
+
+`add-item` watches the cheapest qualifying listing for a search on major US
+retailers (each source its own price series), or one product on one source.
+It alerts when a listing is at or below --target-price (each listing id once),
+or --drop-pct below that source's 14-day average (15 when there is no
+--target-price), and again only below the last price alerted. It expires in
+90 days unless --expires says otherwise, and checks once straight away.
 
 `add-realestate` reads a seed file (name, why, zones_path, listings_path,
 criteria, every, expires, message, seed_key). Re-running it while that seed's
@@ -48,7 +59,7 @@ import _tripwires as tw  # noqa: E402
 
 
 def check_args(parser: argparse.ArgumentParser, probing: bool = False) -> None:
-    checks = sorted(tw.URL_CHECKS) + (["flight_price", "stay_price"] if probing else [])
+    checks = sorted(tw.URL_CHECKS) + (["flight_price", "stay_price", "item_price"] if probing else [])
     parser.add_argument("--check", required=True, choices=checks)
     parser.add_argument("--url", required=not probing)
     parser.add_argument("--text", help="for text_appears and text_disappears; case-insensitive")
@@ -58,12 +69,15 @@ def check_args(parser: argparse.ArgumentParser, probing: bool = False) -> None:
 
 
 def price_args(parser: argparse.ArgumentParser) -> None:
-    """Shared by flights and stays, so probe can take both."""
-    parser.add_argument("--currency", default="EUR")
-    parser.add_argument("--drop-pct", default=tw.flights.DEFAULT_DROP_PCT, type=float,
-                        help="alert at this percent below the baseline (default 15)")
+    """Shared by flights, stays and items, so probe can take all three. The
+    defaults are each check's own (EUR for flights and stays, USD for items)."""
+    parser.add_argument("--currency", help="EUR by default; items are USD only")
+    parser.add_argument("--drop-pct", type=float,
+                        help="alert at this percent below the baseline (default 15; for items only "
+                             "when there is no --target-price)")
     parser.add_argument("--max-price", type=float,
-                        help="never alert above this: the fare, or the total stay")
+                        help="never alert above this: the fare, or the total stay; for items, "
+                             "listings above it do not count")
     parser.add_argument("--group", help="which trip option this belongs to, e.g. jan-4-option-a")
 
 
@@ -99,7 +113,9 @@ def stay_args(parser: argparse.ArgumentParser, required: bool) -> None:
     parser.add_argument("--checkin", required=required, help="YYYY-MM-DD")
     parser.add_argument("--checkout", required=required, help="YYYY-MM-DD")
     parser.add_argument("--adults", type=int, default=1)
-    parser.add_argument("--sources", default="booking,vrbo", help="booking, vrbo, or booking,vrbo (default)")
+    parser.add_argument("--sources", help="stays: booking, vrbo, or booking,vrbo (default); items: any of "
+                                          "amazon,walmart,bestbuy,newegg,microcenter "
+                                          "(default amazon,walmart,bestbuy,newegg)")
     parser.add_argument("--min-rating", type=float,
                         help="out of 10 on both sources; unrated and Vrbo 'New' are left out unless --allow-unrated")
     parser.add_argument("--allow-unrated", action="store_true", help="keep unrated stays with --min-rating")
@@ -116,6 +132,38 @@ def stay_params(args: argparse.Namespace) -> dict:
         raise tw.TripwireError(str(e)) from None
 
 
+def item_args(parser: argparse.ArgumentParser, with_sources: bool) -> None:
+    parser.add_argument("--query", help='search mode: what to search, e.g. "ryzen ai max+ 395 128gb mini pc"')
+    parser.add_argument("--product", help="product mode: a product URL, or an id with --source "
+                                          "(ASIN, Walmart item id, Best Buy SKU, Newegg item number)")
+    parser.add_argument("--source", help="the retailer for a bare --product id")
+    parser.add_argument("--must", action="append", default=[],
+                        help="text every title must contain, case and spaces ignored; repeatable")
+    parser.add_argument("--exclude", action="append", default=[],
+                        help="drop titles containing this; repeatable")
+    parser.add_argument("--min-price", type=float, help="drop listings below this (accessories, cases)")
+    parser.add_argument("--target-price", type=float,
+                        help="alert on any qualifying listing at or below this")
+    parser.add_argument("--condition", choices=("new", "any"), default="new",
+                        help="new (default) drops open-box, refurbished and used where the source says so")
+    parser.add_argument("--include-sponsored", action="store_true", help="count sponsored listings too")
+    parser.add_argument("--store", help="Micro Center store number; 029 (shippable, web prices) by default")
+    if with_sources:
+        parser.add_argument("--sources", help="any of amazon,walmart,bestbuy,newegg,microcenter "
+                                              "(default amazon,walmart,bestbuy,newegg)")
+
+
+def item_params(args: argparse.Namespace) -> dict:
+    try:
+        return tw.items.validate_params(
+            query=args.query, product=args.product, source=args.source, must=args.must, exclude=args.exclude,
+            min_price=args.min_price, max_price=args.max_price, condition=args.condition, sources=args.sources,
+            include_sponsored=args.include_sponsored, store=args.store, target_price=args.target_price,
+            drop_pct=args.drop_pct, currency=args.currency, group=args.group)
+    except tw.items.ItemError as e:
+        raise tw.TripwireError(str(e)) from None
+
+
 def probe(check: dict) -> tw.Observation:
     return tw.evaluate({**check, "seen": False, "baseline_hash": None, "baseline_price": None})
 
@@ -126,6 +174,8 @@ def probe_line(obs: tw.Observation) -> str:
     line = f"first look: {obs.result}"
     if obs.stay is not None:
         return "\n".join([line] + stay_lines(obs.stay))
+    if obs.item is not None:
+        return "\n".join([line] + item_lines(obs.item))
     return f"{line}\n  {obs.detail}" if obs.price is not None and obs.detail else line
 
 
@@ -139,6 +189,16 @@ def stay_lines(got) -> list[str]:
         for o in r.top:
             taxes = " before taxes" if o["source"] == "booking" else ", all fees included"
             out.append(f"  {o['source_label']}: {o['name']}, {o['price_label']} total{taxes}, {o['rating_label']}\n"
+                       f"    {o['link']}")
+    return out
+
+
+def item_lines(got) -> list[str]:
+    """The cheapest qualifying listings each source returned."""
+    out = []
+    for r in got.sources:
+        for o in r.top:
+            out.append(f"  {o['source_label']}: {o['name']}, {o['price_label']}, {o['rating_label']}\n"
                        f"    {o['link']}")
     return out
 
@@ -173,6 +233,24 @@ def cmd_add_stay(args: argparse.Namespace, store: tw.Store) -> int:
     print(f"  {tw.stays.summary(rec['params'])}")
     if "vrbo" in rec["params"]["sources"] and rec["params"]["currency"] != tw.stays.VRBO_CURRENCY:
         print(f"  note: Vrbo prices are USD, so Vrbo is tracked in USD and Booking.com in {rec['params']['currency']}")
+    if not args.no_probe:
+        obs = tw.check_now(store, rec["id"])
+        if obs.outcome == "could_not_check":
+            print(f"first look: {obs.result}. No baseline yet; the heartbeat retries every interval.")
+        else:
+            print(probe_line(obs))
+    return 0
+
+
+def cmd_add_item(args: argparse.Namespace, store: tw.Store) -> int:
+    rec = tw.add_item(store, query=args.query, product=args.product, source=args.source, must=args.must,
+                      exclude=args.exclude, min_price=args.min_price, max_price=args.max_price,
+                      condition=args.condition, sources=args.sources, include_sponsored=args.include_sponsored,
+                      store_id=args.store, target_price=args.target_price, drop_pct=args.drop_pct,
+                      currency=args.currency, group=args.group, name=args.name, why=args.why, every=args.every,
+                      expires=args.expires, message=args.message, expiry_message=args.expiry_message)
+    print(f"added {rec['id']}: {rec['name']} (every {args.every.strip()}, expires {rec['expires_at']})")
+    print(f"  {tw.items.summary(rec['params'])}\n  {rec['params']['url']}")
     if not args.no_probe:
         obs = tw.check_now(store, rec["id"])
         if obs.outcome == "could_not_check":
@@ -230,6 +308,10 @@ def cmd_list(args: argparse.Namespace, store: tw.Store) -> int:
             print(f"  {r['target']}" + (f" [{r['group']}]" if r["group"] else ""))
             for line in r["stay_prices"]:
                 print(f"  {line}")
+        if r["is_item"]:
+            print(f"  {r['target']}" + (f" [{r['group']}]" if r["group"] else ""))
+            for line in r["item_prices"]:
+                print(f"  {line}")
     if not rows:
         print("no tripwires")
     return 0
@@ -279,12 +361,24 @@ def main() -> int:
     p.add_argument("--expiry-message", help="extra line for the expiry message")
     p.add_argument("--no-probe", action="store_true", help="skip the first check; the heartbeat makes it")
 
+    p = sub.add_parser("add-item", help="watch a product, or the cheapest listing for a search, on US retailers")
+    item_args(p, with_sources=True)
+    price_args(p)
+    p.add_argument("--every", default="6h", help="at least 15m; 6h by default")
+    p.add_argument("--expires", default="90d", help="90d by default")
+    p.add_argument("--name", help="default: Item <query or product>")
+    p.add_argument("--why", help="default: Price watch for <query or product>")
+    p.add_argument("--message", help="first line of each alert; default: Deal on <query or product>")
+    p.add_argument("--expiry-message", help="extra line for the expiry message")
+    p.add_argument("--no-probe", action="store_true", help="skip the first check; the heartbeat makes it")
+
     sub.add_parser("cancel").add_argument("id")
     sub.add_parser("archive").add_argument("id")
     p = sub.add_parser("probe")
     check_args(p, probing=True)
     flight_args(p, required=False)
     stay_args(p, required=False)
+    item_args(p, with_sources=False)
     price_args(p)
 
     args = parser.parse_args()
@@ -298,12 +392,16 @@ def main() -> int:
             return cmd_add_flight(args, store)
         if args.cmd == "add-stay":
             return cmd_add_stay(args, store)
+        if args.cmd == "add-item":
+            return cmd_add_item(args, store)
         if args.cmd == "list":
             return cmd_list(args, store)
         if args.cmd == "cancel":
             print(f"cancelled {tw.cancel(store, args.id)['id']}")
         elif args.cmd == "archive":
             print(f"archived {tw.archive(store, args.id)['id']}")
+        elif args.cmd == "probe" and args.check == "item_price":
+            print(probe_line(probe({"check": "item_price", "params": item_params(args), "item_state": {}})))
         elif args.cmd == "probe" and args.check == "stay_price":
             print(probe_line(probe({"check": "stay_price", "params": stay_params(args), "stay_state": {}})))
         elif args.cmd == "probe" and args.check == "flight_price":
