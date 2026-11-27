@@ -203,8 +203,7 @@ class Parsing(unittest.TestCase):
                  "walmart": ("20426203113", "https://www.walmart.com/ip/20426203113", 3324.99),
                  "bestbuy": ("6673916", "https://www.bestbuy.com/site/6673916.p?skuId=6673916", 3499.99),
                  "newegg": ("83-985-025", "https://www.newegg.com/p/N82E16883985025", 3499.99),
-                 "microcenter": ("692301", "https://www.microcenter.com/product/692301/msi-nvidia-geforce-rtx-5070-ventus",
-                                 869.99)}
+                 "microcenter": ("692301", "https://www.microcenter.com/product/692301/item", 869.99)}
         for source, (pid, link, price) in cases.items():
             with self.subTest(source):
                 o = it.parse_search(source, page(source, [MAKERS[source]()])).offers[0]
@@ -215,9 +214,10 @@ class Parsing(unittest.TestCase):
         self.assertEqual(it.product_link("newegg", "14-932-771R"), "https://www.newegg.com/p/N82E16814932771R")
         self.assertEqual(it.product_link("newegg", "9SIC0YTMAW4722"), "https://www.newegg.com/p/9SIC0YTMAW4722")
 
-    def test_micro_center_without_a_clean_slug_links_to_a_search(self) -> None:
-        o = it.parse_search("microcenter", page("microcenter", [micro(url=f"https://www.microcenter.com/product/692301/<x>{HOSTILE}")])).offers[0]
-        self.assertEqual(o.link, "https://www.microcenter.com/search/search_results.aspx?Ntt=692301")
+    def test_bad_types_in_a_listing_are_skipped_not_raised(self) -> None:
+        got = it.parse_search("bestbuy", page("bestbuy", [bestbuy(sku=["6673916"]), {**bestbuy(), "sku": {"x": 1}},
+                                                          bestbuy()], unavailable_skus=["6673916", ["x"]]))
+        self.assertEqual([o.id for o in got.offers], ["6673916"])
 
     def test_stock_condition_rating_and_sponsored(self) -> None:
         self.assertFalse(it.parse_search("walmart", page("walmart", [walmart(availability="OUT_OF_STOCK")])).offers[0].in_stock)
@@ -351,6 +351,21 @@ class Alerts(Case):
         self.assertEqual(len(self.rec(tid)["outbox"]), 1)
         self.assertEqual(self.rec(tid)["fire_count"], 1)
 
+    def test_product_mode_watches_a_renewed_listing_it_was_given(self) -> None:
+        tid = self.add(query=None, product="B0DHJCYNS7", source="amazon", target_price=600)
+        offer = {"price": {"amount": 559, "currency": "USD"}, "in_stock": True, "offer_state": "featured_offer",
+                 "served_asin": "B0DHJCYNS7", "redirected": False, "condition": "Renewed",
+                 "title": "Apple iPhone 16, 128GB, Teal - Unlocked (Renewed)"}
+        self.run_at(amazon=it.parse_product_page("amazon", offer, self.rec(tid)["params"]))
+        self.assertEqual(self.rec(tid)["last_outcome"], "met")
+        self.assertIn("Amazon: USD 559, USD 41 under your target USD 600", self.sent[0])
+        self.assertIn("https://www.amazon.com/dp/B0DHJCYNS7", self.sent[0])
+
+    def test_long_default_names_keep_the_group(self) -> None:
+        rec = self.rec(self.add(query="x" * 120, group="option-a"))
+        self.assertLessEqual(len(rec["name"]), tw.MAX_NAME)
+        self.assertTrue(rec["name"].endswith(" (option-a)"))
+
     def test_product_mode_alerts_on_a_drop(self) -> None:
         tid = self.add(query=None, product="https://www.newegg.com/p/N82E16814932771", drop_pct=10)
         prod = lambda price: it.parse_product_page("newegg", {  # noqa: E731
@@ -404,6 +419,20 @@ class Honesty(Case):
         self.run_at(walmart=gone)
         self.assertEqual(self.rec(tid)["last_result"],
                          "could not check: Walmart could not check: the product is out of stock")
+
+    def test_a_source_that_raises_anything_is_could_not_check_not_a_crash(self) -> None:
+        tid = self.add(sources="amazon,walmart")
+        self.run_at(amazon=[3000], walmart=it.Search(None, 1))
+        self.assertEqual(self.rec(tid)["last_result"], "Amazon cheapest USD 3,000, the first price seen; "
+                                                       "Walmart could not check: none of the 1 listings it "
+                                                       "returned could be read")
+
+        def boom(source, p):
+            raise TypeError("unhashable")
+        tw.run_due(self.store, notify=self.notify, now=T0 + timedelta(hours=6), item_fetch=boom)
+        self.assertEqual(self.rec(tid)["last_result"], "could not check: Amazon could not check: it sent an "
+                                                       "unexpected response; Walmart could not check: it sent an "
+                                                       "unexpected response")
 
     def test_missing_key_is_could_not_check(self) -> None:
         tid = self.add(sources="amazon")

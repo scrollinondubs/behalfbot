@@ -33,10 +33,9 @@ from the environment. The key is never printed or stored.
 
 Untrusted: listings are third-party text. Prices, ids and ratings are
 validated by type and pattern. Links are rebuilt from validated ids in each
-retailer's canonical product URL format, never taken from a response (Micro
-Center's alone needs its slug, which is kept only when it is plain lowercase
-words and dashes). Titles are filtered on in full but kept only as a short
-plain label (_stays.label): treat it as text written by a stranger.
+retailer's canonical product URL format, never taken from a response. Titles
+are filtered on in full but kept only as a short plain label (_stays.label):
+treat it as text written by a stranger.
 
 Standard library only, like _tripwires.py.
 """
@@ -86,7 +85,6 @@ _URL_IDS = {"amazon": re.compile(r"/(?:dp|gp/product)/([A-Za-z0-9]{10})(?:[/?#]|
             "newegg": re.compile(r"/p/([A-Za-z0-9-]{5,25})(?:[/?#]|$)"),
             "microcenter": re.compile(r"/product/([0-9]{1,8})(?:[/?#]|$)")}
 _NEWEGG_DASHED = re.compile(r"([0-9]{2})-([0-9]{3})-([0-9]{3})([A-Z]?)")
-_MC_SLUG = re.compile(r"/product/[0-9]{1,8}/([a-z0-9][a-z0-9-]{0,199})")
 _NOT_NEW = re.compile(r"\b(renewed|refurbished|refurb|open[- ]box|pre-?owned)\b|\(used\)", re.I)
 
 
@@ -265,10 +263,10 @@ def search_url(source: str, params: dict, text: str | None = None) -> str:
                            + enc({"Ntt": q, "storeid": params.get("store") or DEFAULT_STORE})}[source]
 
 
-def product_link(source: str, pid: str, slug: str = "") -> str:
-    """Each retailer's canonical product URL. Best Buy's /site/<sku>.p
-    redirects to the current page (checked 2026-11-27). Micro Center 404s
-    without the slug, so without a valid one it is a search for the id."""
+def product_link(source: str, pid: str) -> str:
+    """Each retailer's canonical product URL. Checked 2026-11-27: Best Buy's
+    /site/<sku>.p redirects to the current page; Micro Center 404s without a
+    slug but serves the product under any slug, so a fixed one is used."""
     if source == "amazon":
         return f"https://www.amazon.com/dp/{pid}"
     if source == "walmart":
@@ -278,9 +276,7 @@ def product_link(source: str, pid: str, slug: str = "") -> str:
     if source == "newegg":
         m = _NEWEGG_DASHED.fullmatch(pid)
         return f"https://www.newegg.com/p/N82E168{''.join(m.groups())}" if m else f"https://www.newegg.com/p/{pid}"
-    if slug:
-        return f"https://www.microcenter.com/product/{pid}/{slug}"
-    return "https://www.microcenter.com/search/search_results.aspx?" + urllib.parse.urlencode({"Ntt": pid})
+    return f"https://www.microcenter.com/product/{pid}/item"
 
 
 def what(params: dict) -> str:
@@ -402,12 +398,8 @@ def _offer(source: str, item: dict, *, pid, title, price, currency, **extra) -> 
     pid = pid.upper() if source == "amazon" and isinstance(pid, str) else pid
     if not isinstance(pid, str) or not IDS[source].fullmatch(pid) or price is None:
         return None
-    slug = ""
-    if source == "microcenter":
-        m = _MC_SLUG.search(str(item.get("url") or ""))
-        slug = m.group(1) if m else ""
     return Offer(source=source, id=pid, title=title if isinstance(title, str) else "", price=price,
-                 currency=currency if isinstance(currency, str) and currency else CURRENCY, link=product_link(source, pid, slug), **extra)
+                 currency=currency if isinstance(currency, str) and currency else CURRENCY, link=product_link(source, pid), **extra)
 
 
 def parse_search(source: str, data: dict) -> Search:
@@ -437,7 +429,8 @@ def parse_search(source: str, data: dict) -> Search:
             rating, reviews = _rating(item.get("rating"), item.get("review_count"))
             sku = item.get("sku")
             o = _offer(source, item, pid=sku, title=item.get("title"), price=price, currency=cur,
-                       in_stock=False if sku in unavailable else None, rating=rating, reviews=reviews)
+                       in_stock=False if isinstance(sku, str) and sku in unavailable else None,
+                       rating=rating, reviews=reviews)
         elif source == "newegg":
             price, cur = _price(item.get("price"), "current")
             r = item.get("rating") if isinstance(item.get("rating"), dict) else {}
@@ -514,9 +507,10 @@ def reasons(o: Offer, params: dict) -> list[str]:
         out.append("currency")
     if o.in_stock is False:
         out.append("out of stock")
-    if params["condition"] == "new" and (o.condition not in ("", "new") or _NOT_NEW.search(o.title)):
-        out.append("not new")
     if params["mode"] == "search":
+        # Not in product mode: the person picked that listing, renewed or not.
+        if params["condition"] == "new" and (o.condition not in ("", "new") or _NOT_NEW.search(o.title)):
+            out.append("not new")
         if o.sponsored and not params["include_sponsored"]:
             out.append("sponsored")
         title = _squash(o.title)
@@ -615,6 +609,9 @@ def _one(source: str, rec: dict, fetch: ItemFetch, now: datetime) -> SourceResul
         got = fetch(source, params)
     except ItemError as e:
         return SourceResult(source, error=str(e), line=f"{name} could not check: {e}")
+    except Exception:  # noqa: BLE001 - a malformed response must not take down the tick
+        why = "it sent an unexpected response"
+        return SourceResult(source, error=why, line=f"{name} could not check: {why}")
     if not isinstance(got, Search) or not got.offers:
         # Never "nothing for sale": an empty page is far more often a scraper problem.
         n = got.returned if isinstance(got, Search) else 0

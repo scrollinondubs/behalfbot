@@ -290,7 +290,8 @@ left out, USD, every 6h, and expiry in 90 days.
   and used where the source says so (Newegg, Amazon and Best Buy product
   pages, Micro Center), and any title saying Renewed, Refurbished, Open Box,
   Pre-owned or "(Used)", since Amazon and Walmart searches carry no condition.
-  A listing whose condition is not given otherwise counts as new.
+  A listing whose condition is not given otherwise counts as new. Product mode
+  skips this: the listing was picked by hand, renewed or not.
 - **Stock.** Where a source reports availability (Walmart, Newegg, Micro
   Center, Best Buy's unavailable SKUs, Amazon's product offer), out-of-stock
   listings do not count. Amazon search results carry no stock state.
@@ -342,10 +343,10 @@ checks in a row while another works sends one alert of its own.
 stripped, a plain character set, cut to 80 characters. Links are rebuilt from
 validated ids in each retailer's canonical product URL format
 (`amazon.com/dp/<ASIN>`, `walmart.com/ip/<id>`,
-`bestbuy.com/site/<sku>.p?skuId=<sku>`, `newegg.com/p/N82E168<item>`), never
-taken from the response. Micro Center 404s without its slug, so its link uses
-the slug only when it is plain lowercase words and dashes, and otherwise
-searches for the product id.
+`bestbuy.com/site/<sku>.p?skuId=<sku>`, `newegg.com/p/N82E168<item>`,
+`microcenter.com/product/<id>/item`), never taken from the response. Micro
+Center 404s without a slug but serves the product under any slug, so the link
+uses a fixed one.
 
 **Item source.** A function in `chassis/scripts/_items.py` that takes a source
 name and the params, swappable like the stay source. The default calls

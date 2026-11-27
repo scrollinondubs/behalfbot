@@ -431,7 +431,8 @@ def add_item(store: Store, *, query: str | None = None, product: str | None = No
     except items.ItemError as e:
         raise TripwireError(str(e)) from None
     label = items.what(params)
-    default_name = f"Item {label}"[:MAX_NAME - 20] + (f" ({params['group']})" if params["group"] else "")
+    suffix = f" ({params['group']})" if params["group"] else ""
+    default_name = f"Item {label}"[:MAX_NAME - len(suffix)] + suffix
     record = _record({"check": "item_price", "params": params}, name=name or default_name,
                      why=why or f"Price watch for {label}", every=every or "6h", expires=expires or "90d",
                      message=message or f"Deal on {label}", expiry_message=expiry_message, keep_watching=True,
