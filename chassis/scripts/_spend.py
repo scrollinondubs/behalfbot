@@ -52,6 +52,18 @@ CREATE TABLE IF NOT EXISTS spend_alerts (
   fired_at     TEXT NOT NULL,
   PRIMARY KEY (service, period_start, level)
 );
+-- One row per credit-balance read, for services billed in credits (Firecrawl
+-- has no daily history API). Written by the install's gather; the page charts
+-- daily credits from the differences. Append-only.
+CREATE TABLE IF NOT EXISTS credit_readings (
+  service           TEXT NOT NULL,
+  read_at           TEXT NOT NULL,
+  period_start      TEXT NOT NULL,
+  period_end        TEXT NOT NULL,
+  plan_credits      INTEGER NOT NULL,
+  remaining_credits INTEGER NOT NULL,
+  PRIMARY KEY (service, read_at)
+);
 CREATE TABLE IF NOT EXISTS spend_fetch (
   service      TEXT PRIMARY KEY,
   status       TEXT NOT NULL,
@@ -184,6 +196,112 @@ def level_for(projected: float, baseline: float | None, cap: float | None) -> st
     if baseline is not None and projected > WARN_RATIO * baseline and projected > baseline + WARN_FLOOR_USD:
         return "warned"
     return None
+
+
+# ---- credit plans ------------------------------------------------------------
+# credit_pace and credit_measured are mirrored in the customer gather's
+# _spend.py, which fires the credits alert, so page and alert agree.
+
+# A pace measured from our own readings needs at least this much history.
+CREDITS_MIN_SPAN_DAYS = 1.0
+
+
+def is_credits(cfg: dict) -> bool:
+    return cfg.get("kind") in ("firecrawl", "credits") or "block_credits" in cfg
+
+
+def _ts(iso: str) -> datetime:
+    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def credit_readings(conn: sqlite3.Connection) -> dict[str, list[tuple]]:
+    """{service: [(read_at, period_start, period_end, plan, remaining), ...]}
+    oldest first. Empty when the table is missing (no gather has written it)."""
+    try:
+        rows = conn.execute(
+            "SELECT service, read_at, period_start, period_end, plan_credits, remaining_credits"
+            " FROM credit_readings ORDER BY service, read_at").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[str, list[tuple]] = {}
+    for service, *rest in rows:
+        out.setdefault(service, []).append(tuple(rest))
+    return out
+
+
+def credit_measured(readings: list[tuple], period_start: str) -> tuple[int, float] | None:
+    """Credits used and days covered by our own readings in one period.
+
+    `readings` are (read_at, period_start, remaining, ...) oldest first. Drops
+    in the balance add up; a rise is a top-up or refill and counts as nothing.
+    None with fewer than two readings in the period."""
+    rows = [r for r in readings if r[1] == period_start]
+    if len(rows) < 2:
+        return None
+    used = sum(max(0, a[2] - b[2]) for a, b in zip(rows, rows[1:]))
+    return used, (_ts(rows[-1][0]) - _ts(rows[0][0])).total_seconds() / 86400
+
+
+def credit_pace(plan: int, remaining: int, period_start: str, period_end: str, at: datetime,
+                measured: tuple[int, float] | None = None) -> dict:
+    """Used so far, per-day rate, end-of-period projection, run-out time and
+    the credits the pace needs past the balance, for one credit account.
+
+    While the balance is within the plan, used is plan - remaining over the
+    whole period. A balance above the plan holds purchased or rolled-over
+    credits, so plan - remaining means nothing: used and the rate come from
+    `measured` (credit_measured) instead, and are None until it covers
+    CREDITS_MIN_SPAN_DAYS. Run-out is always the balance against the rate."""
+    start, end = _ts(period_start), _ts(period_end)
+    elapsed = (at - start).total_seconds() / 86400
+    total = max((end - start).total_seconds() / 86400, 1.0)
+    days_left = max((end - at).total_seconds() / 86400, 0.0)
+    used = per_day = projected = runout = None
+    shortfall = 0
+    basis = None
+    if remaining <= plan:
+        basis, used = "plan", plan - remaining
+        per_day = used / max(elapsed, 1.0)
+        projected = round(per_day * total)
+        shortfall = max(0, projected - plan)
+    elif measured and measured[1] >= CREDITS_MIN_SPAN_DAYS:
+        basis, used = "readings", measured[0]
+        per_day = used / measured[1]
+        projected = round(per_day * total)
+        shortfall = max(0, round(per_day * days_left) - remaining)
+    if remaining <= 0:
+        runout = at
+    elif per_day:
+        t = at + timedelta(days=remaining / per_day)
+        runout = t if t < end else None
+    return {"plan": plan, "remaining": remaining, "used": used, "per_day": per_day, "projected": projected,
+            "shortfall": shortfall, "basis": basis, "elapsed_days": elapsed, "total_days": total,
+            "start": start, "end": end, "runout": runout}
+
+
+def credit_daily(readings: list[tuple], period_start: str, period_end: str) -> tuple[dict[str, int], date | None]:
+    """Credits used per UTC day of the period, from consecutive readings.
+
+    Each drop in the balance lands on the UTC day of the later reading. A rise
+    (top-up or refill) and the step across a period change count as nothing,
+    never as negative usage. Returns ({iso day: credits}, the UTC day of the
+    first reading in this period, or None)."""
+    start, end = _ts(period_start), _ts(period_end)
+    by_day: dict[str, int] = {}
+    first = None
+    for a, b in zip(readings, readings[1:]):
+        t = _ts(b[0])
+        if b[1] != period_start or not (start <= t < end):
+            continue
+        if a[1] == b[1]:
+            day = t.date().isoformat()
+            by_day[day] = by_day.get(day, 0) + max(0, a[4] - b[4])
+    for r in readings:
+        if r[1] == period_start:
+            first = _ts(r[0]).date()
+            break
+    return by_day, first
 
 
 def rows_by_day(conn: sqlite3.Connection, service: str, start: date, end: date,

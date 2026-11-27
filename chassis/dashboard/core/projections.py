@@ -88,6 +88,51 @@ def _chart(s: _spend.Summary) -> dict | None:
     }
 
 
+def _day_label(d: date | datetime) -> str:
+    return d.strftime("%b %-d")
+
+
+def _stamp(t: datetime) -> str:
+    return f"{_day_label(t)} {t:%H:%M} UTC"
+
+
+def credits_view(readings: list[tuple], now: datetime) -> dict:
+    """The drill-down for a credit-billed service (Firecrawl): daily credits
+    used this period from our own balance readings, and the pace from the
+    latest one. `readings` are (read_at, period_start, period_end, plan,
+    remaining) oldest first; none gives {"n": 0} and the page says so."""
+    if not readings:
+        return {"n": 0}
+    read_at, pstart, pend, plan, remaining = readings[-1]
+    at = _spend._ts(read_at)
+    measured = _spend.credit_measured([(r[0], r[1], r[4]) for r in readings], pstart)
+    p = _spend.credit_pace(plan, remaining, pstart, pend, at, measured)
+    by_day, first = _spend.credit_daily(readings, pstart, pend)
+    start, end = p["start"], p["end"]
+    last_day = (end - timedelta(seconds=1)).date()
+    today = now.astimezone(timezone.utc).date()
+    plan_per_day = plan / p["total_days"]
+    top = max(list(by_day.values()) + [plan_per_day, 1])
+    days, d = [], start.date()
+    while d <= last_day:
+        iso = d.isoformat()
+        state = "future" if d > today else ("none" if first is None or d < first else "data")
+        credits = by_day.get(iso, 0) if state == "data" else None
+        days.append({"label": _day_label(d), "credits": credits, "state": state, "today": d == today,
+                     "pct": round(100 * credits / top, 1) if credits else 0})
+        d += timedelta(days=1)
+    return {
+        "n": len(readings), "days": days, "plan": plan, "remaining": remaining,
+        "used": p["used"], "per_day": p["per_day"], "projected": p["projected"], "basis": p["basis"],
+        "over": p["shortfall"] > 0 or remaining <= 0, "shortfall": p["shortfall"],
+        "runout": _day_label(p["runout"]) if p["runout"] else None,
+        "plan_per_day": plan_per_day, "plan_pct": round(100 * plan_per_day / top, 1),
+        "since": _stamp(_spend._ts(next(r[0] for r in readings if r[1] == pstart))),
+        "read_at": _stamp(at),
+        "range": f"{_day_label(start)} to {_day_label(last_day)}",
+    }
+
+
 def clip_cap(totals: list[float], floor: float = 0.0) -> float | None:
     """The robust y-axis top, or None when no day is tall enough to need clipping."""
     vals = sorted(t for t in totals if t > 0)
@@ -185,13 +230,16 @@ def load_services(now: datetime, hidden: frozenset[str] = frozenset()) -> tuple[
     yesterday = today - timedelta(days=1)
     conn = sqlite3.connect(f"file:{_spend.DB_PATH}?mode=ro", uri=True)
     try:
+        readings = _spend.credit_readings(conn)
         rows, series = [], []
         for i, (name, c) in enumerate(cfg.items()):
             s = _spend.summarize(conn, name, c, now)
             pill, tone = _pill(s, now)
             color = PALETTE[i] if i < len(PALETTE) else OTHER_COLOR
+            credits = credits_view(readings.get(name, []), now) if _spend.is_credits(c) or name in readings else None
             rows.append({"s": s, "pill": pill, "tone": tone, "age": _age(s.last_ok_at, now),
-                         "chart": _chart(s), "color": color, "prepaid": c.get("fetch") == "receipts"})
+                         "chart": _chart(s), "color": color, "prepaid": c.get("fetch") == "receipts",
+                         "credits": credits})
             if s.kind == "api" and s.has_data:
                 series.append({"service": name, "label": s.label, "color": color,
                                "prepaid": c.get("fetch") == "receipts",

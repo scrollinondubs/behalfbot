@@ -15,10 +15,11 @@ import importlib.util
 import json
 import os
 import sys
+import sqlite3
 import tempfile
 import unittest
 import unittest.mock
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 CHASSIS = Path(__file__).resolve().parents[2]
@@ -484,6 +485,127 @@ class MissingKeyTests(unittest.TestCase):
         with self.assertRaises(gather.MissingKey):
             gather.key_for({"env": "SPEND_TEST_EMPTY_KEY"})
 
+
+
+# ---- credit plans (Firecrawl): daily credits from balance readings ------------
+
+FC_START, FC_END = "2026-11-07T16:33:50.000Z", "2026-12-07T16:33:50.000Z"
+
+
+def _reading(read_at: str, remaining: int, plan: int = 100000, start: str = FC_START, end: str = FC_END) -> tuple:
+    return (read_at, start, end, plan, remaining)
+
+
+class CreditDailyTests(unittest.TestCase):
+    def test_drops_bucket_by_utc_day_of_the_later_reading(self):
+        rows = [_reading("2026-11-27T22:00:00Z", 70000), _reading("2026-11-27T23:00:00Z", 69500),
+                _reading("2026-11-28T00:00:00Z", 69000), _reading("2026-11-28T05:00:00Z", 68000)]
+        by_day, first = _spend.credit_daily(rows, FC_START, FC_END)
+        self.assertEqual(by_day, {"2026-11-27": 500, "2026-11-28": 1500})
+        self.assertEqual(first, date(2026, 11, 27))
+
+    def test_top_up_and_period_reset_are_not_negative_usage(self):
+        nxt_start, nxt_end = FC_END, "2027-01-07T16:33:50.000Z"
+        rows = [_reading("2026-12-07T10:00:00Z", 1000),
+                _reading("2026-12-07T17:00:00Z", 99000, start=nxt_start, end=nxt_end),  # reset
+                _reading("2026-12-07T18:00:00Z", 98000, start=nxt_start, end=nxt_end),
+                _reading("2026-12-07T19:00:00Z", 110000, start=nxt_start, end=nxt_end),  # top-up
+                _reading("2026-12-07T20:00:00Z", 109500, start=nxt_start, end=nxt_end)]
+        by_day, first = _spend.credit_daily(rows, nxt_start, nxt_end)
+        self.assertEqual(by_day, {"2026-12-07": 1500})
+        self.assertEqual(first, date(2026, 12, 7))
+
+    def test_pace_from_plan_minus_balance(self):
+        p = _spend.credit_pace(100000, 20000, FC_START, FC_END, datetime(2026, 11, 27, 16, 33, 50, tzinfo=timezone.utc))
+        self.assertEqual((p["used"], p["projected"], p["shortfall"]), (80000, 120000, 20000))
+        self.assertEqual(p["runout"].date(), date(2026, 12, 2))
+
+    def test_balance_above_plan_waits_for_measured_pace(self):
+        at = datetime(2026, 11, 27, 23, 0, tzinfo=timezone.utc)
+        p = _spend.credit_pace(1000, 189840, "2026-11-22T06:25:43.151Z", "2026-12-22T06:25:43.151Z", at)
+        self.assertEqual((p["used"], p["per_day"], p["runout"]), (None, None, None))
+
+
+@unittest.skipUnless(HAVE_FASTAPI, "fastapi not installed")
+class CreditsViewTests(unittest.TestCase):
+    NOW = datetime(2026, 11, 28, 6, 0, tzinfo=timezone.utc)
+
+    def test_no_readings(self):
+        self.assertEqual(projections.credits_view([], self.NOW), {"n": 0})
+
+    def test_days_span_the_period_with_states(self):
+        rows = [_reading("2026-11-27T22:58:00Z", 67457), _reading("2026-11-28T05:00:00Z", 66000)]
+        v = projections.credits_view(rows, self.NOW)
+        self.assertEqual(len(v["days"]), 31)  # Nov 7 to Dec 7, the period ends mid-day
+        by = {d["label"]: d for d in v["days"]}
+        self.assertEqual(by["Nov 26"]["state"], "none")
+        self.assertEqual((by["Nov 27"]["state"], by["Nov 27"]["credits"]), ("data", 0))
+        self.assertEqual((by["Nov 28"]["credits"], by["Nov 28"]["today"]), (1457, True))
+        self.assertEqual(by["Nov 29"]["state"], "future")
+        self.assertEqual((v["used"], v["basis"], v["over"], v["runout"]), (34000, "plan", False, None))
+
+
+@unittest.skipUnless(HAVE_FASTAPI, "fastapi not installed")
+class CreditsPageTests(unittest.TestCase):
+    CFG = {
+        "firecrawl": {"label": "Firecrawl", "kind": "firecrawl", "fixed": 99, "block_credits": 2000,
+                      "block_usd": 5, "tz": "UTC", "anchor_day": 7},
+        "claude_max": {"label": "Claude Max", "kind": "fixed", "fixed": 100, "tz": "UTC", "anchor_day": 1},
+    }
+
+    def setUp(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "spend.db"
+        self._db, self._cfg = _spend.DB_PATH, _spend.load_config
+        _spend.DB_PATH = self.db
+        _spend.load_config = lambda path=None: self.CFG
+        app = FastAPI()
+        app.include_router(projections.router, prefix="/projections")
+        self.client = TestClient(app)
+
+    def tearDown(self):
+        _spend.DB_PATH, _spend.load_config = self._db, self._cfg
+        self.tmp.cleanup()
+
+    def seed(self, readings: list[tuple], with_table: bool = True):
+        conn = sqlite3.connect(str(self.db))
+        conn.execute("CREATE TABLE spend_daily (service TEXT, day TEXT, period_start TEXT, cost_usd REAL,"
+                     " billed_usd REAL, top_line TEXT, source TEXT, fetched_at TEXT)")
+        conn.execute("CREATE TABLE spend_fetch (service TEXT PRIMARY KEY, status TEXT, last_ok_at TEXT, last_error TEXT)")
+        conn.execute("CREATE TABLE spend_alerts (service TEXT, period_start TEXT, level TEXT, projected REAL, fired_at TEXT)")
+        if with_table:
+            conn.executescript(_spend.SCHEMA)
+            conn.executemany("INSERT INTO credit_readings VALUES ('firecrawl',?,?,?,?,?)", readings)
+        conn.commit()
+        conn.close()
+
+    def test_database_without_the_table_degrades(self):
+        self.seed([], with_table=False)
+        r = self.client.get("/projections/firecrawl")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("No credit readings yet", r.text)
+        self.assertNotIn("no daily usage to chart", r.text)
+
+    def test_readings_chart_daily_credits_and_pace(self):
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        start = (now - timedelta(days=10)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        end = (now + timedelta(days=20)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        iso = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")  # noqa: E731
+        self.seed([_reading(iso(now - timedelta(hours=2)), 61000, start=start, end=end),
+                   _reading(iso(now - timedelta(hours=1)), 60000, start=start, end=end)])
+        html = self.client.get("/projections/firecrawl").text
+        self.assertIn("Firecrawl · daily credits", html)
+        self.assertIn('<div class="stat-num">40,000</div><div class="stat-label">Used this period</div>', html)
+        self.assertIn("Projected vs plan 100,000", html)
+        self.assertIn("plan pace 3,333/day", html)
+        self.assertIn("1,000 credits", html)
+        self.assertNotIn("\u2014", html)
+
+    def test_fixed_service_still_explains_no_chart(self):
+        self.seed([])
+        self.assertIn("no daily usage to chart", self.client.get("/projections/claude_max").text)
 
 if __name__ == "__main__":
     unittest.main()
