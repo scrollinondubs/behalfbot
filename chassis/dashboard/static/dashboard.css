@@ -220,6 +220,8 @@ table.status-table tr.warn { background: rgba(249,115,22,0.06); }
 .spend-table a { color: var(--fg); text-decoration: underline dotted; }
 .spend-chart .intensity-chart .bar { background: var(--c, var(--accent-2)); }
 .spend-chart .intensity-chart .bar-empty { background: var(--border); }
+.spend-chart .intensity-chart .bar.future { opacity: 0.4; }
+.spend-credit-stats .stat-num.spend-bad { border: 0; }
 
 /* Overview: service chips beside the chart, stacked above it on narrow screens. */
 .spend-overview { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }

@@ -101,6 +101,27 @@
       </div>
     </div>
     {% if focus.prepaid %}<p class="muted small spend-legend"><span class="spend-key-prepaid"></span> Hatched = prepaid top-up receipts, booked the day each was paid. Usage behind them is not daily.</p>{% endif %}
+  {% elif focus and focus.credits %}{% set s = focus.s %}{% set k = focus.credits %}
+    <h2>{{ s.label }} · daily credits <small>{% if k.n %}{{ k.range }} · dashed line = plan pace {{ "{:,.0f}".format(k.plan_per_day) }}/day{% endif %}</small></h2>
+    {% if not k.n %}
+    <p class="muted">No credit readings yet. The vendor has no daily usage history, so this chart builds from the credit balance the spend gather records on each run.</p>
+    {% else %}
+    <div class="stat-row spend-credit-stats">
+      <div class="stat"><div class="stat-num">{% if k.used is not none %}{{ "{:,}".format(k.used) }}{% else %}-{% endif %}</div><div class="stat-label">{% if k.basis == "readings" %}Used since {{ k.since }}{% else %}Used this period{% endif %}</div></div>
+      <div class="stat"><div class="stat-num">{% if k.per_day is not none %}{{ "{:,.0f}".format(k.per_day) }}{% else %}-{% endif %}</div><div class="stat-label">Credits per day</div></div>
+      <div class="stat"><div class="stat-num{% if k.over %} spend-bad{% endif %}">{% if k.projected is not none %}{{ "{:,}".format(k.projected) }}{% else %}-{% endif %}</div><div class="stat-label">Projected vs plan {{ "{:,}".format(k.plan) }}</div></div>
+      <div class="stat"><div class="stat-num{% if k.runout %} spend-bad{% endif %}">{% if k.runout %}{{ k.runout }}{% elif k.per_day is not none %}Lasts{% else %}-{% endif %}</div><div class="stat-label">{% if k.runout %}Runs out at this pace{% else %}Run-out date{% endif %}</div></div>
+      <div class="stat"><div class="stat-num">{{ "{:,}".format(k.remaining) }}</div><div class="stat-label">Credits left</div></div>
+    </div>
+    <div class="spend-chart">
+      <div class="intensity-chart" style="--c: {{ focus.color }}">
+        {% for d in k.days %}<span class="bar{% if d.state != 'data' or not d.credits %} bar-empty{% endif %}{% if d.state == 'future' %} future{% endif %}" style="height: {{ [d.pct, 1]|max }}%" title="{{ d.label }}: {% if d.state == 'data' %}{{ '{:,}'.format(d.credits) }} credits{% if d.today %} so far today{% endif %}{% elif d.state == 'none' %}before the first reading{% else %}to come{% endif %}"></span>{% endfor %}
+        <span class="spend-baseline" style="bottom: {{ k.plan_pct }}%"></span>
+      </div>
+      <div class="spend-axis muted small"><span>{{ k.days[0].label }}</span><span>last reading {{ k.read_at }}</span><span>{{ k.days[-1].label }}</span></div>
+    </div>
+    <p class="muted small spend-legend">Bars are the drop in the credit balance between readings, by UTC day. Readings start {{ k.since }}, so earlier days in this period show empty. A rise in the balance (a top-up or a new period) counts as no usage. {% if k.basis == "readings" %}The balance is above the {{ "{:,}".format(k.plan) }}-credit plan (bought or rolled-over credits), so the rate comes from the readings, not plan minus balance.{% elif k.basis == "plan" %}The rate is the period average: plan minus balance over the days elapsed.{% else %}The balance is above the plan, so the rate waits for a day of readings.{% endif %}{% if k.over and k.shortfall %} At this pace the period needs {{ "{:,}".format(k.shortfall) }} credits more than are left.{% endif %}</p>
+    {% endif %}
   {% elif focus %}
     <h2>{{ focus.s.label }}</h2>
     <p class="muted">{% if focus.s.kind == "api" %}No daily usage on record for this period yet.{% else %}A fixed or invoiced plan, so there is no daily usage to chart.{% endif %}</p>
